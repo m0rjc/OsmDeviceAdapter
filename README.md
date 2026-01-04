@@ -178,15 +178,10 @@ make test
    # Edit secret.yaml with your actual values
    ```
 
-3. **Update Ingress** (`deployments/k8s/ingress.yaml`):
-   ```yaml
-   spec:
-     tls:
-     - hosts:
-       - your-actual-domain.com
-     rules:
-     - host: your-actual-domain.com
-   ```
+3. **Configure Cloudflare Tunnel** (if using Cloudflare):
+   - See [docs/CLOUDFLARE_SETUP.md](docs/CLOUDFLARE_SETUP.md) for detailed instructions
+   - Add route to your existing Cloudflare Tunnel configuration
+   - The ingress.yaml file is optional if using Cloudflare Tunnel
 
 4. **Build and Push Docker Image**:
    ```bash

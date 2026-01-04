@@ -1,18 +1,22 @@
+# This is an example Ingress configuration.
+# Since you're using Cloudflare Tunnel in a separate namespace,
+# you likely don't need this file. Instead, configure your Cloudflare
+# Tunnel to route to the osm-device-adapter service.
+#
+# If you do need an Ingress resource, here's a basic example:
+
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: osm-device-adapter
   annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # Cloudflare-specific annotations
+    external-dns.alpha.kubernetes.io/cloudflare-proxied: "true"
+    # Adjust these based on your Cloudflare Tunnel setup
 spec:
-  ingressClassName: nginx
-  tls:
-  - hosts:
-    - your-domain.com
-    secretName: osm-device-adapter-tls
+  ingressClassName: cloudflare-tunnel  # Adjust based on your ingress class
   rules:
-  - host: your-domain.com
+  - host: osm-adapter.your-domain.com
     http:
       paths:
       - path: /
@@ -22,3 +26,12 @@ spec:
             name: osm-device-adapter
             port:
               number: 80
+
+---
+# Alternative: If using Cloudflare Tunnel ConfigMap
+# You would add a route configuration like this to your existing Cloudflare Tunnel:
+#
+# ingress:
+#   - hostname: osm-adapter.your-domain.com
+#     service: http://osm-device-adapter.default.svc.cluster.local:80
+#   # ... other routes ...

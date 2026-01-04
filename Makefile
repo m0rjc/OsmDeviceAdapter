@@ -32,11 +32,12 @@ k8s-deploy:
 	kubectl apply -f deployments/k8s/secret.yaml
 	kubectl apply -f deployments/k8s/deployment.yaml
 	kubectl apply -f deployments/k8s/service.yaml
-	kubectl apply -f deployments/k8s/ingress.yaml
+	# Ingress is optional if using Cloudflare Tunnel
+	# kubectl apply -f deployments/k8s/ingress.yaml
 
 # Delete from Kubernetes
 k8s-delete:
-	kubectl delete -f deployments/k8s/ingress.yaml
+	# kubectl delete -f deployments/k8s/ingress.yaml
 	kubectl delete -f deployments/k8s/service.yaml
 	kubectl delete -f deployments/k8s/deployment.yaml
 	kubectl delete -f deployments/k8s/secret.yaml
