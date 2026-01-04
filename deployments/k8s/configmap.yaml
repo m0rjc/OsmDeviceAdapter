@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osm-device-adapter-config
+data:
+  exposed-domain: "https://your-domain.com"
+  osm-domain: "https://www.onlinescoutmanager.co.uk"
+  device-code-expiry: "600"
+  device-poll-interval: "5"

@@ -1,0 +1,85 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+)
+
+type Config struct {
+	// Server configuration
+	Port int
+	Host string
+
+	// External domains
+	ExposedDomain string // The domain where this service is exposed
+	OSMDomain     string // Online Scout Manager domain
+
+	// OAuth configuration for OSM
+	OSMClientID     string
+	OSMClientSecret string
+	OSMRedirectURI  string
+
+	// Database
+	DatabaseURL string
+
+	// Redis
+	RedisURL string
+
+	// Device OAuth configuration
+	DeviceCodeExpiry   int // seconds
+	DevicePollInterval int // seconds
+}
+
+func Load() (*Config, error) {
+	cfg := &Config{
+		Port:               getEnvAsInt("PORT", 8080),
+		Host:               getEnv("HOST", "0.0.0.0"),
+		ExposedDomain:      getEnv("EXPOSED_DOMAIN", ""),
+		OSMDomain:          getEnv("OSM_DOMAIN", "https://www.onlinescoutmanager.co.uk"),
+		OSMClientID:        getEnv("OSM_CLIENT_ID", ""),
+		OSMClientSecret:    getEnv("OSM_CLIENT_SECRET", ""),
+		OSMRedirectURI:     getEnv("OSM_REDIRECT_URI", ""),
+		DatabaseURL:        getEnv("DATABASE_URL", ""),
+		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379"),
+		DeviceCodeExpiry:   getEnvAsInt("DEVICE_CODE_EXPIRY", 600),   // 10 minutes default
+		DevicePollInterval: getEnvAsInt("DEVICE_POLL_INTERVAL", 5),   // 5 seconds default
+	}
+
+	// Validate required configuration
+	if cfg.ExposedDomain == "" {
+		return nil, fmt.Errorf("EXPOSED_DOMAIN is required")
+	}
+	if cfg.OSMClientID == "" {
+		return nil, fmt.Errorf("OSM_CLIENT_ID is required")
+	}
+	if cfg.OSMClientSecret == "" {
+		return nil, fmt.Errorf("OSM_CLIENT_SECRET is required")
+	}
+	if cfg.DatabaseURL == "" {
+		return nil, fmt.Errorf("DATABASE_URL is required")
+	}
+
+	// Set OSM redirect URI if not explicitly provided
+	if cfg.OSMRedirectURI == "" {
+		cfg.OSMRedirectURI = fmt.Sprintf("%s/oauth/callback", cfg.ExposedDomain)
+	}
+
+	return cfg, nil
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvAsInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
+}
