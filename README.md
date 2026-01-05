@@ -62,6 +62,11 @@ This service implements a complete OAuth bridge that:
 - `GET /health` - Basic health check
 - `GET /ready` - Readiness check (includes database/Redis status)
 
+## Documentation
+
+- [Helm Chart Documentation](docs/HELM.md) - Detailed Helm chart usage and configuration
+- [Cloudflare Tunnel Setup](docs/CLOUDFLARE_SETUP.md) - Cloudflare Tunnel integration guide
+
 ## Configuration
 
 All configuration is provided via environment variables:
@@ -158,30 +163,42 @@ make test
 
 ### Prerequisites
 
-- Kubernetes cluster with:
-  - Ingress controller (nginx recommended)
-  - cert-manager for TLS certificates
-  - External PostgreSQL and Redis services
+- Kubernetes cluster
+- Helm 3.x installed
+- External PostgreSQL and Redis services
+- (Optional) Cloudflare Tunnel for ingress
 
-### Deployment Steps
+### Deployment with Helm (Recommended)
 
-1. **Update ConfigMap** (`deployments/k8s/configmap.yaml`):
-   ```yaml
-   data:
-     exposed-domain: "https://your-actual-domain.com"
-     osm-domain: "https://www.onlinescoutmanager.co.uk"
-   ```
-
-2. **Create Secrets** (`deployments/k8s/secret.yaml`):
+1. **Create a values file** (e.g., `values-production.yaml`):
    ```bash
-   cp deployments/k8s/secret.example.yaml deployments/k8s/secret.yaml
-   # Edit secret.yaml with your actual values
+   cp chart/values-example.yaml values-production.yaml
    ```
 
-3. **Configure Cloudflare Tunnel** (if using Cloudflare):
+2. **Edit your values file** with your configuration:
+   ```yaml
+   image:
+     repository: your-registry/osm-device-adapter
+     tag: "1.0.0"
+
+   config:
+     exposedDomain: "https://osm-adapter.your-domain.com"
+
+   database:
+     url: "postgres://user:pass@postgres-host:5432/dbname"
+
+   redis:
+     url: "redis://redis-host:6379"
+
+   osm:
+     clientId: "your-osm-client-id"
+     clientSecret: "your-osm-client-secret"
+   ```
+
+3. **Configure Cloudflare Tunnel** (if using):
    - See [docs/CLOUDFLARE_SETUP.md](docs/CLOUDFLARE_SETUP.md) for detailed instructions
    - Add route to your existing Cloudflare Tunnel configuration
-   - The ingress.yaml file is optional if using Cloudflare Tunnel
+   - Keep `ingress.enabled: false` in values file
 
 4. **Build and Push Docker Image**:
    ```bash
@@ -190,36 +207,76 @@ make test
    make docker-push
    ```
 
-5. **Update Deployment** (`deployments/k8s/deployment.yaml`):
-   ```yaml
-   spec:
-     template:
-       spec:
-         containers:
-         - image: your-registry/osm-device-adapter:v1.0.0
+5. **Install with Helm**:
+   ```bash
+   # Install to default namespace
+   helm install osm-device-adapter ./chart -f values-production.yaml
+
+   # Or install to a specific namespace
+   helm install osm-device-adapter ./chart \
+     --namespace osm-adapter \
+     --create-namespace \
+     -f values-production.yaml
    ```
 
-6. **Deploy to Kubernetes**:
+6. **Verify Deployment**:
    ```bash
-   make k8s-deploy
+   # Check pods
+   kubectl get pods -l app.kubernetes.io/name=osm-device-adapter
+
+   # View logs
+   kubectl logs -l app.kubernetes.io/name=osm-device-adapter
+
+   # Check service
+   kubectl get svc osm-device-adapter
    ```
 
-7. **Verify Deployment**:
-   ```bash
-   kubectl get pods -l app=osm-device-adapter
-   kubectl logs -l app=osm-device-adapter
-   ```
+### Helm Commands
+
+```bash
+# Upgrade deployment
+make helm-upgrade
+
+# Uninstall
+make helm-uninstall
+
+# Lint chart
+make helm-lint
+
+# View templated manifests (dry-run)
+make helm-template
+
+# Show default values
+make helm-values
+```
+
+### Alternative: Deploy with kubectl (Legacy)
+
+If you prefer not to use Helm, you can still deploy with kubectl:
+
+1. Edit files in `deployments/k8s/`
+2. Run `make k8s-deploy`
+
+See the original deployment manifests in `deployments/k8s/` directory.
 
 ### Monitoring
 
 Check health and readiness:
 ```bash
-kubectl get pods
+# For Helm deployments
+kubectl get pods -l app.kubernetes.io/name=osm-device-adapter
 kubectl describe pod <pod-name>
+
+# For kubectl deployments
+kubectl get pods -l app=osm-device-adapter
 ```
 
 View logs:
 ```bash
+# For Helm deployments
+kubectl logs -f -l app.kubernetes.io/name=osm-device-adapter
+
+# For kubectl deployments
 kubectl logs -f deployment/osm-device-adapter
 ```
 

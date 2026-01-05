@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "osm-device-adapter.fullname" . }}
+  labels:
+    {{- include "osm-device-adapter.labels" . | nindent 4 }}
+data:
+  exposed-domain: {{ .Values.config.exposedDomain | quote }}
+  osm-domain: {{ .Values.config.osmDomain | quote }}
+  device-code-expiry: {{ .Values.config.deviceCodeExpiry | quote }}
+  device-poll-interval: {{ .Values.config.devicePollInterval | quote }}
+  {{- if .Values.osm.redirectUri }}
+  osm-redirect-uri: {{ .Values.osm.redirectUri | quote }}
+  {{- end }}

@@ -1,0 +1,75 @@
+# Example values file for OSM Device Adapter
+# Copy this file and customize it for your environment
+# Usage: helm install osm-device-adapter ./chart -f values-production.yaml
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/your-org/osm-device-adapter
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+# Application configuration
+config:
+  # REQUIRED: Your public domain where the service is exposed
+  exposedDomain: "https://osm-adapter.example.com"
+
+  # OSM domain (usually doesn't need to change)
+  osmDomain: "https://www.onlinescoutmanager.co.uk"
+
+  # Device OAuth configuration
+  deviceCodeExpiry: 600      # 10 minutes
+  devicePollInterval: 5       # 5 seconds
+
+# Database configuration
+database:
+  # PostgreSQL connection URL
+  url: "postgres://osmadapter:yourpassword@postgres.database.svc.cluster.local:5432/osmdeviceadapter?sslmode=require"
+
+  # OR use an existing secret
+  # existingSecret: "database-credentials"
+
+# Redis configuration
+redis:
+  url: "redis://redis.cache.svc.cluster.local:6379"
+
+  # OR use an existing secret
+  # existingSecret: "redis-credentials"
+
+# OSM OAuth credentials (REQUIRED)
+osm:
+  clientId: "your-osm-client-id-here"
+  clientSecret: "your-osm-client-secret-here"
+
+  # Optional: Override redirect URI (defaults to exposedDomain/oauth/callback)
+  # redirectUri: "https://osm-adapter.example.com/oauth/callback"
+
+  # OR use an existing secret
+  # existingSecret: "osm-oauth-credentials"
+
+# Ingress configuration (optional - not needed if using Cloudflare Tunnel)
+ingress:
+  enabled: false
+  # If you need ingress, set enabled: true and configure:
+  # className: "cloudflare-tunnel"
+  # hosts:
+  #   - host: osm-adapter.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+
+# Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Autoscaling (optional)
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80

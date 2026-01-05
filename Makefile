@@ -1,10 +1,12 @@
-.PHONY: build run test docker-build docker-push k8s-deploy clean
+.PHONY: build run test docker-build docker-push k8s-deploy helm-install helm-upgrade helm-uninstall helm-lint helm-template helm-values helm-package clean
 
 # Variables
 APP_NAME=osm-device-adapter
 DOCKER_REGISTRY?=your-registry
 DOCKER_TAG?=latest
 IMAGE=$(DOCKER_REGISTRY)/$(APP_NAME):$(DOCKER_TAG)
+HELM_RELEASE?=osm-device-adapter
+HELM_NAMESPACE?=default
 
 # Build the Go application
 build:
@@ -42,6 +44,38 @@ k8s-delete:
 	kubectl delete -f deployments/k8s/deployment.yaml
 	kubectl delete -f deployments/k8s/secret.yaml
 	kubectl delete -f deployments/k8s/configmap.yaml
+
+# Helm: Install the chart
+helm-install:
+	helm install $(HELM_RELEASE) ./chart \
+		--namespace $(HELM_NAMESPACE) \
+		--create-namespace
+
+# Helm: Upgrade the chart
+helm-upgrade:
+	helm upgrade $(HELM_RELEASE) ./chart \
+		--namespace $(HELM_NAMESPACE) \
+		--install
+
+# Helm: Uninstall the chart
+helm-uninstall:
+	helm uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+
+# Helm: Lint the chart
+helm-lint:
+	helm lint ./chart
+
+# Helm: Package the chart
+helm-package:
+	helm package ./chart
+
+# Helm: Template the chart (dry-run)
+helm-template:
+	helm template $(HELM_RELEASE) ./chart --namespace $(HELM_NAMESPACE)
+
+# Helm: Show values
+helm-values:
+	helm show values ./chart
 
 # Clean build artifacts
 clean:
