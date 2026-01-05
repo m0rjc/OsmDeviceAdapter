@@ -1,0 +1,8 @@
+# Python dependencies for LED Matrix Scoreboard
+
+# HTTP client for API communication
+requests>=2.31.0
+
+# Note: The RGB Matrix library must be installed separately on Raspberry Pi
+# Installation instructions in README.md
+# On development machines, the app will run in simulation mode without it
