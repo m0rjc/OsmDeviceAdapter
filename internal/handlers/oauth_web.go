@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	"gorm.io/gorm"
 )
 
 func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
@@ -55,14 +57,9 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up the device code from user code
-		var deviceCode string
-		var status string
-		err := deps.DB.QueryRow(`
-			SELECT device_code, status FROM device_codes
-			WHERE user_code = $1 AND expires_at > NOW()
-		`, strings.ToUpper(userCode)).Scan(&deviceCode, &status)
-
-		if err == sql.ErrNoRows {
+		var deviceCodeRecord db.DeviceCode
+		err := deps.DB.Where("user_code = ? AND expires_at > ?", strings.ToUpper(userCode), time.Now()).First(&deviceCodeRecord).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "Invalid or expired user code", http.StatusBadRequest)
 			return
 		}
@@ -71,7 +68,7 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		if status != "pending" {
+		if deviceCodeRecord.Status != "pending" {
 			http.Error(w, "This code has already been used", http.StatusBadRequest)
 			return
 		}
@@ -84,11 +81,13 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		sessionExpiry := time.Now().Add(15 * time.Minute)
-		_, err = deps.DB.Exec(`
-			INSERT INTO device_sessions (session_id, device_code, expires_at)
-			VALUES ($1, $2, $3)
-		`, sessionID, deviceCode, sessionExpiry)
-		if err != nil {
+		session := &db.DeviceSession{
+			SessionID:  sessionID,
+			DeviceCode: deviceCodeRecord.DeviceCode,
+			ExpiresAt:  sessionExpiry,
+			CreatedAt:  time.Now(),
+		}
+		if err := deps.DB.Create(session).Error; err != nil {
 			http.Error(w, "Failed to create session", http.StatusInternalServerError)
 			return
 		}
@@ -129,13 +128,9 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up session to get device code
-		var deviceCode string
-		err := deps.DB.QueryRow(`
-			SELECT device_code FROM device_sessions
-			WHERE session_id = $1 AND expires_at > NOW()
-		`, state).Scan(&deviceCode)
-
-		if err == sql.ErrNoRows {
+		var session db.DeviceSession
+		err := deps.DB.Where("session_id = ? AND expires_at > ?", state, time.Now()).First(&session).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "Invalid or expired session", http.StatusBadRequest)
 			return
 		}
@@ -153,16 +148,13 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Store tokens and mark device code as authorized
 		tokenExpiry := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-		_, err = deps.DB.Exec(`
-			UPDATE device_codes
-			SET status = 'authorized',
-			    osm_access_token = $1,
-			    osm_refresh_token = $2,
-			    osm_token_expiry = $3
-			WHERE device_code = $4
-		`, tokenResp.AccessToken, tokenResp.RefreshToken, tokenExpiry, deviceCode)
-
-		if err != nil {
+		updates := map[string]interface{}{
+			"status":             "authorized",
+			"osm_access_token":   tokenResp.AccessToken,
+			"osm_refresh_token":  tokenResp.RefreshToken,
+			"osm_token_expiry":   tokenExpiry,
+		}
+		if err := deps.DB.Model(&db.DeviceCode{}).Where("device_code = ?", session.DeviceCode).Updates(updates).Error; err != nil {
 			http.Error(w, "Failed to store tokens", http.StatusInternalServerError)
 			return
 		}
@@ -240,12 +232,10 @@ func exchangeCodeForToken(cfg *config.Config, code string) (*types.OSMTokenRespo
 	return &tokenResp, nil
 }
 
-func markDeviceCodeStatus(db *sql.DB, sessionID, status string) {
-	db.Exec(`
-		UPDATE device_codes
-		SET status = $1
-		WHERE device_code = (
-			SELECT device_code FROM device_sessions WHERE session_id = $2
-		)
-	`, status, sessionID)
+func markDeviceCodeStatus(database *gorm.DB, sessionID, status string) {
+	var session db.DeviceSession
+	if err := database.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
+		return
+	}
+	database.Model(&db.DeviceCode{}).Where("device_code = ?", session.DeviceCode).Update("status", status)
 }

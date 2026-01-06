@@ -25,12 +25,16 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Initialize database connections
+	// Initialize database connections (GORM now handles migrations automatically)
 	dbConn, err := db.NewPostgresConnection(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer dbConn.Close()
+	sqlDB, err := dbConn.DB()
+	if err != nil {
+		log.Fatalf("Failed to get underlying database connection: %v", err)
+	}
+	defer sqlDB.Close()
 
 	// Initialize Redis cache
 	redisClient, err := db.NewRedisClient(cfg.RedisURL)
@@ -38,11 +42,6 @@ func main() {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
 	defer redisClient.Close()
-
-	// Run database migrations
-	if err := db.RunMigrations(dbConn); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
-	}
 
 	// Create handler dependencies
 	deps := &handlers.Dependencies{

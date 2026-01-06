@@ -3,13 +3,16 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	"gorm.io/gorm"
 )
 
 func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
@@ -30,23 +33,28 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Verify the access token belongs to a valid device
-		var deviceCode string
-		var osmAccessToken, osmRefreshToken string
-		var osmTokenExpiry time.Time
-
-		err := deps.DB.QueryRow(`
-			SELECT device_code, osm_access_token, osm_refresh_token, osm_token_expiry
-			FROM device_codes
-			WHERE osm_access_token = $1 AND status = 'authorized'
-		`, accessToken).Scan(&deviceCode, &osmAccessToken, &osmRefreshToken, &osmTokenExpiry)
-
+		var deviceCodeRecord db.DeviceCode
+		err := deps.DB.Where("osm_access_token = ? AND status = ?", accessToken, "authorized").First(&deviceCodeRecord).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "Invalid access token", http.StatusUnauthorized)
+			return
+		}
 		if err != nil {
 			http.Error(w, "Invalid access token", http.StatusUnauthorized)
 			return
 		}
 
+		osmAccessToken := ""
+		if deviceCodeRecord.OSMAccessToken != nil {
+			osmAccessToken = *deviceCodeRecord.OSMAccessToken
+		}
+		osmRefreshToken := ""
+		if deviceCodeRecord.OSMRefreshToken != nil {
+			osmRefreshToken = *deviceCodeRecord.OSMRefreshToken
+		}
+
 		// Check if we need to refresh the OSM token
-		if time.Now().After(osmTokenExpiry.Add(-5 * time.Minute)) {
+		if deviceCodeRecord.OSMTokenExpiry != nil && time.Now().After(deviceCodeRecord.OSMTokenExpiry.Add(-5*time.Minute)) {
 			// Token is expired or about to expire, refresh it
 			newTokens, err := refreshOSMToken(deps.Config, osmRefreshToken)
 			if err != nil {
@@ -56,15 +64,12 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 
 			// Update tokens in database
 			newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
-			_, err = deps.DB.Exec(`
-				UPDATE device_codes
-				SET osm_access_token = $1,
-				    osm_refresh_token = $2,
-				    osm_token_expiry = $3
-				WHERE device_code = $4
-			`, newTokens.AccessToken, newTokens.RefreshToken, newExpiry, deviceCode)
-
-			if err != nil {
+			updates := map[string]interface{}{
+				"osm_access_token":  newTokens.AccessToken,
+				"osm_refresh_token": newTokens.RefreshToken,
+				"osm_token_expiry":  newExpiry,
+			}
+			if err := deps.DB.Model(&db.DeviceCode{}).Where("device_code = ?", deviceCodeRecord.DeviceCode).Updates(updates).Error; err != nil {
 				http.Error(w, "Failed to update tokens", http.StatusInternalServerError)
 				return
 			}
@@ -74,7 +79,7 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Check cache first
 		ctx := r.Context()
-		cacheKey := fmt.Sprintf("patrol_scores:%s", deviceCode)
+		cacheKey := fmt.Sprintf("patrol_scores:%s", deviceCodeRecord.DeviceCode)
 
 		cachedData, err := deps.RedisClient.Client().Get(ctx, cacheKey).Result()
 		if err == nil {

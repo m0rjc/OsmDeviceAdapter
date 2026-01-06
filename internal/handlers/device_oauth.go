@@ -2,13 +2,16 @@ package handlers
 
 import (
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"gorm.io/gorm"
 )
 
 type DeviceAuthorizationRequest struct {
@@ -76,11 +79,15 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Store in database
 		expiresAt := time.Now().Add(time.Duration(deps.Config.DeviceCodeExpiry) * time.Second)
-		_, err = deps.DB.Exec(`
-			INSERT INTO device_codes (device_code, user_code, client_id, expires_at, status)
-			VALUES ($1, $2, $3, $4, 'pending')
-		`, deviceCode, userCode, req.ClientID, expiresAt)
-		if err != nil {
+		deviceCodeRecord := &db.DeviceCode{
+			DeviceCode: deviceCode,
+			UserCode:   userCode,
+			ClientID:   req.ClientID,
+			ExpiresAt:  expiresAt,
+			Status:     "pending",
+			CreatedAt:  time.Now(),
+		}
+		if err := deps.DB.Create(deviceCodeRecord).Error; err != nil {
 			http.Error(w, "Failed to store device code", http.StatusInternalServerError)
 			return
 		}
@@ -127,18 +134,9 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up device code
-		var status string
-		var osmAccessToken, osmRefreshToken sql.NullString
-		var osmTokenExpiry sql.NullTime
-		var expiresAt time.Time
-
-		err := deps.DB.QueryRow(`
-			SELECT status, osm_access_token, osm_refresh_token, osm_token_expiry, expires_at
-			FROM device_codes
-			WHERE device_code = $1
-		`, req.DeviceCode).Scan(&status, &osmAccessToken, &osmRefreshToken, &osmTokenExpiry, &expiresAt)
-
-		if err == sql.ErrNoRows {
+		var deviceCodeRecord db.DeviceCode
+		err := deps.DB.Where("device_code = ?", req.DeviceCode).First(&deviceCodeRecord).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			sendTokenError(w, "invalid_grant", "Invalid device code")
 			return
 		}
@@ -148,13 +146,13 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Check if expired
-		if time.Now().After(expiresAt) {
+		if time.Now().After(deviceCodeRecord.ExpiresAt) {
 			sendTokenError(w, "expired_token", "Device code has expired")
 			return
 		}
 
 		// Check status
-		switch status {
+		switch deviceCodeRecord.Status {
 		case "pending":
 			sendTokenError(w, "authorization_pending", "User has not yet authorized")
 			return
@@ -163,21 +161,26 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		case "authorized":
 			// Return the tokens
-			if !osmAccessToken.Valid {
+			if deviceCodeRecord.OSMAccessToken == nil {
 				http.Error(w, "Token not available", http.StatusInternalServerError)
 				return
 			}
 
 			expiresIn := 0
-			if osmTokenExpiry.Valid {
-				expiresIn = int(time.Until(osmTokenExpiry.Time).Seconds())
+			if deviceCodeRecord.OSMTokenExpiry != nil {
+				expiresIn = int(time.Until(*deviceCodeRecord.OSMTokenExpiry).Seconds())
+			}
+
+			refreshToken := ""
+			if deviceCodeRecord.OSMRefreshToken != nil {
+				refreshToken = *deviceCodeRecord.OSMRefreshToken
 			}
 
 			response := DeviceTokenResponse{
-				AccessToken:  osmAccessToken.String,
+				AccessToken:  *deviceCodeRecord.OSMAccessToken,
 				TokenType:    "Bearer",
 				ExpiresIn:    expiresIn,
-				RefreshToken: osmRefreshToken.String,
+				RefreshToken: refreshToken,
 			}
 
 			w.Header().Set("Content-Type", "application/json")
