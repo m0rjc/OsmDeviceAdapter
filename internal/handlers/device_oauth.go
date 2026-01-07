@@ -64,6 +64,12 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
+		// Validate client ID
+		if !isClientIDAllowed(req.ClientID, deps.Config.AllowedClientIDs) {
+			http.Error(w, "invalid client_id", http.StatusUnauthorized)
+			return
+		}
+
 		// Generate device code and user code
 		deviceCode, err := generateRandomString(32)
 		if err != nil {
@@ -235,4 +241,13 @@ func extractBearerToken(authHeader string) string {
 		return parts[1]
 	}
 	return ""
+}
+
+func isClientIDAllowed(clientID string, allowedClientIDs []string) bool {
+	for _, allowed := range allowedClientIDs {
+		if clientID == allowed {
+			return true
+		}
+	}
+	return false
 }

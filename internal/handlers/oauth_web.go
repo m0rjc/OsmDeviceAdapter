@@ -41,7 +41,7 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 <body>
     <h1>Device Authorization</h1>
     <p>Enter the code displayed on your device:</p>
-    <form method="GET" action="/oauth/authorize">
+    <form method="GET" action="/device">
         <input type="text" name="user_code" placeholder="XXXX-XXXX" required />
         <button type="submit">Continue</button>
     </form>
@@ -149,10 +149,10 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		// Store tokens and mark device code as authorized
 		tokenExpiry := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 		updates := map[string]interface{}{
-			"status":             "authorized",
-			"osm_access_token":   tokenResp.AccessToken,
-			"osm_refresh_token":  tokenResp.RefreshToken,
-			"osm_token_expiry":   tokenExpiry,
+			"status":            "authorized",
+			"osm_access_token":  tokenResp.AccessToken,
+			"osm_refresh_token": tokenResp.RefreshToken,
+			"osm_token_expiry":  tokenExpiry,
 		}
 		if err := deps.DB.Model(&db.DeviceCode{}).Where("device_code = ?", session.DeviceCode).Updates(updates).Error; err != nil {
 			http.Error(w, "Failed to store tokens", http.StatusInternalServerError)

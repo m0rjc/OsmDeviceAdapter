@@ -21,6 +21,11 @@ config:
   deviceCodeExpiry: 600      # 10 minutes
   devicePollInterval: 5       # 5 seconds
 
+  # REQUIRED: List of allowed OAuth client IDs that can use this service
+  allowedClientIds:
+    - "scoreboard-device-123"
+    - "scoreboard-device-456"
+
 # Database configuration
 database:
   # PostgreSQL connection URL

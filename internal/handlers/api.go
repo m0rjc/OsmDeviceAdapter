@@ -81,7 +81,7 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 		ctx := r.Context()
 		cacheKey := fmt.Sprintf("patrol_scores:%s", deviceCodeRecord.DeviceCode)
 
-		cachedData, err := deps.RedisClient.Client().Get(ctx, cacheKey).Result()
+		cachedData, err := deps.RedisClient.Get(ctx, cacheKey).Result()
 		if err == nil {
 			// Cache hit
 			var response types.PatrolScoresResponse
@@ -112,7 +112,7 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Cache the response
 		responseJSON, _ := json.Marshal(response)
-		deps.RedisClient.Client().Set(ctx, cacheKey, responseJSON, cacheDuration)
+		deps.RedisClient.Set(ctx, cacheKey, responseJSON, cacheDuration)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache", "MISS")

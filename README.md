@@ -84,6 +84,7 @@ All configuration is provided via environment variables:
 | `REDIS_URL` | Redis connection URL | No | `redis://localhost:6379` |
 | `DEVICE_CODE_EXPIRY` | Device code expiry in seconds | No | `600` |
 | `DEVICE_POLL_INTERVAL` | Recommended polling interval | No | `5` |
+| `ALLOWED_CLIENT_IDS` | Comma-separated list of allowed OAuth client IDs | Yes | - |
 
 ## Database Schema
 
@@ -138,6 +139,7 @@ CREATE TABLE device_sessions (
    export OSM_CLIENT_SECRET=your-client-secret
    export DATABASE_URL=postgres://user:pass@localhost:5432/osmdeviceadapter
    export REDIS_URL=redis://localhost:6379
+   export ALLOWED_CLIENT_IDS=scoreboard-123,scoreboard-456
    ```
 
 4. Run the service:
@@ -353,10 +355,11 @@ kubectl logs -f deployment/osm-device-adapter
 ## Security Considerations
 
 1. **HTTPS Required**: All communication must use HTTPS
-2. **Token Storage**: Access tokens are stored securely in PostgreSQL
-3. **Token Refresh**: Automatic refresh before expiry
-4. **Rate Limiting**: Consider adding rate limiting for device authorization requests
-5. **Secrets Management**: Use Kubernetes secrets for sensitive configuration
+2. **Client ID Validation**: Only registered client IDs (configured via `ALLOWED_CLIENT_IDS`) can initiate device authorization
+3. **Token Storage**: Access tokens are stored securely in PostgreSQL
+4. **Token Refresh**: Automatic refresh before expiry
+5. **Rate Limiting**: Consider adding rate limiting for device authorization requests
+6. **Secrets Management**: Use Kubernetes secrets for sensitive configuration
 
 ## OSM API Integration
 

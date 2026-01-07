@@ -37,7 +37,7 @@ func main() {
 	defer sqlDB.Close()
 
 	// Initialize Redis cache
-	redisClient, err := db.NewRedisClient(cfg.RedisURL)
+	redisClient, err := db.NewRedisClient(cfg.RedisURL, cfg.RedisKeyPrefix)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}

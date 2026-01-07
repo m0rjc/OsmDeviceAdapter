@@ -81,6 +81,13 @@ spec:
             secretKeyRef:
               name: {{ include "osm-device-adapter.redisSecretName" . }}
               key: redis-url
+        {{- if .Values.redis.keyPrefix }}
+        - name: REDIS_KEY_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: redis-key-prefix
+        {{- end }}
         - name: DEVICE_CODE_EXPIRY
           valueFrom:
             configMapKeyRef:
@@ -91,6 +98,11 @@ spec:
             configMapKeyRef:
               name: {{ include "osm-device-adapter.fullname" . }}
               key: device-poll-interval
+        - name: ALLOWED_CLIENT_IDS
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: allowed-client-ids
         livenessProbe:
           {{- toYaml .Values.livenessProbe | nindent 12 }}
         readinessProbe:

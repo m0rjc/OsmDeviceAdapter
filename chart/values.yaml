@@ -95,6 +95,9 @@ config:
   deviceCodeExpiry: 600      # seconds (10 minutes)
   devicePollInterval: 5       # seconds
 
+  # Allowed client IDs that can use the device flow (empty list allows all)
+  allowedClientIds: []
+
 # Database configuration
 database:
   # PostgreSQL connection URL
@@ -108,6 +111,8 @@ database:
 redis:
   # Redis connection URL
   url: "redis://redis-service:6379"
+  # Redis key prefix (optional)
+  keyPrefix: ""
   # Use an existing secret for Redis URL
   # The secret should contain a key 'redis-url'
   existingSecret: ""

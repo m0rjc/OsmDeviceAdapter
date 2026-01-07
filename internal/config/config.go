@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -24,11 +25,13 @@ type Config struct {
 	DatabaseURL string
 
 	// Redis
-	RedisURL string
+	RedisURL       string
+	RedisKeyPrefix string
 
 	// Device OAuth configuration
-	DeviceCodeExpiry   int // seconds
-	DevicePollInterval int // seconds
+	DeviceCodeExpiry   int      // seconds
+	DevicePollInterval int      // seconds
+	AllowedClientIDs   []string // List of allowed OAuth client IDs
 }
 
 func Load() (*Config, error) {
@@ -42,8 +45,10 @@ func Load() (*Config, error) {
 		OSMRedirectURI:     getEnv("OSM_REDIRECT_URI", ""),
 		DatabaseURL:        getEnv("DATABASE_URL", ""),
 		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379"),
-		DeviceCodeExpiry:   getEnvAsInt("DEVICE_CODE_EXPIRY", 600),   // 10 minutes default
-		DevicePollInterval: getEnvAsInt("DEVICE_POLL_INTERVAL", 5),   // 5 seconds default
+		RedisKeyPrefix:     getEnv("REDIS_KEY_PREFIX", ""),
+		DeviceCodeExpiry:   getEnvAsInt("DEVICE_CODE_EXPIRY", 600), // 10 minutes default
+		DevicePollInterval: getEnvAsInt("DEVICE_POLL_INTERVAL", 5), // 5 seconds default
+		AllowedClientIDs:   parseClientIDs(getEnv("ALLOWED_CLIENT_IDS", "")),
 	}
 
 	// Validate required configuration
@@ -58,6 +63,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
+	}
+	if len(cfg.AllowedClientIDs) == 0 {
+		return nil, fmt.Errorf("ALLOWED_CLIENT_IDS is required")
 	}
 
 	// Set OSM redirect URI if not explicitly provided
@@ -82,4 +90,22 @@ func getEnvAsInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func parseClientIDs(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+
+	parts := strings.Split(value, ",")
+	clientIDs := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			clientIDs = append(clientIDs, trimmed)
+		}
+	}
+
+	return clientIDs
 }
