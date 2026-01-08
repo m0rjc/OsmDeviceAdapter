@@ -16,6 +16,7 @@ type DeviceCode struct {
 	OSMAccessToken   *string        `gorm:"column:osm_access_token;type:text"`
 	OSMRefreshToken  *string        `gorm:"column:osm_refresh_token;type:text"`
 	OSMTokenExpiry   *time.Time     `gorm:"column:osm_token_expiry"`
+	SectionID        *int           `gorm:"column:section_id"`
 	DeviceSessions   []DeviceSession `gorm:"foreignKey:DeviceCode;constraint:OnDelete:CASCADE"`
 }
 

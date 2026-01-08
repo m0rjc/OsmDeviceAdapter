@@ -159,7 +159,7 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Check status
 		switch deviceCodeRecord.Status {
-		case "pending":
+		case "pending", "awaiting_section":
 			sendTokenError(w, "authorization_pending", "User has not yet authorized")
 			return
 		case "denied":

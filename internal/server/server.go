@@ -23,6 +23,7 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// OAuth Web Flow endpoints (for OSM)
 	mux.HandleFunc("/oauth/authorize", handlers.OAuthAuthorizeHandler(deps))
 	mux.HandleFunc("/oauth/callback", handlers.OAuthCallbackHandler(deps))
+	mux.HandleFunc("/device/select-section", handlers.OAuthSelectSectionHandler(deps))
 
 	// API endpoints for scoreboard
 	mux.HandleFunc("/api/v1/patrols", handlers.GetPatrolScoresHandler(deps))
