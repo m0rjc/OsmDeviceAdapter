@@ -19,6 +19,11 @@ var (
 		Help: "Total OSM API requests allowed per period",
 	}, []string{"user_id"})
 
+	OSMRateLimitResetSeconds = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "osm_rate_limit_reset_seconds",
+		Help: "Seconds until the OSM API rate limit resets for user",
+	}, []string{"user_id"})
+
 	// Blocking metrics (X-Blocked indicates complete service block, not per-user)
 	OSMServiceBlocked = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "osm_service_blocked",

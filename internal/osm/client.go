@@ -272,10 +272,12 @@ func (c *Client) RefreshToken(ctx context.Context, clientID, clientSecret, refre
 }
 
 // parseRateLimitHeaders parses rate limit headers from OSM API response
-// OSM may use standard headers like X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
-// This is a best-guess implementation - adjust based on actual OSM API behavior
+// OSM uses standard rate limit headers as documented in docs/research/OSM-OAuth-Doc.md:
+// - X-RateLimit-Limit: Maximum requests per hour (per authenticated user)
+// - X-RateLimit-Remaining: Requests remaining before being blocked
+// - X-RateLimit-Reset: Seconds until the rate limit resets
 func (c *Client) parseRateLimitHeaders(headers http.Header, endpoint string) {
-	// Try standard rate limit headers
+	// Parse OSM rate limit headers
 	limitStr := headers.Get("X-RateLimit-Limit")
 	remainingStr := headers.Get("X-RateLimit-Remaining")
 	resetStr := headers.Get("X-RateLimit-Reset")
@@ -309,6 +311,14 @@ func (c *Client) parseRateLimitHeaders(headers http.Header, endpoint string) {
 		}
 	}
 
+	var resetSeconds int
+	if resetStr != "" {
+		if reset, err := strconv.Atoi(resetStr); err == nil {
+			resetSeconds = reset
+			metrics.OSMRateLimitResetSeconds.WithLabelValues(userID).Set(float64(reset))
+		}
+	}
+
 	// Log rate limit status
 	logLevel := slog.LevelInfo
 	event := "rate_limit.info"
@@ -324,14 +334,19 @@ func (c *Client) parseRateLimitHeaders(headers http.Header, endpoint string) {
 		severity = "WARN"
 	}
 
-	slog.Log(context.Background(), logLevel, "osm.api.rate_limit",
+	logAttrs := []any{
 		"component", "osm_api",
 		"event", event,
 		"user_id", userID,
 		"endpoint", endpoint,
 		"rate_limit_remaining", remaining,
 		"rate_limit_limit", limitStr,
-		"rate_limit_reset", resetStr,
 		"severity", severity,
-	)
+	}
+
+	if resetSeconds > 0 {
+		logAttrs = append(logAttrs, "rate_limit_reset_seconds", resetSeconds)
+	}
+
+	slog.Log(context.Background(), logLevel, "osm.api.rate_limit", logAttrs...)
 }
