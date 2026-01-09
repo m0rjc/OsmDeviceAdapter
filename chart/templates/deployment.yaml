@@ -16,6 +16,11 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- if .Values.observability.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.observability.metrics.port | quote }}
+        prometheus.io/path: {{ .Values.observability.metrics.path | quote }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -39,6 +44,14 @@ spec:
         - name: http
           containerPort: {{ .Values.config.port }}
           protocol: TCP
+        - name: health
+          containerPort: 9090
+          protocol: TCP
+        {{- if .Values.observability.metrics.enabled }}
+        - name: metrics
+          containerPort: {{ .Values.observability.metrics.port }}
+          protocol: TCP
+        {{- end }}
         env:
         - name: PORT
           value: {{ .Values.config.port | quote }}
@@ -103,6 +116,11 @@ spec:
             configMapKeyRef:
               name: {{ include "osm-device-adapter.fullname" . }}
               key: allowed-client-ids
+        # Observability environment variables
+        - name: LOG_LEVEL
+          value: {{ .Values.observability.logging.level | quote }}
+        - name: LOG_FORMAT
+          value: {{ .Values.observability.logging.format | quote }}
         livenessProbe:
           {{- toYaml .Values.livenessProbe | nindent 12 }}
         readinessProbe:

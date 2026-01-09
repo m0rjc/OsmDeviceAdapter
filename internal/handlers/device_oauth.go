@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"gorm.io/gorm"
 )
 
@@ -66,6 +68,14 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Validate client ID
 		if !isClientIDAllowed(req.ClientID, deps.Config.AllowedClientIDs) {
+			slog.Warn("device.authorize.denied",
+				"component", "device_oauth",
+				"event", "authorize.denied",
+				"client_id", req.ClientID,
+				"reason", "invalid_client_id",
+				"remote_addr", r.RemoteAddr,
+			)
+			metrics.DeviceAuthRequests.WithLabelValues(req.ClientID, "denied").Inc()
 			http.Error(w, "invalid client_id", http.StatusUnauthorized)
 			return
 		}
@@ -73,12 +83,24 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		// Generate device code and user code
 		deviceCode, err := generateRandomString(32)
 		if err != nil {
+			slog.Error("device.authorize.code_generation_failed",
+				"component", "device_oauth",
+				"event", "authorize.error",
+				"client_id", req.ClientID,
+				"error", err,
+			)
 			http.Error(w, "Failed to generate device code", http.StatusInternalServerError)
 			return
 		}
 
 		userCode, err := generateUserCode()
 		if err != nil {
+			slog.Error("device.authorize.user_code_generation_failed",
+				"component", "device_oauth",
+				"event", "authorize.error",
+				"client_id", req.ClientID,
+				"error", err,
+			)
 			http.Error(w, "Failed to generate user code", http.StatusInternalServerError)
 			return
 		}
@@ -94,6 +116,13 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			CreatedAt:  time.Now(),
 		}
 		if err := deps.DB.Create(deviceCodeRecord).Error; err != nil {
+			slog.Error("device.authorize.db_store_failed",
+				"component", "device_oauth",
+				"event", "authorize.error",
+				"client_id", req.ClientID,
+				"user_code", userCode,
+				"error", err,
+			)
 			http.Error(w, "Failed to store device code", http.StatusInternalServerError)
 			return
 		}
@@ -101,6 +130,16 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		// Build verification URLs
 		verificationURI := fmt.Sprintf("%s/device", deps.Config.ExposedDomain)
 		verificationURIComplete := fmt.Sprintf("%s/device?user_code=%s", deps.Config.ExposedDomain, userCode)
+
+		slog.Info("device.authorize.success",
+			"component", "device_oauth",
+			"event", "authorize.start",
+			"client_id", req.ClientID,
+			"user_code", userCode,
+			"device_code_hash", fmt.Sprintf("%s...", deviceCode[:8]), // Log truncated for security
+			"expires_in", deps.Config.DeviceCodeExpiry,
+		)
+		metrics.DeviceAuthRequests.WithLabelValues(req.ClientID, "success").Inc()
 
 		response := DeviceAuthorizationResponse{
 			DeviceCode:              deviceCode,
@@ -143,16 +182,34 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 		var deviceCodeRecord db.DeviceCode
 		err := deps.DB.Where("device_code = ?", req.DeviceCode).First(&deviceCodeRecord).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			slog.Warn("device.token.invalid_code",
+				"component", "device_oauth",
+				"event", "token.error",
+				"client_id", req.ClientID,
+				"error", "invalid_device_code",
+			)
 			sendTokenError(w, "invalid_grant", "Invalid device code")
 			return
 		}
 		if err != nil {
+			slog.Error("device.token.db_error",
+				"component", "device_oauth",
+				"event", "token.error",
+				"client_id", req.ClientID,
+				"error", err,
+			)
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
 		}
 
 		// Check if expired
 		if time.Now().After(deviceCodeRecord.ExpiresAt) {
+			slog.Info("device.token.expired",
+				"component", "device_oauth",
+				"event", "token.expired",
+				"client_id", deviceCodeRecord.ClientID,
+				"user_code", deviceCodeRecord.UserCode,
+			)
 			sendTokenError(w, "expired_token", "Device code has expired")
 			return
 		}
@@ -160,14 +217,35 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 		// Check status
 		switch deviceCodeRecord.Status {
 		case "pending", "awaiting_section":
+			slog.Debug("device.token.pending",
+				"component", "device_oauth",
+				"event", "token.pending",
+				"client_id", deviceCodeRecord.ClientID,
+				"user_code", deviceCodeRecord.UserCode,
+				"status", deviceCodeRecord.Status,
+			)
 			sendTokenError(w, "authorization_pending", "User has not yet authorized")
 			return
 		case "denied":
+			slog.Info("device.token.denied",
+				"component", "device_oauth",
+				"event", "token.denied",
+				"client_id", deviceCodeRecord.ClientID,
+				"user_code", deviceCodeRecord.UserCode,
+			)
+			metrics.DeviceAuthRequests.WithLabelValues(deviceCodeRecord.ClientID, "user_denied").Inc()
 			sendTokenError(w, "access_denied", "User denied authorization")
 			return
 		case "authorized":
 			// Return the tokens
 			if deviceCodeRecord.OSMAccessToken == nil {
+				slog.Error("device.token.missing_token",
+					"component", "device_oauth",
+					"event", "token.error",
+					"client_id", deviceCodeRecord.ClientID,
+					"user_code", deviceCodeRecord.UserCode,
+					"error", "osm_access_token_missing",
+				)
 				http.Error(w, "Token not available", http.StatusInternalServerError)
 				return
 			}
@@ -182,6 +260,15 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 				refreshToken = *deviceCodeRecord.OSMRefreshToken
 			}
 
+			slog.Info("device.token.issued",
+				"component", "device_oauth",
+				"event", "token.issued",
+				"client_id", deviceCodeRecord.ClientID,
+				"user_code", deviceCodeRecord.UserCode,
+				"expires_in", expiresIn,
+			)
+			metrics.DeviceAuthRequests.WithLabelValues(deviceCodeRecord.ClientID, "authorized").Inc()
+
 			response := DeviceTokenResponse{
 				AccessToken:  *deviceCodeRecord.OSMAccessToken,
 				TokenType:    "Bearer",
@@ -193,6 +280,13 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 			json.NewEncoder(w).Encode(response)
 			return
 		default:
+			slog.Error("device.token.unknown_status",
+				"component", "device_oauth",
+				"event", "token.error",
+				"client_id", deviceCodeRecord.ClientID,
+				"user_code", deviceCodeRecord.UserCode,
+				"status", deviceCodeRecord.Status,
+			)
 			http.Error(w, "Unknown status", http.StatusInternalServerError)
 			return
 		}

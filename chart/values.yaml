@@ -134,13 +134,31 @@ osm:
 livenessProbe:
   httpGet:
     path: /health
-    port: http
+    port: health
   initialDelaySeconds: 10
   periodSeconds: 10
 
 readinessProbe:
   httpGet:
     path: /ready
-    port: http
+    port: health
   initialDelaySeconds: 5
   periodSeconds: 5
+
+# Observability configuration
+observability:
+  # Structured logging
+  logging:
+    level: info  # debug, info, warn, error
+    format: json # json or text
+
+  # Prometheus metrics
+  metrics:
+    enabled: true
+    port: 9090
+    path: /metrics
+
+  # Prometheus ServiceMonitor (requires Prometheus Operator)
+  serviceMonitor:
+    enabled: true
+    interval: 30s
