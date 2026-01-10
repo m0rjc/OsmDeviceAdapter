@@ -36,7 +36,7 @@ prometheus:
             key: password
         writeRelabelConfigs:
           - sourceLabels: [__name__]
-            regex: '(.*)'
+            regex: '(osm|pg)'
             action: keep
     # Additional scrape configs for pod annotations
     additionalScrapeConfigs:
@@ -161,24 +161,24 @@ defaultRules:
     etcd: false
     configReloaders: false
     general: true
-    k8s: true
+    k8s: false
     kubeApiserverAvailability: false
     kubeApiserverSlos: false
     kubeControllerManager: false
     kubelet: false
     kubeProxy: false
-    kubePrometheusGeneral: true
+    kubePrometheusGeneral: false
     kubePrometheusNodeRecording: true
-    kubernetesApps: true
-    kubernetesResources: true
-    kubernetesStorage: true
+    kubernetesApps: false
+    kubernetesResources: false
+    kubernetesStorage: false
     kubernetesSystem: false
     kubeSchedulerAlerting: false
     kubeSchedulerRecording: false
-    kubeStateMetrics: true
-    network: true
+    kubeStateMetrics: false
+    network: false
     node: true
-    nodeExporterAlerting: true
-    nodeExporterRecording: true
-    prometheus: true
-    prometheusOperator: true
+    nodeExporterAlerting: false
+    nodeExporterRecording: false
+    prometheus: false
+    prometheusOperator: false

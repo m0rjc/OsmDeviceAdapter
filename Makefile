@@ -1,4 +1,4 @@
-.PHONY: build run test docker-build docker-push k8s-deploy helm-install helm-upgrade helm-uninstall helm-lint helm-template helm-values helm-package clean
+.PHONY: build run test docker-build docker-push k8s-deploy helm-install helm-upgrade helm-uninstall helm-lint helm-template helm-values helm-package monitoring-deploy clean
 
 # Variables
 APP_NAME=osm-device-adapter
@@ -7,6 +7,7 @@ DOCKER_TAG?=latest
 IMAGE=$(DOCKER_REGISTRY)/$(APP_NAME):$(DOCKER_TAG)
 HELM_RELEASE?=osm-device-adapter
 HELM_NAMESPACE?=default
+MONITORING_NAMESPACE?=monitoring
 
 # Build the Go application
 build:
@@ -76,6 +77,14 @@ helm-template:
 # Helm: Show values
 helm-values:
 	helm show values ./chart
+
+# Deploy/upgrade Prometheus monitoring stack
+monitoring-deploy:
+	helm upgrade monitoring prometheus-community/kube-prometheus-stack \
+		--namespace $(MONITORING_NAMESPACE) \
+		--create-namespace \
+		--install \
+		-f k8s/monitoring/kube-prometheus-stack-values.yaml
 
 # Clean build artifacts
 clean:
