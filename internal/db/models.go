@@ -61,7 +61,20 @@ type DeviceCode struct {
 	SectionID *int `gorm:"column:section_id"`
 
 	// OsmUserID is the OSM user ID of the authenticated user.
-	OsmUserID *int `gorm:"column:osm_user_id"`
+	// Used for rate limiting key and user context.
+	OsmUserID *int `gorm:"column:osm_user_id;index:idx_device_codes_user_id"`
+
+	// TermID is the active term ID for the section.
+	// Fetched from the OSM OAuth resource endpoint and used for patrol score queries.
+	TermID *int `gorm:"column:term_id"`
+
+	// TermCheckedAt is when the term information was last fetched from OSM.
+	// Used to determine when to refresh term data (24-hour expiry).
+	TermCheckedAt *time.Time `gorm:"column:term_checked_at"`
+
+	// TermEndDate is the end date of the current active term.
+	// Extracted from OSM API response and used for cache invalidation.
+	TermEndDate *time.Time `gorm:"column:term_end_date;index:idx_device_codes_term_end_date"`
 
 	// DeviceSessions are temporary web sessions used during the OAuth flow.
 	// These are automatically deleted when the device code is deleted.
