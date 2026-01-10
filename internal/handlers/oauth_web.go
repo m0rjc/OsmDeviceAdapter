@@ -194,8 +194,15 @@ func OAuthSelectSectionHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Update device code with section ID and mark as authorized
-		if err := db.UpdateDeviceCodeWithSection(deps.Conns, session.DeviceCode, "authorized", sectionID); err != nil {
+		// Generate device access token
+		deviceAccessToken, err := generateDeviceAccessToken()
+		if err != nil {
+			http.Error(w, "Failed to generate device access token", http.StatusInternalServerError)
+			return
+		}
+
+		// Update device code with section ID, device access token, and mark as authorized
+		if err := db.UpdateDeviceCodeWithSection(deps.Conns, session.DeviceCode, "authorized", sectionID, deviceAccessToken); err != nil {
 			http.Error(w, "Failed to update device code", http.StatusInternalServerError)
 			return
 		}

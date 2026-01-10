@@ -59,8 +59,8 @@ func (s *Service) AuthenticateRequest(w http.ResponseWriter, r *http.Request) (t
 		return nil, false
 	}
 
-	// Verify the access token belongs to a valid device
-	deviceCodeRecord, err := db.FindDeviceCodeByAccessToken(s.conns, accessToken)
+	// Verify the device access token belongs to a valid device
+	deviceCodeRecord, err := db.FindDeviceCodeByDeviceAccessToken(s.conns, accessToken)
 	if err != nil {
 		http.Error(w, "Invalid access token", http.StatusUnauthorized)
 		return nil, false

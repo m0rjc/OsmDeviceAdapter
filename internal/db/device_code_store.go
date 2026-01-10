@@ -60,11 +60,12 @@ func UpdateDeviceCodeWithTokens(conns *Connections, deviceCode string, status st
 		Updates(updates).Error
 }
 
-// UpdateDeviceCodeWithSection updates a device code with section ID and status
-func UpdateDeviceCodeWithSection(conns *Connections, deviceCode string, status string, sectionID int) error {
+// UpdateDeviceCodeWithSection updates a device code with section ID, device access token, and status
+func UpdateDeviceCodeWithSection(conns *Connections, deviceCode string, status string, sectionID int, deviceAccessToken string) error {
 	updates := map[string]interface{}{
-		"status":     status,
-		"section_id": sectionID,
+		"status":              status,
+		"section_id":          sectionID,
+		"device_access_token": deviceAccessToken,
 	}
 	return conns.DB.Model(&DeviceCode{}).
 		Where("device_code = ?", deviceCode).
@@ -73,9 +74,25 @@ func UpdateDeviceCodeWithSection(conns *Connections, deviceCode string, status s
 
 // FindDeviceCodeByAccessToken finds a device code by its OSM access token
 // Returns nil if not found or not authorized
+// DEPRECATED: Use FindDeviceCodeByDeviceAccessToken instead for client authentication
 func FindDeviceCodeByAccessToken(conns *Connections, accessToken string) (*DeviceCode, error) {
 	var record DeviceCode
 	err := conns.DB.Where("osm_access_token = ? AND status = ?", accessToken, "authorized").First(&record).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &record, nil
+}
+
+// FindDeviceCodeByDeviceAccessToken finds a device code by its device access token
+// This is used for authenticating device API requests
+// Returns nil if not found or not authorized
+func FindDeviceCodeByDeviceAccessToken(conns *Connections, deviceAccessToken string) (*DeviceCode, error) {
+	var record DeviceCode
+	err := conns.DB.Where("device_access_token = ? AND status = ?", deviceAccessToken, "authorized").First(&record).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil

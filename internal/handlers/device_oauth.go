@@ -234,27 +234,24 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 			sendTokenError(w, "access_denied", "User denied authorization")
 			return
 		case "authorized":
-			// Return the tokens
-			if deviceCodeRecord.OSMAccessToken == nil {
+			// Return the device access token (not the OSM token)
+			if deviceCodeRecord.DeviceAccessToken == nil {
 				slog.Error("device.token.missing_token",
 					"component", "device_oauth",
 					"event", "token.error",
 					"client_id", deviceCodeRecord.ClientID,
 					"user_code", deviceCodeRecord.UserCode,
-					"error", "osm_access_token_missing",
+					"error", "device_access_token_missing",
 				)
 				http.Error(w, "Token not available", http.StatusInternalServerError)
 				return
 			}
 
+			// Device tokens don't expire, but we still track OSM token expiry server-side
+			// For client compatibility, we can return a long expiration time
 			expiresIn := 0
 			if deviceCodeRecord.OSMTokenExpiry != nil {
 				expiresIn = int(time.Until(*deviceCodeRecord.OSMTokenExpiry).Seconds())
-			}
-
-			refreshToken := ""
-			if deviceCodeRecord.OSMRefreshToken != nil {
-				refreshToken = *deviceCodeRecord.OSMRefreshToken
 			}
 
 			slog.Info("device.token.issued",
@@ -267,10 +264,9 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 			metrics.DeviceAuthRequests.WithLabelValues(deviceCodeRecord.ClientID, "authorized").Inc()
 
 			response := DeviceTokenResponse{
-				AccessToken:  *deviceCodeRecord.OSMAccessToken,
-				TokenType:    "Bearer",
-				ExpiresIn:    expiresIn,
-				RefreshToken: refreshToken,
+				AccessToken: *deviceCodeRecord.DeviceAccessToken,
+				TokenType:   "Bearer",
+				ExpiresIn:   expiresIn,
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -305,6 +301,19 @@ func generateRandomString(length int) (string, error) {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(bytes)[:length], nil
+}
+
+// generateDeviceAccessToken generates a cryptographically secure random token
+// for device authentication. This token is returned to the device and used
+// instead of the OSM access token.
+func generateDeviceAccessToken() (string, error) {
+	// 64 bytes of randomness = 512 bits, more than sufficient for security
+	bytes := make([]byte, 64)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	// Use base64 URL encoding (no padding) for a clean token
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
 func generateUserCode() (string, error) {
