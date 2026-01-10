@@ -26,6 +26,23 @@ config:
     - "scoreboard-device-123"
     - "scoreboard-device-456"
 
+  # Cache configuration for patrol scores
+  cache:
+    # How long to keep stale data in Redis for emergency use (seconds)
+    # Default: 691200 (8 days - optimized for weekly scout meetings)
+    # This allows the service to serve stale data during OSM outages or blocking
+    fallbackTTL: 691200
+
+  # Rate limiting thresholds for dynamic cache TTL
+  # These control how aggressively the service extends cache TTL based on OSM rate limits
+  rateLimit:
+    # When remaining requests drop below this, start extending cache TTL to 10 minutes
+    caution: 200
+    # When remaining requests drop below this, extend cache TTL to 15 minutes
+    warning: 100
+    # When remaining requests drop below this, extend cache TTL to 30 minutes
+    critical: 20
+
 # Database configuration
 database:
   # PostgreSQL connection URL

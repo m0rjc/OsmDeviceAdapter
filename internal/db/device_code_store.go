@@ -118,3 +118,16 @@ func UpdateDeviceCodeTokensOnly(conns *Connections, deviceCode string, accessTok
 func DeleteExpiredDeviceCodes(conns *Connections) error {
 	return conns.DB.Where("expires_at < ?", time.Now()).Delete(&DeviceCode{}).Error
 }
+
+// UpdateDeviceCodeTermInfo updates a device code with term information
+func UpdateDeviceCodeTermInfo(conns *Connections, deviceCode string, userID int, termID int, termCheckedAt time.Time, termEndDate time.Time) error {
+	updates := map[string]interface{}{
+		"osm_user_id":     userID,
+		"term_id":         termID,
+		"term_checked_at": termCheckedAt,
+		"term_end_date":   termEndDate,
+	}
+	return conns.DB.Model(&DeviceCode{}).
+		Where("device_code = ?", deviceCode).
+		Updates(updates).Error
+}

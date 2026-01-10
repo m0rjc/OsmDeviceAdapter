@@ -116,6 +116,28 @@ spec:
             configMapKeyRef:
               name: {{ include "osm-device-adapter.fullname" . }}
               key: allowed-client-ids
+        # Cache configuration
+        - name: CACHE_FALLBACK_TTL
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: cache-fallback-ttl
+        # Rate limiting thresholds
+        - name: RATE_LIMIT_CAUTION
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: rate-limit-caution
+        - name: RATE_LIMIT_WARNING
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: rate-limit-warning
+        - name: RATE_LIMIT_CRITICAL
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: rate-limit-critical
         # Observability environment variables
         - name: LOG_LEVEL
           value: {{ .Values.observability.logging.level | quote }}

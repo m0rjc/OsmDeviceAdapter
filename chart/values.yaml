@@ -98,6 +98,21 @@ config:
   # Allowed client IDs that can use the device flow (empty list allows all)
   allowedClientIds: []
 
+  # Cache configuration for patrol scores
+  cache:
+    # How long to keep stale data in Redis for emergency use (seconds)
+    # Default: 691200 (8 days - optimized for weekly scout meetings)
+    fallbackTTL: 691200
+
+  # Rate limiting thresholds for dynamic cache TTL
+  rateLimit:
+    # Remaining requests threshold to start extending cache TTL
+    caution: 200
+    # Remaining requests threshold for further cache TTL extension
+    warning: 100
+    # Remaining requests threshold for maximum cache TTL extension
+    critical: 20
+
 # Database configuration
 database:
   # PostgreSQL connection URL
