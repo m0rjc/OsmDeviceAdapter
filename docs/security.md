@@ -69,8 +69,9 @@ These credentials must be protected and stored only on the server:
 | `SessionSecret` | Server environment variable | Signs session cookies | If compromised, attackers can forge user sessions |
 | Device Code | Database, returned once | Authorizes device to poll for tokens | Short-lived (configurable expiry), one-time use |
 | User Code | Database, displayed to user | Links device authorization to user action | Short-lived, one-time use |
-| OSM Access Token | Database | Accesses OSM API on behalf of user | **CRITICAL** - Provides full API access with user's permissions |
-| OSM Refresh Token | Database | Obtains new access tokens | **CRITICAL** - Long-lived credential for token renewal |
+| Device Access Token | Database, returned to device | Device uses to authenticate API requests | **HIGH** - Provides API access for authorized device. Server-side only OSM token isolation prevents OSM credential exposure |
+| OSM Access Token | Database, server-side only | Accesses OSM API on behalf of user | **CRITICAL** - Provides full API access with user's permissions. Never exposed to devices |
+| OSM Refresh Token | Database, server-side only | Obtains new access tokens | **CRITICAL** - Long-lived credential for token renewal. Never exposed to devices |
 
 **Implementation:** See `internal/config/config.go:21,44,61`
 
@@ -96,13 +97,15 @@ These are generated per-session and have limited lifetime:
 - Device code expiry
 - User authorization required
 - No client authentication (by design of device flow)
+- Device access tokens isolate OSM credentials (server-side only)
 
 **Threat Considerations:**
 - Attacker can extract client ID from device firmware → Device must be removed from the whitelist.
 - Attacker can intercept device codes → Mitigated by short expiry and user authorization requirement
 - Attacker can poll with fake device codes → Mitigated by rate limiting
+- Attacker can extract device access token from device → OSM credentials remain protected on server. Attacker gains only API access, not OSM OAuth credentials. Mitigated by limited API surface and planned sliding expiration.
 
-This is, at least at first, a personal project with only one device in the wild. Attack of the device would require 
+This is, at least at first, a personal project with only one device in the wild. Attack of the device would require
 physical access to the Scout Hut in which it is installed. If I allow other scout troops to use the service, then they
 will gain access to the device code. I can allocate each troop their own device code and switch to database storage
 to manage the whitelist.
@@ -297,7 +300,20 @@ The application validates that required secrets are present at startup (see `int
    - Verify user codes are properly cleaned up
    - Monitor for token leakage or abnormal patterns
 
-3. **Database access controls**
+3. **Device access token expiry** (Sliding expiration)
+   - Add `last_used_at` timestamp to `DeviceCode` model
+   - Update timestamp on each authenticated API request
+   - Implement automatic expiry after inactivity period (recommend 90 days)
+   - Add cleanup job to remove expired device tokens
+   - Log when devices are expired due to inactivity
+   - **Benefits:**
+     - Limits exposure if device is compromised and abandoned
+     - Provides natural cleanup of unused authorizations
+     - Balances security (automatic expiry) with convenience (no explicit refresh needed)
+   - **Implementation:** Track last use, expire on inactivity threshold
+   - **Future:** Consider adding user-facing UI to view/revoke devices (requires user login session)
+
+4. **Database access controls**
    - Restrict direct access to `device_codes` table
    - Use least-privilege database roles
    - Audit who has access to production database
@@ -308,7 +324,12 @@ The application validates that required secrets are present at startup (see `int
 1. **Advanced security features**
    - Device fingerprinting: Additional device identification beyond client ID
    - User consent tracking: Log which scopes users authorized
-   - Token revocation: Implement endpoint for users to revoke device access (low priority if provided by OSM)
+   - **Device management UI**: Allow users to view and revoke their authorized devices
+     - Requires implementing user login flow (OSM OAuth for web sessions)
+     - Display list of devices authorized by user (using stored `osm_user_id`)
+     - Allow manual revocation of device access
+     - Show last used timestamp and device details
+     - **Note:** More complex than sliding expiration; requires user authentication infrastructure
    - Audit logging: Track all token issuances and API calls per device (already partially implemented)
 
 2. **Kubernetes hardening** (if scaling to production)
