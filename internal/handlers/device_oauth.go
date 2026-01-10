@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
-	"gorm.io/gorm"
 )
 
 type DeviceAuthorizationRequest struct {
@@ -115,7 +113,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			Status:     "pending",
 			CreatedAt:  time.Now(),
 		}
-		if err := deps.DB.Create(deviceCodeRecord).Error; err != nil {
+		if err := db.CreateDeviceCode(deps.Conns, deviceCodeRecord); err != nil {
 			slog.Error("device.authorize.db_store_failed",
 				"component", "device_oauth",
 				"event", "authorize.error",
@@ -179,18 +177,7 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up device code
-		var deviceCodeRecord db.DeviceCode
-		err := deps.DB.Where("device_code = ?", req.DeviceCode).First(&deviceCodeRecord).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.Warn("device.token.invalid_code",
-				"component", "device_oauth",
-				"event", "token.error",
-				"client_id", req.ClientID,
-				"error", "invalid_device_code",
-			)
-			sendTokenError(w, "invalid_grant", "Invalid device code")
-			return
-		}
+		deviceCodeRecord, err := db.FindDeviceCodeByCode(deps.Conns, req.DeviceCode)
 		if err != nil {
 			slog.Error("device.token.db_error",
 				"component", "device_oauth",
@@ -199,6 +186,16 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 				"error", err,
 			)
 			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if deviceCodeRecord == nil {
+			slog.Warn("device.token.invalid_code",
+				"component", "device_oauth",
+				"event", "token.error",
+				"client_id", req.ClientID,
+				"error", "invalid_device_code",
+			)
+			sendTokenError(w, "invalid_grant", "Invalid device code")
 			return
 		}
 

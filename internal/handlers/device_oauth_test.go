@@ -32,9 +32,12 @@ func setupTestDeps(t *testing.T, allowedClientIDs []string) *Dependencies {
 		AllowedClientIDs:   allowedClientIDs,
 	}
 
+	// Create connections wrapper (Redis is nil for tests that don't need it)
+	conns := db.NewConnections(database, nil)
+
 	return &Dependencies{
 		Config: cfg,
-		DB:     database,
+		Conns:  conns,
 	}
 }
 

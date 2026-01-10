@@ -2,6 +2,31 @@ package types
 
 import "time"
 
+// User represents a user for the OSM API client.
+type User interface {
+	// UserID The OSM User ID if known
+	UserID() *int
+	// AccessToken the user's Access Token
+	AccessToken() string
+}
+
+type userImpl struct {
+	userId      *int
+	accessToken string
+}
+
+func (u *userImpl) UserID() *int {
+	return u.userId
+}
+
+func (u *userImpl) AccessToken() string {
+	return u.accessToken
+}
+
+func NewUser(userId *int, accessToken string) User {
+	return &userImpl{userId, accessToken}
+}
+
 type PatrolScore struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -39,12 +64,12 @@ type OSMSection struct {
 }
 
 type OSMProfileData struct {
-	UserID            int          `json:"user_id"`
-	FullName          string       `json:"full_name"`
-	Email             string       `json:"email"`
-	Sections          []OSMSection `json:"sections"`
-	HasParentAccess   bool         `json:"has_parent_access"`
-	HasSectionAccess  bool         `json:"has_section_access"`
+	UserID           int          `json:"user_id"`
+	FullName         string       `json:"full_name"`
+	Email            string       `json:"email"`
+	Sections         []OSMSection `json:"sections"`
+	HasParentAccess  bool         `json:"has_parent_access"`
+	HasSectionAccess bool         `json:"has_section_access"`
 }
 
 type OSMProfileResponse struct {

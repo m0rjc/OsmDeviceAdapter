@@ -1,20 +1,13 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
-	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
-	"gorm.io/gorm"
 )
 
 func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
@@ -57,14 +50,13 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up the device code from user code
-		var deviceCodeRecord db.DeviceCode
-		err := deps.DB.Where("user_code = ? AND expires_at > ?", strings.ToUpper(userCode), time.Now()).First(&deviceCodeRecord).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			http.Error(w, "Invalid or expired user code", http.StatusBadRequest)
-			return
-		}
+		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, strings.ToUpper(userCode))
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if deviceCodeRecord == nil {
+			http.Error(w, "Invalid or expired user code", http.StatusBadRequest)
 			return
 		}
 
@@ -87,13 +79,13 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			ExpiresAt:  sessionExpiry,
 			CreatedAt:  time.Now(),
 		}
-		if err := deps.DB.Create(session).Error; err != nil {
+		if err := db.CreateDeviceSession(deps.Conns, session); err != nil {
 			http.Error(w, "Failed to create session", http.StatusInternalServerError)
 			return
 		}
 
 		// Redirect to OSM OAuth authorization
-		authURL := buildOSMAuthURL(deps.Config, sessionID)
+		authURL := deps.OSMAuth.BuildAuthURL("", sessionID)
 		http.Redirect(w, r, authURL, http.StatusFound)
 	}
 }
@@ -107,7 +99,7 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		if errorParam != "" {
 			// User denied authorization
 			if state != "" {
-				markDeviceCodeStatus(deps.DB, state, "denied")
+				markDeviceCodeStatus(deps.Conns, state, "denied")
 			}
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprintf(w, `
@@ -128,26 +120,25 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up session to get device code
-		var session db.DeviceSession
-		err := deps.DB.Where("session_id = ? AND expires_at > ?", state, time.Now()).First(&session).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			http.Error(w, "Invalid or expired session", http.StatusBadRequest)
-			return
-		}
+		session, err := db.FindDeviceSessionByID(deps.Conns, state)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
 		}
+		if session == nil {
+			http.Error(w, "Invalid or expired session", http.StatusBadRequest)
+			return
+		}
 
 		// Exchange authorization code for access token
-		tokenResp, err := exchangeCodeForToken(deps.Config, code)
+		tokenResp, err := deps.OSMAuth.ExchangeCodeForToken(code)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to exchange code: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		// Fetch user profile to get sections
-		profile, err := fetchOSMProfile(deps.Config, tokenResp.AccessToken)
+		// Fetch user profile to get sections  -- CLAUDE: I have fixed this
+		profile, err := deps.OSM.FetchOSMProfile(types.NewUser(nil, tokenResp.AccessToken))
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to fetch profile: %v", err), http.StatusInternalServerError)
 			return
@@ -160,13 +151,7 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Store tokens (but not mark as authorized yet - waiting for section selection)
 		tokenExpiry := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-		updates := map[string]interface{}{
-			"status":            "awaiting_section",
-			"osm_access_token":  tokenResp.AccessToken,
-			"osm_refresh_token": tokenResp.RefreshToken,
-			"osm_token_expiry":  tokenExpiry,
-		}
-		if err := deps.DB.Model(&db.DeviceCode{}).Where("device_code = ?", session.DeviceCode).Updates(updates).Error; err != nil {
+		if err := db.UpdateDeviceCodeWithTokens(deps.Conns, session.DeviceCode, "awaiting_section", tokenResp.AccessToken, tokenResp.RefreshToken, tokenExpiry, profile.Data.UserID); err != nil {
 			http.Error(w, "Failed to store tokens", http.StatusInternalServerError)
 			return
 		}
@@ -199,23 +184,18 @@ func OAuthSelectSectionHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up session to get device code
-		var session db.DeviceSession
-		err := deps.DB.Where("session_id = ? AND expires_at > ?", sessionID, time.Now()).First(&session).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			http.Error(w, "Invalid or expired session", http.StatusBadRequest)
-			return
-		}
+		session, err := db.FindDeviceSessionByID(deps.Conns, sessionID)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
 		}
+		if session == nil {
+			http.Error(w, "Invalid or expired session", http.StatusBadRequest)
+			return
+		}
 
 		// Update device code with section ID and mark as authorized
-		updates := map[string]interface{}{
-			"status":     "authorized",
-			"section_id": sectionID,
-		}
-		if err := deps.DB.Model(&db.DeviceCode{}).Where("device_code = ?", session.DeviceCode).Updates(updates).Error; err != nil {
+		if err := db.UpdateDeviceCodeWithSection(deps.Conns, session.DeviceCode, "authorized", sectionID); err != nil {
 			http.Error(w, "Failed to update device code", http.StatusInternalServerError)
 			return
 		}
@@ -242,96 +222,16 @@ func OAuthSelectSectionHandler(deps *Dependencies) http.HandlerFunc {
 	}
 }
 
-func buildOSMAuthURL(cfg *config.Config, state string) string {
-	params := url.Values{}
-	params.Set("client_id", cfg.OSMClientID)
-	params.Set("redirect_uri", cfg.OSMRedirectURI)
-	params.Set("response_type", "code")
-	params.Set("state", state)
-	params.Set("scope", "section:member:read") // Adjust scope as needed
-
-	return fmt.Sprintf("%s/oauth/authorize?%s", cfg.OSMDomain, params.Encode())
-}
-
-func exchangeCodeForToken(cfg *config.Config, code string) (*types.OSMTokenResponse, error) {
-	data := url.Values{}
-	data.Set("grant_type", "authorization_code")
-	data.Set("code", code)
-	data.Set("redirect_uri", cfg.OSMRedirectURI)
-	data.Set("client_id", cfg.OSMClientID)
-	data.Set("client_secret", cfg.OSMClientSecret)
-
-	req, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodPost,
-		fmt.Sprintf("%s/oauth/token", cfg.OSMDomain),
-		strings.NewReader(data.Encode()),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("token exchange failed: %s - %s", resp.Status, string(body))
-	}
-
-	var tokenResp types.OSMTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return nil, err
-	}
-
-	return &tokenResp, nil
-}
-
-func markDeviceCodeStatus(database *gorm.DB, sessionID, status string) {
-	var session db.DeviceSession
-	if err := database.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
+func markDeviceCodeStatus(conns *db.Connections, sessionID, status string) {
+	session, err := db.FindDeviceSessionByID(conns, sessionID)
+	if err != nil || session == nil {
 		return
 	}
-	database.Model(&db.DeviceCode{}).Where("device_code = ?", session.DeviceCode).Update("status", status)
-}
-
-func fetchOSMProfile(cfg *config.Config, accessToken string) (*types.OSMProfileResponse, error) {
-	req, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodGet,
-		fmt.Sprintf("%s/oauth/resource", cfg.OSMDomain),
-		nil,
-	)
+	err = db.UpdateDeviceCodeStatus(conns, session.DeviceCode, status)
 	if err != nil {
-		return nil, err
+		// FIXME: Log this
+		return
 	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("profile fetch failed: %s - %s", resp.Status, string(body))
-	}
-
-	var profileResp types.OSMProfileResponse
-	if err := json.NewDecoder(resp.Body).Decode(&profileResp); err != nil {
-		return nil, err
-	}
-
-	return &profileResp, nil
 }
 
 func showSectionSelectionPage(w http.ResponseWriter, sessionID string, sections []types.OSMSection) {

@@ -12,9 +12,12 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/deviceauth"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/handlers"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/logging"
 	_ "github.com/m0rjc/OsmDeviceAdapter/internal/metrics" // Initialize metrics
+	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/server"
 )
 
@@ -55,11 +58,22 @@ func main() {
 	defer redisClient.Close()
 	slog.Info("redis connection established", "key_prefix", cfg.RedisKeyPrefix)
 
+	// Create database connections wrapper
+	conns := db.NewConnections(dbConn, redisClient)
+
+	rlStore := osm.NewPrometheusRateLimitDecorator(redisClient)
+	recorder := osm.NewPrometheusLatencyRecorder()
+	osmClient := osm.NewClient(cfg.OSMDomain, rlStore, recorder)
+	oauthClient := oauthclient.New(cfg.OSMClientID, cfg.OSMClientSecret, cfg.OSMRedirectURI, osmClient)
+	deviceAuthService := deviceauth.NewService(conns, oauthClient)
+
 	// Create handler dependencies
 	deps := &handlers.Dependencies{
-		Config:      cfg,
-		DB:          dbConn,
-		RedisClient: redisClient,
+		Config:     cfg,
+		Conns:      conns,
+		OSM:        osmClient,
+		OSMAuth:    oauthClient,
+		DeviceAuth: deviceAuthService,
 	}
 
 	// Create and configure HTTP server
