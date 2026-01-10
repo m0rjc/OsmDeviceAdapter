@@ -3,14 +3,26 @@ package db
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/redis/go-redis/v9"
 )
+
+// cachedRateLimitInfo holds rate limit info with expiry for in-memory caching
+type cachedRateLimitInfo struct {
+	info      *osm.UserRateLimitInfo
+	expiresAt time.Time
+}
 
 type RedisClient struct {
 	client    *redis.Client
 	keyPrefix string
+
+	// In-memory cache for rate limit info to reduce Redis hits
+	rateLimitCache map[int]*cachedRateLimitInfo
+	cacheMutex     sync.RWMutex
 }
 
 func NewRedisClient(redisURL string, keyPrefix string) (*RedisClient, error) {
@@ -28,8 +40,9 @@ func NewRedisClient(redisURL string, keyPrefix string) (*RedisClient, error) {
 	}
 
 	return &RedisClient{
-		client:    client,
-		keyPrefix: keyPrefix,
+		client:         client,
+		keyPrefix:      keyPrefix,
+		rateLimitCache: make(map[int]*cachedRateLimitInfo),
 	}, nil
 }
 

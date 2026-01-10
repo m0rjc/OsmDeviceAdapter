@@ -197,13 +197,33 @@ func (s *PatrolScoreService) determineRateLimitState(ctx context.Context, userID
 		return RateLimitStateNone
 	}
 
-	// Check if user is temporarily blocked
-	if s.redisClient.IsUserTemporarilyBlocked(*userID) {
+	// Get current rate limit info from the store
+	rateLimitInfo, err := s.redisClient.GetUserRateLimitInfo(ctx, *userID)
+	if err != nil {
+		slog.Warn("patrol_score_service.rate_limit_info_error",
+			"component", "patrol_score_service",
+			"event", "rate_limit.error",
+			"user_id", *userID,
+			"error", err,
+		)
+		return RateLimitStateNone
+	}
+
+	// No rate limit info available yet
+	if rateLimitInfo == nil {
+		return RateLimitStateNone
+	}
+
+	// Check if user is blocked
+	if rateLimitInfo.IsBlocked {
 		return RateLimitStateBlocked
 	}
 
-	// TODO: Get rate limit info from Redis and determine state
-	// For now, return NONE
+	// Check if rate limit is getting low (< 200 requests remaining)
+	if rateLimitInfo.Remaining > 0 && rateLimitInfo.Remaining < 200 {
+		return RateLimitStateDegraded
+	}
+
 	return RateLimitStateNone
 }
 

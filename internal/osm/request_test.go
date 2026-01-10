@@ -11,10 +11,12 @@ import (
 )
 
 type mockStore struct {
-	serviceBlocked bool
-	userBlocked    map[int]bool
-	latencies      []latencyRecord
-	rateLimits     []rateLimitRecord
+	serviceBlocked   bool
+	userBlocked      map[int]bool
+	userBlockedUntil map[int]time.Time
+	latencies        []latencyRecord
+	rateLimits       []rateLimitRecord
+	userRateLimits   map[int]*UserRateLimitInfo
 }
 
 type latencyRecord struct {
@@ -24,22 +26,45 @@ type latencyRecord struct {
 }
 
 type rateLimitRecord struct {
-	userId              *int
-	limitRemaining      int
-	limitTotal          int
-	limitResetSeconds   int
+	userId            *int
+	limitRemaining    int
+	limitTotal        int
+	limitResetSeconds int
 }
 
 func (m *mockStore) MarkOsmServiceBlocked(ctx context.Context)    { m.serviceBlocked = true }
 func (m *mockStore) IsOsmServiceBlocked(ctx context.Context) bool { return m.serviceBlocked }
-func (m *mockStore) MarkUserTemporarilyBlocked(ctx context.Context, userId int, retryAfter time.Duration) {
+func (m *mockStore) MarkUserTemporarilyBlocked(ctx context.Context, userId int, blockedUntil time.Time) {
 	if m.userBlocked == nil {
 		m.userBlocked = make(map[int]bool)
 	}
+	if m.userBlockedUntil == nil {
+		m.userBlockedUntil = make(map[int]time.Time)
+	}
 	m.userBlocked[userId] = true
+	m.userBlockedUntil[userId] = blockedUntil
 }
 func (m *mockStore) IsUserTemporarilyBlocked(userId int) bool {
 	return m.userBlocked[userId]
+}
+func (m *mockStore) UpdateUserRateLimit(ctx context.Context, userId int, remaining, limit, resetSeconds int) {
+	if m.userRateLimits == nil {
+		m.userRateLimits = make(map[int]*UserRateLimitInfo)
+	}
+	m.userRateLimits[userId] = &UserRateLimitInfo{
+		Remaining:    remaining,
+		Limit:        limit,
+		ResetSeconds: resetSeconds,
+		IsBlocked:    m.IsUserTemporarilyBlocked(userId),
+		BlockedUntil: m.userBlockedUntil[userId],
+		LastUpdated:  time.Now(),
+	}
+}
+func (m *mockStore) GetUserRateLimitInfo(ctx context.Context, userId int) (*UserRateLimitInfo, error) {
+	if m.userRateLimits == nil {
+		return nil, nil
+	}
+	return m.userRateLimits[userId], nil
 }
 func (m *mockStore) RecordOsmLatency(endpoint string, statusCode int, latency time.Duration) {
 	m.latencies = append(m.latencies, latencyRecord{endpoint, statusCode, latency})
