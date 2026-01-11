@@ -20,6 +20,16 @@ var (
 	ErrTemporaryBlocked = fmt.Errorf("OSM temporarily blocked for this user")
 )
 
+// UserRateLimitInfo contains the current rate limit state for a user
+type UserRateLimitInfo struct {
+	Remaining       int       // Number of requests remaining in the current window
+	Limit           int       // Total number of requests allowed per window
+	ResetSeconds    int       // Seconds until the rate limit resets
+	IsBlocked       bool      // True if the user is currently blocked
+	BlockedUntil    time.Time // Time when the block expires (zero if not blocked)
+	LastUpdated     time.Time // When this information was last updated
+}
+
 type RateLimitStore interface {
 	// MarkOsmServiceBlocked marks the OSM service as blocked by the API.
 	// This is a hard block requiring human intervention to fix.
@@ -31,10 +41,17 @@ type RateLimitStore interface {
 	// MarkUserTemporarilyBlocked marks the user as temporarily blocked by the API.
 	// The API will have returned a retry duration. See OSM-OAuth-Doc.md for details.
 	// User blocking is only relevant if a userID and access token are provided.
-	MarkUserTemporarilyBlocked(ctx context.Context, userId int, retryAfter time.Duration)
+	// blockedUntil is the absolute time when the block expires.
+	MarkUserTemporarilyBlocked(ctx context.Context, userId int, blockedUntil time.Time)
 	// IsUserTemporarilyBlocked returns true if the user is temporarily blocked by the API.
 	// The Request client must return the ErrTemporaryBlocked sentinel error without calling OSM if this is true.
 	IsUserTemporarilyBlocked(userId int) bool
+
+	// UpdateUserRateLimit stores the current rate limit information for a user
+	UpdateUserRateLimit(ctx context.Context, userId int, remaining, limit, resetSeconds int)
+	// GetUserRateLimitInfo retrieves the current rate limit state for a user
+	// Returns nil if no rate limit information is available for this user
+	GetUserRateLimitInfo(ctx context.Context, userId int) (*UserRateLimitInfo, error)
 }
 
 type LatencyRecorder interface {
@@ -133,18 +150,10 @@ func WithContentType(contentType string) RequestOption {
 	}
 }
 
-// Response represents a response from the OSM API, including metadata like rate limits.
+// Response represents a response from the OSM API.
 type Response struct {
 	httpResponse *http.Response
-	StatusCode   int           // HTTP status code of the response.
-	RateLimit    RateLimitInfo // Rate limit status after this request.
-}
-
-// RateLimitInfo contains information about the user's rate limit and application blocking status.
-type RateLimitInfo struct {
-	Remaining    int // Number of requests remaining in the current window.
-	Limit        int // Total number of requests allowed per window.
-	ResetSeconds int // Seconds until the rate limit resets.
+	StatusCode   int // HTTP status code of the response.
 }
 
 // Request performs an HTTP request to the OSM API.
@@ -282,15 +291,23 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 		return osmResponse, fmt.Errorf("%w: %s", ErrServiceBlocked, blockedHeader)
 	}
 
-	// Parse rate limit headers (per-user rate limits)
-	osmResponse.RateLimit = parseRateLimitHeaders(resp.Header)
-	c.recorder.RecordRateLimit(config.userId, osmResponse.RateLimit.Remaining, osmResponse.RateLimit.Limit, osmResponse.RateLimit.ResetSeconds)
+	// Parse and store rate limit headers (per-user rate limits)
+	remaining, limit, resetSeconds := parseRateLimitHeaders(resp.Header)
+	if config.userId != nil {
+		c.recorder.RecordRateLimit(config.userId, remaining, limit, resetSeconds)
+		// Store rate limit info in the rate limit store for later retrieval
+		if c.rlStore != nil {
+			c.rlStore.UpdateUserRateLimit(ctx, *config.userId, remaining, limit, resetSeconds)
+		}
+	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		retryAfterStr := resp.Header.Get("Retry-After")
 		retryAfter, _ := strconv.Atoi(retryAfterStr)
 		if config.userId != nil && c.rlStore != nil {
-			c.rlStore.MarkUserTemporarilyBlocked(ctx, *config.userId, time.Duration(retryAfter)*time.Second)
+			// Calculate the absolute time when the block expires
+			blockedUntil := time.Now().Add(time.Duration(retryAfter) * time.Second)
+			c.rlStore.MarkUserTemporarilyBlocked(ctx, *config.userId, blockedUntil)
 		}
 		return osmResponse, ErrTemporaryBlocked
 	}

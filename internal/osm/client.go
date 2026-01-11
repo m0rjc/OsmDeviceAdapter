@@ -35,9 +35,8 @@ func (c *Client) OSMDomain() string {
 // - X-RateLimit-Limit: Maximum requests per hour (per authenticated user)
 // - X-RateLimit-Remaining: Requests remaining before being blocked
 // - X-RateLimit-Reset: Seconds until the rate limit resets
-func parseRateLimitHeaders(headers http.Header) RateLimitInfo {
-	info := RateLimitInfo{}
-
+// Returns: remaining, limit, resetSeconds
+func parseRateLimitHeaders(headers http.Header) (int, int, int) {
 	// Parse OSM rate limit headers
 	limitStr := headers.Get("X-RateLimit-Limit")
 	remainingStr := headers.Get("X-RateLimit-Remaining")
@@ -45,7 +44,7 @@ func parseRateLimitHeaders(headers http.Header) RateLimitInfo {
 
 	if remainingStr == "" {
 		// No rate limit headers present
-		return info
+		return 0, 0, 0
 	}
 
 	remaining, err := strconv.Atoi(remainingStr)
@@ -56,21 +55,18 @@ func parseRateLimitHeaders(headers http.Header) RateLimitInfo {
 			"value", remainingStr,
 			"error", err,
 		)
-		return info
+		return 0, 0, 0
 	}
-	info.Remaining = remaining
 
+	limit := 0
 	if limitStr != "" {
-		if limit, err := strconv.Atoi(limitStr); err == nil {
-			info.Limit = limit
-		}
+		limit, _ = strconv.Atoi(limitStr)
 	}
 
+	resetSeconds := 0
 	if resetStr != "" {
-		if reset, err := strconv.Atoi(resetStr); err == nil {
-			info.ResetSeconds = reset
-		}
+		resetSeconds, _ = strconv.Atoi(resetStr)
 	}
 
-	return info
+	return remaining, limit, resetSeconds
 }
