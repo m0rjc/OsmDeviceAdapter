@@ -29,8 +29,9 @@ type PatrolData struct {
 //
 // Returns:
 // - []types.PatrolScore: Array of patrol scores sorted by name
+// - UserRateLimitInfo: Rate limit information from the API response
 // - error: Any error that occurred during fetching or parsing
-func (c *Client) FetchPatrolScores(ctx context.Context, user types.User, sectionID, termID int) ([]types.PatrolScore, error) {
+func (c *Client) FetchPatrolScores(ctx context.Context, user types.User, sectionID, termID int) ([]types.PatrolScore, UserRateLimitInfo, error) {
 	slog.Debug("osm.patrol_scores.fetching",
 		"component", "patrol_scores",
 		"event", "patrol.fetch.start",
@@ -40,7 +41,7 @@ func (c *Client) FetchPatrolScores(ctx context.Context, user types.User, section
 
 	// The response is a map with patrol IDs as keys
 	var patrolMap map[string]PatrolData
-	_, err := c.Request(ctx, "GET", &patrolMap,
+	resp, err := c.Request(ctx, "GET", &patrolMap,
 		WithPath("/ext/members/patrols/"),
 		WithQueryParameters(map[string]string{
 			"action":            "getPatrolsWithPeople",
@@ -58,7 +59,7 @@ func (c *Client) FetchPatrolScores(ctx context.Context, user types.User, section
 			"term_id", termID,
 			"error", err,
 		)
-		return nil, fmt.Errorf("failed to fetch patrol scores: %w", err)
+		return nil, UserRateLimitInfo{}, fmt.Errorf("failed to fetch patrol scores: %w", err)
 	}
 
 	// Filter and convert patrols
@@ -128,5 +129,5 @@ func (c *Client) FetchPatrolScores(ctx context.Context, user types.User, section
 		"patrol_count", len(patrols),
 	)
 
-	return patrols, nil
+	return patrols, resp.Limits, nil
 }
