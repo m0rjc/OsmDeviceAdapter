@@ -32,16 +32,8 @@ func (p *PrometheusRateLimitDecorator) MarkUserTemporarilyBlocked(ctx context.Co
 	metrics.OSMBlockCount.Inc()
 }
 
-func (p *PrometheusRateLimitDecorator) IsUserTemporarilyBlocked(userId int) bool {
-	return p.next.IsUserTemporarilyBlocked(userId)
-}
-
-func (p *PrometheusRateLimitDecorator) UpdateUserRateLimit(ctx context.Context, userId int, remaining, limit, resetSeconds int) {
-	p.next.UpdateUserRateLimit(ctx, userId, remaining, limit, resetSeconds)
-}
-
-func (p *PrometheusRateLimitDecorator) GetUserRateLimitInfo(ctx context.Context, userId int) (*UserRateLimitInfo, error) {
-	return p.next.GetUserRateLimitInfo(ctx, userId)
+func (p *PrometheusRateLimitDecorator) GetUserBlockEndTime(ctx context.Context, userId int) time.Time {
+	return p.next.GetUserBlockEndTime(ctx, userId)
 }
 
 // PrometheusLatencyRecorder is LatencyRecorder that records latency metrics to Prometheus.

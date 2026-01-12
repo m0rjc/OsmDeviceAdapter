@@ -3,6 +3,7 @@ package osm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,7 +17,6 @@ type mockStore struct {
 	userBlockedUntil map[int]time.Time
 	latencies        []latencyRecord
 	rateLimits       []rateLimitRecord
-	userRateLimits   map[int]*UserRateLimitInfo
 }
 
 type latencyRecord struct {
@@ -44,27 +44,11 @@ func (m *mockStore) MarkUserTemporarilyBlocked(ctx context.Context, userId int, 
 	m.userBlocked[userId] = true
 	m.userBlockedUntil[userId] = blockedUntil
 }
-func (m *mockStore) IsUserTemporarilyBlocked(userId int) bool {
-	return m.userBlocked[userId]
-}
-func (m *mockStore) UpdateUserRateLimit(ctx context.Context, userId int, remaining, limit, resetSeconds int) {
-	if m.userRateLimits == nil {
-		m.userRateLimits = make(map[int]*UserRateLimitInfo)
+func (m *mockStore) GetUserBlockEndTime(ctx context.Context, userId int) time.Time {
+	if m.userBlockedUntil == nil {
+		return time.Time{}
 	}
-	m.userRateLimits[userId] = &UserRateLimitInfo{
-		Remaining:    remaining,
-		Limit:        limit,
-		ResetSeconds: resetSeconds,
-		IsBlocked:    m.IsUserTemporarilyBlocked(userId),
-		BlockedUntil: m.userBlockedUntil[userId],
-		LastUpdated:  time.Now(),
-	}
-}
-func (m *mockStore) GetUserRateLimitInfo(ctx context.Context, userId int) (*UserRateLimitInfo, error) {
-	if m.userRateLimits == nil {
-		return nil, nil
-	}
-	return m.userRateLimits[userId], nil
+	return m.userBlockedUntil[userId]
 }
 func (m *mockStore) RecordOsmLatency(endpoint string, statusCode int, latency time.Duration) {
 	m.latencies = append(m.latencies, latencyRecord{endpoint, statusCode, latency})
@@ -133,12 +117,17 @@ func TestClient_Request(t *testing.T) {
 	})
 
 	t.Run("user blocked in store", func(t *testing.T) {
-		store := &mockStore{userBlocked: map[int]bool{1: true}}
+		blockTime := time.Now().Add(1 * time.Hour)
+		store := &mockStore{
+			userBlocked:      map[int]bool{1: true},
+			userBlockedUntil: map[int]time.Time{1: blockTime},
+		}
 		client := NewClient("http://osm.local", store, store)
 
 		_, err := client.Request(context.Background(), http.MethodGet, nil, WithPath("/test"), WithUser(newMockUser(1, "utoken")))
-		if err != ErrTemporaryBlocked {
-			t.Errorf("expected ErrTemporaryBlocked, got %v", err)
+		var blockedErr *ErrUserBlocked
+		if err == nil || !errors.As(err, &blockedErr) {
+			t.Errorf("expected ErrUserBlocked, got %v", err)
 		}
 	})
 
@@ -172,8 +161,9 @@ func TestClient_Request(t *testing.T) {
 		client := NewClient(server.URL, store, store)
 
 		_, err := client.Request(context.Background(), http.MethodGet, nil, WithPath("/test"), WithUser(newMockUser(1, "utoken")))
-		if err != ErrTemporaryBlocked {
-			t.Errorf("expected ErrTemporaryBlocked, got %v", err)
+		var blockedErr *ErrUserBlocked
+		if err == nil || !errors.As(err, &blockedErr) {
+			t.Errorf("expected ErrUserBlocked, got %v", err)
 		}
 		if !store.userBlocked[1] {
 			t.Error("expected user1 to be marked as blocked in store")

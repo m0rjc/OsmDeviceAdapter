@@ -5,7 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
+	"strconv"
+	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
@@ -54,7 +55,6 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 		// Create patrol score service
 		patrolService := services.NewPatrolScoreService(
 			deps.OSM,
-			deps.Conns.Redis,
 			deps.Conns,
 			deps.Config,
 		)
@@ -110,6 +110,26 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 				return
 			}
 
+			var userBlockedErr *osm.ErrUserBlocked
+			if errors.As(err, &userBlockedErr) {
+				// Calculate seconds until the block expires
+				retryAfterSeconds := int(time.Until(userBlockedErr.BlockedUntil).Seconds())
+				if retryAfterSeconds < 0 {
+					retryAfterSeconds = 0
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":        "rate_limit_exceeded",
+					"message":      "User temporarily blocked due to rate limiting",
+					"blocked_until": userBlockedErr.BlockedUntil.Format(time.RFC3339),
+					"retry_after":   retryAfterSeconds,
+				})
+				return
+			}
+
 			// Generic error
 			http.Error(w, "Failed to fetch patrol scores", http.StatusBadGateway)
 			return
@@ -124,18 +144,4 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 		}
 		json.NewEncoder(w).Encode(response)
 	}
-}
-
-// extractBearerToken extracts the token from the Authorization header
-func extractBearerToken(authHeader string) string {
-	if authHeader == "" {
-		return ""
-	}
-
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-		return ""
-	}
-
-	return strings.TrimSpace(parts[1])
 }

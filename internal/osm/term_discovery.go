@@ -10,16 +10,16 @@ import (
 )
 
 var (
-	ErrNotInTerm          = fmt.Errorf("section is not currently in an active term")
-	ErrSectionNotFound    = fmt.Errorf("section not found in user's sections")
+	ErrNotInTerm           = fmt.Errorf("section is not currently in an active term")
+	ErrSectionNotFound     = fmt.Errorf("section not found in user's sections")
 	ErrNoSectionConfigured = fmt.Errorf("device has no section configured")
 )
 
 // TermInfo contains information about a section's active term.
 type TermInfo struct {
-	TermID    int
-	EndDate   time.Time
-	UserID    int
+	TermID  int
+	EndDate time.Time
+	UserID  int
 }
 
 // FetchActiveTermForSection fetches the active term for a given section.
@@ -30,6 +30,7 @@ type TermInfo struct {
 // - TermInfo with term details if an active term is found
 // - ErrSectionNotFound if the section is not in the user's profile
 // - ErrNotInTerm if no active term exists for the current date
+// - ErrUserBlocked (wrapped) is the user account is temporarily blocked
 // - Other errors for API or parsing failures
 func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User, sectionID int) (*TermInfo, error) {
 	slog.Debug("osm.term_discovery.fetching",
@@ -38,11 +39,7 @@ func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User,
 		"section_id", sectionID,
 	)
 
-	var profileResp types.OSMProfileResponse
-	_, err := c.Request(ctx, "GET", &profileResp,
-		WithPath("/oauth/resource"),
-		WithUser(user),
-	)
+	profileResp, err := c.FetchOSMProfile(user)
 	if err != nil {
 		slog.Error("osm.term_discovery.fetch_failed",
 			"component", "term_discovery",
@@ -90,11 +87,13 @@ func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User,
 	// Find the active term (where current_date >= startdate AND current_date <= enddate)
 	now := time.Now()
 	var activeTerm *types.OSMTerm
+	const osmTimeLayout = "2006-01-02"
+
 	for i := range targetSection.Terms {
 		term := &targetSection.Terms[i]
 
 		// Parse start and end dates
-		startDate, err := time.Parse("2006-01-02", term.StartDate)
+		startDate, err := time.Parse(osmTimeLayout, term.StartDate)
 		if err != nil {
 			slog.Warn("osm.term_discovery.invalid_start_date",
 				"component", "term_discovery",
@@ -106,7 +105,7 @@ func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User,
 			continue
 		}
 
-		endDate, err := time.Parse("2006-01-02", term.EndDate)
+		endDate, err := time.Parse(osmTimeLayout, term.EndDate)
 		if err != nil {
 			slog.Warn("osm.term_discovery.invalid_end_date",
 				"component", "term_discovery",
@@ -137,7 +136,7 @@ func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User,
 		return nil, ErrNotInTerm
 	}
 
-	endDate, _ := time.Parse("2006-01-02", activeTerm.EndDate)
+	endDate, _ := time.Parse(osmTimeLayout, activeTerm.EndDate)
 
 	slog.Info("osm.term_discovery.success",
 		"component", "term_discovery",

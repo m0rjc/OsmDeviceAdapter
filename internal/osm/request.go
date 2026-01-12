@@ -16,18 +16,26 @@ import (
 )
 
 var (
-	ErrServiceBlocked   = fmt.Errorf("OSM service blocked")
-	ErrTemporaryBlocked = fmt.Errorf("OSM temporarily blocked for this user")
+	ErrServiceBlocked = fmt.Errorf("OSM service blocked")
 )
+
+// fallbackUserBlockTime is the last resort block time to apply if we cannot find a block time from headers.
+var fallbackUserBlockTime time.Duration = 10 * time.Minute
+
+// ErrUserBlocked indicates that the user has been blocked until the given time
+type ErrUserBlocked struct {
+	BlockedUntil time.Time
+}
+
+func (e *ErrUserBlocked) Error() string {
+	return fmt.Sprintf("OSM user blocked until %v", e.BlockedUntil)
+}
 
 // UserRateLimitInfo contains the current rate limit state for a user
 type UserRateLimitInfo struct {
-	Remaining       int       // Number of requests remaining in the current window
-	Limit           int       // Total number of requests allowed per window
-	ResetSeconds    int       // Seconds until the rate limit resets
-	IsBlocked       bool      // True if the user is currently blocked
-	BlockedUntil    time.Time // Time when the block expires (zero if not blocked)
-	LastUpdated     time.Time // When this information was last updated
+	Remaining int // Number of requests remaining in the current window
+	Limit     int // Total number of requests allowed per window
+	ResetsAt  time.Time
 }
 
 type RateLimitStore interface {
@@ -43,15 +51,10 @@ type RateLimitStore interface {
 	// User blocking is only relevant if a userID and access token are provided.
 	// blockedUntil is the absolute time when the block expires.
 	MarkUserTemporarilyBlocked(ctx context.Context, userId int, blockedUntil time.Time)
-	// IsUserTemporarilyBlocked returns true if the user is temporarily blocked by the API.
-	// The Request client must return the ErrTemporaryBlocked sentinel error without calling OSM if this is true.
-	IsUserTemporarilyBlocked(userId int) bool
 
-	// UpdateUserRateLimit stores the current rate limit information for a user
-	UpdateUserRateLimit(ctx context.Context, userId int, remaining, limit, resetSeconds int)
-	// GetUserRateLimitInfo retrieves the current rate limit state for a user
-	// Returns nil if no rate limit information is available for this user
-	GetUserRateLimitInfo(ctx context.Context, userId int) (*UserRateLimitInfo, error)
+	// GetUserBlockEndTime retrieves the block end time for a user from Redis.
+	// Returns zero time if the user is not blocked.
+	GetUserBlockEndTime(ctx context.Context, userId int) time.Time
 }
 
 type LatencyRecorder interface {
@@ -154,6 +157,7 @@ func WithContentType(contentType string) RequestOption {
 type Response struct {
 	httpResponse *http.Response
 	StatusCode   int // HTTP status code of the response.
+	Limits       UserRateLimitInfo
 }
 
 // Request performs an HTTP request to the OSM API.
@@ -178,16 +182,17 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 	}
 
 	// Check for user-specific block
-	if config.userId != nil && c.rlStore != nil && c.rlStore.IsUserTemporarilyBlocked(*config.userId) {
-		slog.Error("osm.api.request_prevented_by_user_block",
-			"userId", config.userId,
-			"component", "osm_api",
-			"event", "api.request.start",
-		)
-		return nil, ErrTemporaryBlocked
+	if config.userId != nil && c.rlStore != nil {
+		blockedUntil := c.rlStore.GetUserBlockEndTime(ctx, *config.userId)
+		if blockedUntil.After(time.Now()) {
+			slog.Error("osm.api.request_prevented_by_user_block",
+				"userId", config.userId,
+				"component", "osm_api",
+				"event", "api.request.start",
+			)
+			return nil, &ErrUserBlocked{blockedUntil}
+		}
 	}
-
-	start := time.Now()
 
 	// endpoint is used for logging and metrics labels to provide more granular visibility.
 	// For standard OSM API calls to api.php, we use the 'action' parameter as the endpoint name.
@@ -242,12 +247,14 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 	}
 
 	// Add authorization header
-	// If withUser was used, we use the user's token. Otherwise we use the client's token.
 	if config.userToken != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", config.userToken))
 	}
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(start)
+
 	if err != nil {
 		slog.Error("osm.api.request_failed",
 			"component", "osm_api",
@@ -257,14 +264,12 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 			"duration_ms", time.Since(start).Milliseconds(),
 		)
 		if c.recorder != nil {
-			c.recorder.RecordOsmLatency(endpoint, 0, time.Since(start))
+			c.recorder.RecordOsmLatency(endpoint, 0, duration)
 		}
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	// Record latency
-	duration := time.Since(start)
 	if c.recorder != nil {
 		c.recorder.RecordOsmLatency(endpoint, resp.StatusCode, duration)
 	}
@@ -295,33 +300,34 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 	remaining, limit, resetSeconds := parseRateLimitHeaders(resp.Header)
 	if config.userId != nil {
 		c.recorder.RecordRateLimit(config.userId, remaining, limit, resetSeconds)
-		// Store rate limit info in the rate limit store for later retrieval
-		if c.rlStore != nil {
-			c.rlStore.UpdateUserRateLimit(ctx, *config.userId, remaining, limit, resetSeconds)
-		}
+	}
+	osmResponse.Limits = UserRateLimitInfo{
+		Remaining: remaining,
+		Limit:     limit,
+		ResetsAt:  time.Now().Add(time.Duration(resetSeconds) * time.Second),
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		retryAfterStr := resp.Header.Get("Retry-After")
-		retryAfter, _ := strconv.Atoi(retryAfterStr)
+		blockedUntil := parseRetryAfterHeader(retryAfterStr, resetSeconds)
 		if config.userId != nil && c.rlStore != nil {
 			// Calculate the absolute time when the block expires
-			blockedUntil := time.Now().Add(time.Duration(retryAfter) * time.Second)
 			c.rlStore.MarkUserTemporarilyBlocked(ctx, *config.userId, blockedUntil)
 		}
-		return osmResponse, ErrTemporaryBlocked
+		return osmResponse, &ErrUserBlocked{blockedUntil}
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		// Only read the body if it's an error and we need to log it.
 		// We use a LimitReader to avoid reading excessive amounts of data into memory.
-		const maxErrorBody = 4096
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-
-		logBody := string(bodyBytes)
 		// SECURITY: Redact response body for sensitive endpoints (e.g. OAuth)
+		var logBody string
 		if config.sensitive {
 			logBody = "[REDACTED]"
+		} else {
+			const maxErrorBody = 4096
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+			logBody = string(bodyBytes)
 		}
 
 		slog.Error("osm.api.error_response",
@@ -348,4 +354,19 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 	}
 
 	return osmResponse, nil
+}
+
+func parseRetryAfterHeader(str string, defaultSeconds int) time.Time {
+	// OSM specify that they will send a time in seconds.
+	// The HTTP standards also allow a HTTP date. Don't support this unless needed.
+	retryAfter, err := strconv.Atoi(str)
+	if err != nil {
+		slog.Error("osm.api.parse_retry_after", "value", str, "error", err)
+		retryAfter = defaultSeconds // Try the other limit header
+	}
+	if retryAfter > 0 {
+		return time.Now().Add(time.Duration(retryAfter) * time.Second)
+	}
+	slog.Warn("osm.api.parse_retry_after_using_default")
+	return time.Now().Add(fallbackUserBlockTime)
 }
