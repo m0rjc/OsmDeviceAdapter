@@ -2,7 +2,7 @@
 
 # Variables
 APP_NAME=osm-device-adapter
-DOCKER_REGISTRY?=your-registry
+DOCKER_REGISTRY?=k8s.localdev:32000
 DOCKER_TAG?=latest
 IMAGE=$(DOCKER_REGISTRY)/$(APP_NAME):$(DOCKER_TAG)
 HELM_RELEASE?=osm-device-adapter
@@ -30,22 +30,6 @@ docker-push: docker-build
 	docker push $(IMAGE)
 
 # Deploy to Kubernetes
-k8s-deploy:
-	kubectl apply -f deployments/k8s/configmap.yaml
-	kubectl apply -f deployments/k8s/secret.yaml
-	kubectl apply -f deployments/k8s/deployment.yaml
-	kubectl apply -f deployments/k8s/service.yaml
-	# Ingress is optional if using Cloudflare Tunnel
-	# kubectl apply -f deployments/k8s/ingress.yaml
-
-# Delete from Kubernetes
-k8s-delete:
-	# kubectl delete -f deployments/k8s/ingress.yaml
-	kubectl delete -f deployments/k8s/service.yaml
-	kubectl delete -f deployments/k8s/deployment.yaml
-	kubectl delete -f deployments/k8s/secret.yaml
-	kubectl delete -f deployments/k8s/configmap.yaml
-
 # Helm: Install the chart
 helm-install:
 	helm install $(HELM_RELEASE) ./chart \
