@@ -102,11 +102,11 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 	// First, ensure we have term information
 	var termID int
 	var patrols []types.PatrolScore
+	var rateLimitInfo osm.UserRateLimitInfo
 	termID, err = s.ensureTermInfo(ctx, device)
 	if err == nil {
 		// Fetch patrol scores from OSM
-		// TODO: Return the LIMITs section in the response here
-		patrols, err = s.osmClient.FetchPatrolScores(ctx, user, *device.SectionID, termID)
+		patrols, rateLimitInfo, err = s.osmClient.FetchPatrolScores(ctx, user, *device.SectionID, termID)
 	}
 	if err != nil {
 		// Try to make the cache last long enough if we have one
@@ -140,9 +140,8 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 	}
 
 	// Determine cache TTL based on current rate limiting state
-	// TODO: Use the limits information returned from the Patrol Scores method
-	rateLimitState := RateLimitStateNone
-	cacheTTL := s.calculateCacheTTL(rateLimitState)
+	rateLimitState := s.determineRateLimitState(rateLimitInfo.Remaining)
+	cacheTTL := s.calculateCacheTTL(rateLimitInfo.Remaining)
 
 	// Cache the results with two-tier strategy
 	// Caching is best effort
@@ -152,7 +151,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 		Patrols:        patrols,
 		CachedAt:       now,
 		ValidUntil:     validUntil,
-		RateLimitState: "", // TODO
+		RateLimitState: rateLimitState,
 	})
 
 	return &PatrolScoreResponse{
@@ -204,24 +203,35 @@ func (s *PatrolScoreService) ensureTermInfo(ctx context.Context, device *db.Devi
 	return termInfo.TermID, nil
 }
 
-// calculateCacheTTL calculates the cache TTL based on rate limiting state
-func (s *PatrolScoreService) calculateCacheTTL(state RateLimitState) time.Duration {
-	baselineTTL := 5 * time.Minute
-
-	switch state {
-	// We can't get here while blocked because we'll have gone into the error handling code.
-	case RateLimitStateUserTemporaryBlock:
-		// User blocked: 30 minute cache
-		return 30 * time.Minute
-	case RateLimitStateServiceBlocked:
-		// Service blocked: 6 hour cache (takes time to resolve)
-		return 6 * time.Hour
-	case RateLimitStateDegraded:
-		// Degraded: 15 minute cache
+// calculateCacheTTL calculates the cache TTL based on absolute rate limit remaining count.
+// Uses adaptive caching strategy with absolute thresholds:
+// - > 500 remaining: 1 minute (fresh data when capacity available)
+// - 200-500: 5 minutes (baseline)
+// - 100-200: 10 minutes (starting to conserve)
+// - 50-100: 15 minutes (more conservative)
+// - < 50: 30 minutes (very conservative)
+func (s *PatrolScoreService) calculateCacheTTL(remaining int) time.Duration {
+	switch {
+	case remaining > 500:
+		return 1 * time.Minute
+	case remaining >= 200:
+		return 5 * time.Minute
+	case remaining >= 100:
+		return 10 * time.Minute
+	case remaining >= 50:
 		return 15 * time.Minute
 	default:
-		return baselineTTL
+		return 30 * time.Minute
 	}
+}
+
+// determineRateLimitState determines the rate limit state based on remaining requests.
+// This is used for reporting in the API response.
+func (s *PatrolScoreService) determineRateLimitState(remaining int) RateLimitState {
+	if remaining >= 200 {
+		return RateLimitStateNone
+	}
+	return RateLimitStateDegraded
 }
 
 // getCachedPatrolScores retrieves patrol scores from cache
