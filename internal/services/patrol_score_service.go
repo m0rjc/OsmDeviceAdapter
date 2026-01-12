@@ -109,7 +109,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 	}
 	if err != nil {
 		// Try to make the cache last long enough if we have one
-		cacheUntil := time.Now().Add(10 * time.Minute) // TODO: Configure
+		cacheUntil := time.Now().Add(10 * time.Minute) // TODO: Configure. This is the fallback block time if we can't deduce it.
 		var blockedError *osm.ErrUserBlocked
 		if errors.As(err, &blockedError) {
 			cacheUntil = blockedError.BlockedUntil
