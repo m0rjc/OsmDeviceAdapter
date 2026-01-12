@@ -106,6 +106,37 @@ class MatrixDisplay:
         else:
             print(f"[DISPLAY] Line from ({x1},{y1}) to ({x2},{y2})")
 
+    def draw_status_indicator(self, rate_limit_state: str):
+        """Draw a 2x2 status indicator in the top-right corner.
+
+        Args:
+            rate_limit_state: One of "LOADING", "NONE", "DEGRADED",
+                             "USER_TEMPORARY_BLOCK", or "SERVICE_BLOCKED"
+        """
+        # Status colors
+        colors = {
+            "LOADING": (128, 128, 128),        # Grey
+            "NONE": (0, 255, 0),               # Green
+            "DEGRADED": (255, 191, 0),         # Amber
+            "USER_TEMPORARY_BLOCK": (255, 0, 0),  # Red
+            "SERVICE_BLOCKED": (255, 0, 0),    # Red (but will show message)
+        }
+
+        color = colors.get(rate_limit_state, (128, 128, 128))  # Default to grey
+
+        # Draw 2x2 square in top-right corner
+        x_start = self.cols - 3  # 3 pixels from right edge
+        y_start = 1              # 1 pixel from top
+
+        if not self.simulate:
+            status_color = graphics.Color(color[0], color[1], color[2])
+            # Draw a 2x2 filled square
+            for x in range(x_start, x_start + 2):
+                for y in range(y_start, y_start + 2):
+                    self.canvas.SetPixel(x, y, status_color.red, status_color.green, status_color.blue)
+        else:
+            print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x_start},{y_start}) color={color}")
+
     def show_device_code(self, code: str, url: str):
         """Display the device authorization code.
 
@@ -169,13 +200,29 @@ class MatrixDisplay:
         if self.simulate:
             print(f"[DISPLAY ERROR] {error}")
 
-    def show_scores(self, patrols: List[PatrolScore]):
-        """Display patrol names and scores.
+    def show_scores(self, patrols: List[PatrolScore], rate_limit_state: str = "NONE"):
+        """Display patrol names and scores with status indicator.
 
         Args:
             patrols: List of PatrolScore objects (up to 4)
+            rate_limit_state: Current rate limit state for status indicator
         """
         self.clear()
+
+        # Special handling for service blocked - show message instead of scores
+        if rate_limit_state == "SERVICE_BLOCKED":
+            self.draw_text(2, 10, "Service", color=(255, 0, 0))
+            self.draw_text(2, 20, "Blocked", color=(255, 0, 0))
+            self.draw_text(2, 28, "Contact", color=(255, 100, 0))
+            self.draw_text(2, 32, "Admin", color=(255, 100, 0))
+            self.draw_status_indicator(rate_limit_state)
+            self.show()
+
+            if self.simulate:
+                print("\n" + "="*40)
+                print("SERVICE BLOCKED - Contact Administrator")
+                print("="*40 + "\n")
+            return
 
         # Display up to 4 patrols
         row_height = 8
@@ -200,6 +247,9 @@ class MatrixDisplay:
                 line_y = (i + 1) * row_height - 1
                 self.draw_line(0, line_y, self.cols - 1, line_y, color=(50, 50, 50))
 
+        # Draw status indicator
+        self.draw_status_indicator(rate_limit_state)
+
         self.show()
 
         if self.simulate:
@@ -208,6 +258,7 @@ class MatrixDisplay:
             print("="*40)
             for patrol in patrols[:4]:
                 print(f"{patrol.name:<20} {patrol.score:>10}")
+            print(f"\nStatus: {rate_limit_state}")
             print("="*40 + "\n")
 
     def show_message(self, message: str, color: Tuple[int, int, int] = (255, 255, 255)):

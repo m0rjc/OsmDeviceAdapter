@@ -38,6 +38,16 @@ class PatrolScore:
     score: int
 
 
+@dataclass
+class PatrolScoresResponse:
+    """Response from get_patrol_scores API."""
+    patrols: List[PatrolScore]
+    from_cache: bool
+    cached_at: datetime
+    cache_expires_at: datetime
+    rate_limit_state: str  # "NONE", "DEGRADED", "USER_TEMPORARY_BLOCK", "SERVICE_BLOCKED"
+
+
 class DeviceFlowError(Exception):
     """Base exception for device flow errors."""
     pass
@@ -55,6 +65,29 @@ class AccessDenied(DeviceFlowError):
 
 class ExpiredToken(DeviceFlowError):
     """Device code has expired."""
+    pass
+
+
+class SectionNotFound(DeviceFlowError):
+    """Section not found in user's profile."""
+    pass
+
+
+class NotInTerm(DeviceFlowError):
+    """Section is not currently in an active term."""
+    pass
+
+
+class UserTemporaryBlock(DeviceFlowError):
+    """User temporarily blocked due to rate limiting."""
+    def __init__(self, message: str, blocked_until: datetime, retry_after: int):
+        super().__init__(message)
+        self.blocked_until = blocked_until
+        self.retry_after = retry_after
+
+
+class ServiceBlocked(DeviceFlowError):
+    """Service blocked by OSM."""
     pass
 
 
@@ -163,14 +196,18 @@ class OSMDeviceClient:
                 raise DeviceFlowError(f"Failed to poll for token: {e}")
             raise
 
-    def get_patrol_scores(self) -> Tuple[List[PatrolScore], datetime, datetime]:
+    def get_patrol_scores(self) -> PatrolScoresResponse:
         """Get current patrol scores.
 
         Returns:
-            Tuple of (patrol_scores, cached_at, expires_at)
+            PatrolScoresResponse with patrols, cache info, and rate limit state
 
         Raises:
-            DeviceFlowError: If request fails or not authenticated
+            SectionNotFound: Section not found in user's profile
+            NotInTerm: Section not currently in an active term
+            UserTemporaryBlock: User temporarily blocked due to rate limiting
+            ServiceBlocked: Service blocked by OSM
+            DeviceFlowError: Other request failures or not authenticated
         """
         if not self.access_token:
             raise DeviceFlowError("Not authenticated. Call authenticate() first.")
@@ -182,7 +219,44 @@ class OSMDeviceClient:
 
         try:
             response = self.session.get(url, headers=headers, timeout=self.timeout)
+
+            # Handle specific error status codes
+            if response.status_code == 400:
+                error_data = response.json()
+                error_code = error_data.get("error", "")
+                if error_code == "section_not_found":
+                    raise SectionNotFound(error_data.get("message", "Section not found"))
+                response.raise_for_status()
+
+            elif response.status_code == 401:
+                raise DeviceFlowError("Authentication expired or invalid")
+
+            elif response.status_code == 409:
+                error_data = response.json()
+                error_code = error_data.get("error", "")
+                if error_code == "not_in_term":
+                    raise NotInTerm(error_data.get("message", "Not in active term"))
+                response.raise_for_status()
+
+            elif response.status_code == 429:
+                error_data = response.json()
+                blocked_until_str = error_data.get("blocked_until", "")
+                retry_after = error_data.get("retry_after", 1800)
+                blocked_until = datetime.fromisoformat(blocked_until_str.replace('Z', '+00:00'))
+                raise UserTemporaryBlock(
+                    error_data.get("message", "User temporarily blocked"),
+                    blocked_until,
+                    retry_after
+                )
+
+            elif response.status_code == 503:
+                error_data = response.json()
+                raise ServiceBlocked(error_data.get("message", "Service blocked"))
+
+            # Raise for any other HTTP errors
             response.raise_for_status()
+
+            # Parse successful response
             data = response.json()
 
             patrols = [
@@ -195,16 +269,20 @@ class OSMDeviceClient:
             ]
 
             cached_at = datetime.fromisoformat(data["cached_at"].replace('Z', '+00:00'))
-            expires_at = datetime.fromisoformat(data["expires_at"].replace('Z', '+00:00'))
+            cache_expires_at = datetime.fromisoformat(data["cache_expires_at"].replace('Z', '+00:00'))
 
-            return patrols, cached_at, expires_at
+            return PatrolScoresResponse(
+                patrols=patrols,
+                from_cache=data.get("from_cache", False),
+                cached_at=cached_at,
+                cache_expires_at=cache_expires_at,
+                rate_limit_state=data.get("rate_limit_state", "NONE")
+            )
 
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                raise DeviceFlowError("Authentication expired or invalid")
-            raise DeviceFlowError(f"Failed to get patrol scores: {e}")
         except requests.exceptions.RequestException as e:
-            raise DeviceFlowError(f"Failed to get patrol scores: {e}")
+            if not isinstance(e, DeviceFlowError):
+                raise DeviceFlowError(f"Failed to get patrol scores: {e}")
+            raise
 
     def authenticate(self, on_code_received=None, on_waiting=None) -> TokenResponse:
         """Perform full device flow authentication.

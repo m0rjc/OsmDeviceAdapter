@@ -13,7 +13,10 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from api_client import OSMDeviceClient, DeviceFlowError, AccessDenied, ExpiredToken
+from api_client import (
+    OSMDeviceClient, DeviceFlowError, AccessDenied, ExpiredToken,
+    SectionNotFound, NotInTerm, UserTemporaryBlock, ServiceBlocked
+)
 from display import MatrixDisplay, PatrolScore as DisplayPatrolScore
 
 
@@ -42,6 +45,8 @@ class ScoreboardApp:
         self.client = OSMDeviceClient(base_url=API_BASE_URL, client_id=CLIENT_ID)
         self.running = True
         self.authenticated = False
+        self.cache_expires_at = None  # Track when to poll next
+        self.current_rate_limit_state = "NONE"  # Track current state
 
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -131,19 +136,61 @@ class ScoreboardApp:
 
     def update_scores(self):
         """Fetch and display current patrol scores."""
-        try:
-            patrols, cached_at, expires_at = self.client.get_patrol_scores()
+        # Show loading indicator if we have existing scores
+        if self.cache_expires_at is not None:
+            # We already have scores displayed, just show loading in corner
+            self.current_rate_limit_state = "LOADING"
 
-            logger.info(f"Received {len(patrols)} patrol scores (cached at {cached_at})")
+        try:
+            response = self.client.get_patrol_scores()
+
+            logger.info(
+                f"Received {len(response.patrols)} patrol scores "
+                f"(cached: {response.from_cache}, state: {response.rate_limit_state})"
+            )
+
+            # Store cache expiry for intelligent polling
+            self.cache_expires_at = response.cache_expires_at
+            self.current_rate_limit_state = response.rate_limit_state
 
             # Convert to display format
             display_patrols = [
                 DisplayPatrolScore(name=p.name, score=p.score)
-                for p in patrols
+                for p in response.patrols
             ]
 
-            # Update display
-            self.display.show_scores(display_patrols)
+            # Update display with status indicator
+            self.display.show_scores(display_patrols, response.rate_limit_state)
+
+        except SectionNotFound as e:
+            logger.error(f"Section not found: {e}")
+            self.display.show_error("Section Lost")
+            self.authenticated = False
+            time.sleep(5)
+
+        except NotInTerm as e:
+            logger.warning(f"Not in term: {e}")
+            self.display.show_message("Between Terms", color=(255, 191, 0))
+            # Retry after 24 hours as per API docs
+            from datetime import datetime, timedelta
+            self.cache_expires_at = datetime.now(tz=self.cache_expires_at.tzinfo if self.cache_expires_at else None) + timedelta(hours=24)
+
+        except UserTemporaryBlock as e:
+            logger.warning(f"User temporarily blocked until {e.blocked_until}")
+            self.display.show_message("Rate Limited", color=(255, 0, 0))
+            # Use the blocked_until time for next poll
+            self.cache_expires_at = e.blocked_until
+            time.sleep(2)
+
+        except ServiceBlocked as e:
+            logger.error(f"Service blocked: {e}")
+            # Display will show service blocked message with red indicator
+            # Keep whatever scores we have and show service blocked
+            self.current_rate_limit_state = "SERVICE_BLOCKED"
+            self.display.show_scores([], "SERVICE_BLOCKED")
+            # Retry after a long time (1 hour)
+            from datetime import datetime, timedelta
+            self.cache_expires_at = datetime.now(tz=self.cache_expires_at.tzinfo if self.cache_expires_at else None) + timedelta(hours=1)
 
         except DeviceFlowError as e:
             logger.error(f"Failed to get patrol scores: {e}")
@@ -156,10 +203,12 @@ class ScoreboardApp:
 
     def run(self):
         """Main application loop."""
+        from datetime import datetime, timezone
+
         logger.info("Scoreboard application starting...")
         logger.info(f"API: {API_BASE_URL}")
         logger.info(f"Client ID: {CLIENT_ID}")
-        logger.info(f"Poll interval: {POLL_INTERVAL}s")
+        logger.info(f"Default poll interval: {POLL_INTERVAL}s (will use cache_expires_at when available)")
 
         try:
             # Show startup message
@@ -181,22 +230,34 @@ class ScoreboardApp:
             if not self.authenticated:
                 self.authenticate()
 
-            # Main loop: periodically update scores
-            last_update = 0
+            # Main loop: intelligently poll based on cache expiry
             while self.running:
-                current_time = time.time()
+                # Re-authenticate if needed
+                if not self.authenticated:
+                    self.authenticate()
 
-                # Update scores at specified interval
-                if current_time - last_update >= POLL_INTERVAL:
-                    # Re-authenticate if needed
-                    if not self.authenticated:
-                        self.authenticate()
+                # Determine when to poll next
+                now = datetime.now(timezone.utc)
+                should_poll = False
 
+                if self.cache_expires_at is None:
+                    # First poll or no cache info - poll immediately
+                    should_poll = True
+                else:
+                    # Poll shortly after cache expires (add 7 seconds buffer as per API docs)
+                    poll_time = self.cache_expires_at.replace(microsecond=0)
+                    time_until_poll = (poll_time - now).total_seconds() + 7
+
+                    if time_until_poll <= 0:
+                        should_poll = True
+                    else:
+                        logger.debug(f"Next poll in {time_until_poll:.0f}s (cache expires at {self.cache_expires_at})")
+
+                if should_poll:
                     # Update scores
                     self.update_scores()
-                    last_update = current_time
 
-                # Sleep briefly to avoid busy-waiting
+                # Sleep briefly to avoid busy-waiting (check every second)
                 time.sleep(1)
 
         except KeyboardInterrupt:
