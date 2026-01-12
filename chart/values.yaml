@@ -95,6 +95,24 @@ config:
   deviceCodeExpiry: 600      # seconds (10 minutes)
   devicePollInterval: 5       # seconds
 
+  # Allowed client IDs that can use the device flow (empty list allows all)
+  allowedClientIds: []
+
+  # Cache configuration for patrol scores
+  cache:
+    # How long to keep stale data in Redis for emergency use (seconds)
+    # Default: 691200 (8 days - optimized for weekly scout meetings)
+    fallbackTTL: 691200
+
+  # Rate limiting thresholds for dynamic cache TTL
+  rateLimit:
+    # Remaining requests threshold to start extending cache TTL
+    caution: 200
+    # Remaining requests threshold for further cache TTL extension
+    warning: 100
+    # Remaining requests threshold for maximum cache TTL extension
+    critical: 20
+
 # Database configuration
 database:
   # PostgreSQL connection URL
@@ -108,6 +126,8 @@ database:
 redis:
   # Redis connection URL
   url: "redis://redis-service:6379"
+  # Redis key prefix (optional)
+  keyPrefix: ""
   # Use an existing secret for Redis URL
   # The secret should contain a key 'redis-url'
   existingSecret: ""
@@ -129,13 +149,31 @@ osm:
 livenessProbe:
   httpGet:
     path: /health
-    port: http
+    port: health
   initialDelaySeconds: 10
   periodSeconds: 10
 
 readinessProbe:
   httpGet:
     path: /ready
-    port: http
+    port: health
   initialDelaySeconds: 5
   periodSeconds: 5
+
+# Observability configuration
+observability:
+  # Structured logging
+  logging:
+    level: info  # debug, info, warn, error
+    format: json # json or text
+
+  # Prometheus metrics
+  metrics:
+    enabled: true
+    port: 9090
+    path: /metrics
+
+  # Prometheus ServiceMonitor (requires Prometheus Operator)
+  serviceMonitor:
+    enabled: true
+    interval: 30s

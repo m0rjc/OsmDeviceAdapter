@@ -31,3 +31,6 @@ go.work
 
 # Kubernetes secrets (never commit these)
 *.secret.yaml
+
+# Built server (often built here by Claude)
+server

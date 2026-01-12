@@ -34,15 +34,18 @@ func ReadyHandler(deps *Dependencies) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
-		if err := deps.DB.PingContext(ctx); err != nil {
+		sqlDB, err := deps.Conns.DB.DB()
+		if err != nil || sqlDB.PingContext(ctx) != nil {
 			response.Database = "error"
 			response.Status = "not ready"
 		}
 
 		// Check Redis connection
-		if err := deps.RedisClient.Client().Ping(ctx).Err(); err != nil {
-			response.Redis = "error"
-			response.Status = "not ready"
+		if deps.Conns.Redis != nil {
+			if err := deps.Conns.Redis.Client().Ping(ctx).Err(); err != nil {
+				response.Redis = "error"
+				response.Status = "not ready"
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")

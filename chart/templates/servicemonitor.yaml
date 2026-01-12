@@ -1,0 +1,16 @@
+{{- if and .Values.observability.metrics.enabled .Values.observability.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "osm-device-adapter.fullname" . }}
+  labels:
+    {{- include "osm-device-adapter.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "osm-device-adapter.selectorLabels" . | nindent 6 }}
+  endpoints:
+  - port: metrics
+    interval: {{ .Values.observability.serviceMonitor.interval }}
+    path: {{ .Values.observability.metrics.path }}
+{{- end }}

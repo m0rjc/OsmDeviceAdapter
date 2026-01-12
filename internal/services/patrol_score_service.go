@@ -1,0 +1,267 @@
+package services
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	"github.com/redis/go-redis/v9"
+)
+
+// RateLimitState represents the current rate limiting state
+type RateLimitState string
+
+const (
+	RateLimitStateNone              RateLimitState = "NONE"                // Normal operation (remaining > 200)
+	RateLimitStateDegraded          RateLimitState = "DEGRADED"            // Rate limit approaching (remaining < 200)
+	RateLimitStateUserTemporaryBlock RateLimitState = "USER_TEMPORARY_BLOCK" // User temporarily blocked (HTTP 429)
+	RateLimitStateServiceBlocked    RateLimitState = "SERVICE_BLOCKED"     // Service blocked by OSM (X-Blocked header)
+)
+
+// CachedPatrolScores represents cached patrol score data with metadata
+type CachedPatrolScores struct {
+	Patrols        []types.PatrolScore `json:"patrols"`
+	CachedAt       time.Time           `json:"cached_at"`
+	ValidUntil     time.Time           `json:"valid_until"`
+	RateLimitState RateLimitState      `json:"rate_limit_state"`
+}
+
+// PatrolScoreResponse represents the API response for patrol scores
+type PatrolScoreResponse struct {
+	Patrols        []types.PatrolScore `json:"patrols"`
+	FromCache      bool                `json:"from_cache"`
+	CachedAt       time.Time           `json:"cached_at"`
+	CacheExpiresAt time.Time           `json:"cache_expires_at"`
+	RateLimitState RateLimitState      `json:"rate_limit_state"`
+}
+
+// PatrolScoreService orchestrates patrol score fetching with caching and rate limiting
+type PatrolScoreService struct {
+	osmClient *osm.Client
+	conns     *db.Connections
+	config    *config.Config
+}
+
+// NewPatrolScoreService creates a new patrol score service
+func NewPatrolScoreService(
+	osmClient *osm.Client,
+	conns *db.Connections,
+	cfg *config.Config,
+) *PatrolScoreService {
+	return &PatrolScoreService{
+		osmClient: osmClient,
+		conns:     conns,
+		config:    cfg,
+	}
+}
+
+// GetPatrolScores fetches patrol scores for a device, managing term discovery,
+// caching, and rate limiting automatically.
+func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode string) (*PatrolScoreResponse, error) {
+	var err error
+
+	// Get device from database
+	device, err := db.FindDeviceCodeByCode(s.conns, deviceCode)
+	if err != nil {
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+	if device == nil {
+		return nil, fmt.Errorf("device not found")
+	}
+
+	if device.SectionID == nil {
+		return nil, osm.ErrNoSectionConfigured
+	}
+
+	user := device.User()
+	if user == nil {
+		return nil, fmt.Errorf("device not authorized")
+	}
+
+	// Check patrol scores cache
+	cached, err := s.getCachedPatrolScores(ctx, deviceCode)
+	if err == nil && time.Now().Before(cached.ValidUntil) {
+		// Cache is still valid
+		return &PatrolScoreResponse{
+			Patrols:        cached.Patrols,
+			FromCache:      true,
+			CachedAt:       cached.CachedAt,
+			CacheExpiresAt: cached.ValidUntil,
+			RateLimitState: cached.RateLimitState,
+		}, nil
+	}
+
+	// Cache miss or expired - need to fetch fresh data
+	// First, ensure we have term information
+	var termID int
+	var patrols []types.PatrolScore
+	termID, err = s.ensureTermInfo(ctx, device)
+	if err == nil {
+		// Fetch patrol scores from OSM
+		// TODO: Return the LIMITs section in the response here
+		patrols, err = s.osmClient.FetchPatrolScores(ctx, user, *device.SectionID, termID)
+	}
+	if err != nil {
+		// Try to make the cache last long enough if we have one
+		cacheUntil := time.Now().Add(10 * time.Minute) // TODO: Configure. This is the fallback block time if we can't deduce it.
+		rateLimitState := RateLimitStateUserTemporaryBlock // Default assumption
+
+		var blockedError *osm.ErrUserBlocked
+		if errors.As(err, &blockedError) {
+			cacheUntil = blockedError.BlockedUntil
+			rateLimitState = RateLimitStateUserTemporaryBlock
+		} else if errors.Is(err, osm.ErrServiceBlocked) {
+			rateLimitState = RateLimitStateServiceBlocked
+		}
+
+		// If fetch failed, try to serve stale cache as fallback
+		if cached != nil {
+			// Extend the cache time if needed to cover any block
+			if cached.ValidUntil.Before(cacheUntil) {
+				cached.ValidUntil = cacheUntil
+				s.cachePatrolScores(ctx, deviceCode, cached)
+			}
+			return &PatrolScoreResponse{
+				Patrols:        cached.Patrols,
+				FromCache:      true,
+				CachedAt:       cached.CachedAt,
+				CacheExpiresAt: cached.ValidUntil,
+				RateLimitState: rateLimitState,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to fetch patrol scores: %w", err)
+	}
+
+	// Determine cache TTL based on current rate limiting state
+	// TODO: Use the limits information returned from the Patrol Scores method
+	rateLimitState := RateLimitStateNone
+	cacheTTL := s.calculateCacheTTL(rateLimitState)
+
+	// Cache the results with two-tier strategy
+	// Caching is best effort
+	now := time.Now()
+	validUntil := now.Add(cacheTTL)
+	s.cachePatrolScores(ctx, deviceCode, &CachedPatrolScores{
+		Patrols:        patrols,
+		CachedAt:       now,
+		ValidUntil:     validUntil,
+		RateLimitState: "", // TODO
+	})
+
+	return &PatrolScoreResponse{
+		Patrols:        patrols,
+		FromCache:      false,
+		CachedAt:       now,
+		CacheExpiresAt: validUntil,
+		RateLimitState: rateLimitState,
+	}, nil
+}
+
+// ensureTermInfo ensures that the device has valid term information.
+// It refreshes the term if needed (24 hours old or expired).
+// TODO: Move this into a separate Term Service. We're going to have to fix dependency injection. I think we'll
+// need to borrow GPS-Game's Command Pattern
+func (s *PatrolScoreService) ensureTermInfo(ctx context.Context, device *db.DeviceCode) (int, error) {
+	now := time.Now()
+
+	// Check if we need to refresh term information
+	needsRefresh := device.TermID == nil ||
+		device.TermCheckedAt == nil ||
+		device.TermEndDate == nil ||
+		now.After(device.TermCheckedAt.Add(24*time.Hour)) ||
+		now.After(*device.TermEndDate)
+
+	if !needsRefresh {
+		return *device.TermID, nil
+	}
+
+	// Fetch fresh term information
+	user := device.User()
+	termInfo, err := s.osmClient.FetchActiveTermForSection(ctx, user, *device.SectionID)
+	if err != nil {
+		return 0, err
+	}
+
+	// Update device with new term information
+	now = time.Now()
+	if err := db.UpdateDeviceCodeTermInfo(s.conns, device.DeviceCode, termInfo.UserID, termInfo.TermID, now, termInfo.EndDate); err != nil {
+		slog.Error("patrol_score_service.term_update_failed",
+			"component", "patrol_score_service",
+			"event", "term.update.error",
+			"device_code_hash", device.DeviceCode[:8],
+			"error", err,
+		)
+		// Continue anyway - we have the term ID
+	}
+
+	return termInfo.TermID, nil
+}
+
+// calculateCacheTTL calculates the cache TTL based on rate limiting state
+func (s *PatrolScoreService) calculateCacheTTL(state RateLimitState) time.Duration {
+	baselineTTL := 5 * time.Minute
+
+	switch state {
+	// We can't get here while blocked because we'll have gone into the error handling code.
+	case RateLimitStateUserTemporaryBlock:
+		// User blocked: 30 minute cache
+		return 30 * time.Minute
+	case RateLimitStateServiceBlocked:
+		// Service blocked: 6 hour cache (takes time to resolve)
+		return 6 * time.Hour
+	case RateLimitStateDegraded:
+		// Degraded: 15 minute cache
+		return 15 * time.Minute
+	default:
+		return baselineTTL
+	}
+}
+
+// getCachedPatrolScores retrieves patrol scores from cache
+func (s *PatrolScoreService) getCachedPatrolScores(ctx context.Context, deviceCode string) (*CachedPatrolScores, error) {
+	// TODO: This needs to be a store method
+	key := fmt.Sprintf("patrol_scores:%s", deviceCode)
+	data, err := s.conns.Redis.Get(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, fmt.Errorf("cache miss")
+		}
+		return nil, err
+	}
+
+	var cached CachedPatrolScores
+	if err := json.Unmarshal([]byte(data), &cached); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal cache: %w", err)
+	}
+
+	return &cached, nil
+}
+
+// cachePatrolScores stores patrol scores in cache with two-tier TTL strategy
+// This is a best effort. Errors are logged but not returned as loss of cache is not fatal.
+func (s *PatrolScoreService) cachePatrolScores(
+	ctx context.Context,
+	deviceCode string,
+	cacheRecord *CachedPatrolScores,
+) {
+	data, err := json.Marshal(cacheRecord)
+	if err != nil {
+		slog.Error("patrol_score_service.cachePatrolScores", "message", "cannot marshal cache record", "error", err)
+	}
+
+	key := fmt.Sprintf("patrol_scores:%s", deviceCode)
+	// Use fallback TTL for Redis (8 days) to keep stale data for emergency use
+	// TODO: Configure this as a Duration
+	fallbackTTL := time.Duration(s.config.CacheFallbackTTL) * time.Second
+	err = s.conns.Redis.Set(ctx, key, data, fallbackTTL).Err()
+	if err != nil {
+		slog.Error("patrol_score_service.cachePatrolScores", "message", "cannot write to REDIS cache", "error", err)
+	}
+}

@@ -9,6 +9,14 @@ data:
   osm-domain: {{ .Values.config.osmDomain | quote }}
   device-code-expiry: {{ .Values.config.deviceCodeExpiry | quote }}
   device-poll-interval: {{ .Values.config.devicePollInterval | quote }}
+  allowed-client-ids: {{ .Values.config.allowedClientIds | join "," | quote }}
+  cache-fallback-ttl: {{ .Values.config.cache.fallbackTTL | quote }}
+  rate-limit-caution: {{ .Values.config.rateLimit.caution | quote }}
+  rate-limit-warning: {{ .Values.config.rateLimit.warning | quote }}
+  rate-limit-critical: {{ .Values.config.rateLimit.critical | quote }}
   {{- if .Values.osm.redirectUri }}
   osm-redirect-uri: {{ .Values.osm.redirectUri | quote }}
+  {{- end }}
+  {{- if .Values.redis.keyPrefix }}
+  redis-key-prefix: {{ .Values.redis.keyPrefix | quote }}
   {{- end }}

@@ -2,6 +2,31 @@ package types
 
 import "time"
 
+// User represents a user for the OSM API client.
+type User interface {
+	// UserID The OSM User ID if known
+	UserID() *int
+	// AccessToken the user's Access Token
+	AccessToken() string
+}
+
+type userImpl struct {
+	userId      *int
+	accessToken string
+}
+
+func (u *userImpl) UserID() *int {
+	return u.userId
+}
+
+func (u *userImpl) AccessToken() string {
+	return u.accessToken
+}
+
+func NewUser(userId *int, accessToken string) User {
+	return &userImpl{userId, accessToken}
+}
+
 type PatrolScore struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -19,4 +44,36 @@ type PatrolScoresResponse struct {
 	Patrols   []PatrolScore `json:"patrols"`
 	CachedAt  time.Time     `json:"cached_at"`
 	ExpiresAt time.Time     `json:"expires_at"`
+}
+
+// OSM Profile Response Types
+type OSMTerm struct {
+	Name      string `json:"name"`
+	StartDate string `json:"startdate"`
+	EndDate   string `json:"enddate"`
+	TermID    int    `json:"term_id"`
+}
+
+type OSMSection struct {
+	SectionName string    `json:"section_name"`
+	GroupName   string    `json:"group_name"`
+	SectionID   int       `json:"section_id"`
+	GroupID     int       `json:"group_id"`
+	SectionType string    `json:"section_type"`
+	Terms       []OSMTerm `json:"terms"`
+}
+
+type OSMProfileData struct {
+	UserID           int          `json:"user_id"`
+	FullName         string       `json:"full_name"`
+	Email            string       `json:"email"`
+	Sections         []OSMSection `json:"sections"`
+	HasParentAccess  bool         `json:"has_parent_access"`
+	HasSectionAccess bool         `json:"has_section_access"`
+}
+
+type OSMProfileResponse struct {
+	Status bool            `json:"status"`
+	Error  *string         `json:"error"`
+	Data   *OSMProfileData `json:"data"`
 }

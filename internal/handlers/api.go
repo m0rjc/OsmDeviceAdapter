@@ -1,17 +1,21 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/services"
 )
 
+// GetPatrolScoresHandler handles GET /api/v1/patrols requests.
+// It authenticates the device using the bearer token and returns patrol scores
+// with intelligent caching and rate limiting.
 func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -19,103 +23,125 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Extract bearer token from Authorization header
+		// Extract device access token from Authorization header
 		authHeader := r.Header.Get("Authorization")
-		accessToken := extractBearerToken(authHeader)
+		deviceAccessToken := extractBearerToken(authHeader)
 
-		if accessToken == "" {
+		if deviceAccessToken == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="API"`)
 			http.Error(w, "Missing or invalid authorization", http.StatusUnauthorized)
 			return
 		}
 
-		// Verify the access token belongs to a valid device
-		var deviceCode string
-		var osmAccessToken, osmRefreshToken string
-		var osmTokenExpiry time.Time
-
-		err := deps.DB.QueryRow(`
-			SELECT device_code, osm_access_token, osm_refresh_token, osm_token_expiry
-			FROM device_codes
-			WHERE osm_access_token = $1 AND status = 'authorized'
-		`, accessToken).Scan(&deviceCode, &osmAccessToken, &osmRefreshToken, &osmTokenExpiry)
-
-		if err != nil {
-			http.Error(w, "Invalid access token", http.StatusUnauthorized)
-			return
-		}
-
-		// Check if we need to refresh the OSM token
-		if time.Now().After(osmTokenExpiry.Add(-5 * time.Minute)) {
-			// Token is expired or about to expire, refresh it
-			newTokens, err := refreshOSMToken(deps.Config, osmRefreshToken)
-			if err != nil {
-				http.Error(w, "Failed to refresh token", http.StatusInternalServerError)
-				return
-			}
-
-			// Update tokens in database
-			newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
-			_, err = deps.DB.Exec(`
-				UPDATE device_codes
-				SET osm_access_token = $1,
-				    osm_refresh_token = $2,
-				    osm_token_expiry = $3
-				WHERE device_code = $4
-			`, newTokens.AccessToken, newTokens.RefreshToken, newExpiry, deviceCode)
-
-			if err != nil {
-				http.Error(w, "Failed to update tokens", http.StatusInternalServerError)
-				return
-			}
-
-			osmAccessToken = newTokens.AccessToken
-		}
-
-		// Check cache first
+		// Find device by access token
 		ctx := r.Context()
-		cacheKey := fmt.Sprintf("patrol_scores:%s", deviceCode)
-
-		cachedData, err := deps.RedisClient.Client().Get(ctx, cacheKey).Result()
-		if err == nil {
-			// Cache hit
-			var response types.PatrolScoresResponse
-			if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("X-Cache", "HIT")
-				json.NewEncoder(w).Encode(response)
-				return
-			}
-		}
-
-		// Cache miss - fetch from OSM
-		client := osm.NewClient(deps.Config.OSMDomain, osmAccessToken)
-		patrols, err := client.GetPatrolScores(ctx)
+		device, err := db.FindDeviceCodeByDeviceAccessToken(deps.Conns, deviceAccessToken)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to fetch patrol scores: %v", err), http.StatusInternalServerError)
+			slog.Error("api.patrol_scores.database_error",
+				"component", "api",
+				"event", "auth.error",
+				"error", err,
+			)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		// Build response
-		now := time.Now()
-		cacheDuration := 5 * time.Minute
-		response := types.PatrolScoresResponse{
-			Patrols:   patrols,
-			CachedAt:  now,
-			ExpiresAt: now.Add(cacheDuration),
+		if device == nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="API"`)
+			http.Error(w, "Invalid or expired device token", http.StatusUnauthorized)
+			return
 		}
 
-		// Cache the response
-		responseJSON, _ := json.Marshal(response)
-		deps.RedisClient.Client().Set(ctx, cacheKey, responseJSON, cacheDuration)
+		// Create patrol score service
+		patrolService := services.NewPatrolScoreService(
+			deps.OSM,
+			deps.Conns,
+			deps.Config,
+		)
 
+		// Get patrol scores with caching and term management
+		response, err := patrolService.GetPatrolScores(ctx, device.DeviceCode)
+		if err != nil {
+			slog.Error("api.patrol_scores.fetch_error",
+				"component", "api",
+				"event", "patrol.error",
+				"device_code_hash", device.DeviceCode[:8],
+				"error", err,
+			)
+
+			// Handle specific error types
+			if errors.Is(err, osm.ErrNotInTerm) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":   "not_in_term",
+					"message": "Section is not currently in an active term",
+				})
+				return
+			}
+
+			if errors.Is(err, osm.ErrNoSectionConfigured) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":   "section_not_configured",
+					"message": "Device has not selected a section",
+				})
+				return
+			}
+
+			if errors.Is(err, osm.ErrSectionNotFound) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":   "section_not_found",
+					"message": "Section not found in user's profile",
+				})
+				return
+			}
+
+			if errors.Is(err, osm.ErrServiceBlocked) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":   "service_blocked",
+					"message": "Service blocked by OSM",
+				})
+				return
+			}
+
+			var userBlockedErr *osm.ErrUserBlocked
+			if errors.As(err, &userBlockedErr) {
+				// Calculate seconds until the block expires
+				retryAfterSeconds := int(time.Until(userBlockedErr.BlockedUntil).Seconds())
+				if retryAfterSeconds < 0 {
+					retryAfterSeconds = 0
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":        "user_temporary_block",
+					"message":      "User temporarily blocked due to rate limiting",
+					"blocked_until": userBlockedErr.BlockedUntil.Format(time.RFC3339),
+					"retry_after":   retryAfterSeconds,
+				})
+				return
+			}
+
+			// Generic error
+			http.Error(w, "Failed to fetch patrol scores", http.StatusBadGateway)
+			return
+		}
+
+		// Success - return patrol scores
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Cache", "MISS")
+		if response.FromCache {
+			w.Header().Set("X-Cache", "HIT")
+		} else {
+			w.Header().Set("X-Cache", "MISS")
+		}
 		json.NewEncoder(w).Encode(response)
 	}
-}
-
-func refreshOSMToken(cfg *config.Config, refreshToken string) (*types.OSMTokenResponse, error) {
-	client := osm.NewClient(cfg.OSMDomain, "")
-	return client.RefreshToken(context.Background(), cfg.OSMClientID, cfg.OSMClientSecret, refreshToken)
 }
