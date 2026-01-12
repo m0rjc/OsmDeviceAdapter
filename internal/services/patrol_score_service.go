@@ -19,9 +19,10 @@ import (
 type RateLimitState string
 
 const (
-	RateLimitStateNone     RateLimitState = "NONE"     // Normal operation (remaining > 200)
-	RateLimitStateDegraded RateLimitState = "DEGRADED" // Rate limit approaching (remaining < 200)
-	RateLimitStateBlocked  RateLimitState = "BLOCKED"  // Temporarily blocked (HTTP 429)
+	RateLimitStateNone              RateLimitState = "NONE"                // Normal operation (remaining > 200)
+	RateLimitStateDegraded          RateLimitState = "DEGRADED"            // Rate limit approaching (remaining < 200)
+	RateLimitStateUserTemporaryBlock RateLimitState = "USER_TEMPORARY_BLOCK" // User temporarily blocked (HTTP 429)
+	RateLimitStateServiceBlocked    RateLimitState = "SERVICE_BLOCKED"     // Service blocked by OSM (X-Blocked header)
 )
 
 // CachedPatrolScores represents cached patrol score data with metadata
@@ -110,10 +111,16 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 	if err != nil {
 		// Try to make the cache last long enough if we have one
 		cacheUntil := time.Now().Add(10 * time.Minute) // TODO: Configure. This is the fallback block time if we can't deduce it.
+		rateLimitState := RateLimitStateUserTemporaryBlock // Default assumption
+
 		var blockedError *osm.ErrUserBlocked
 		if errors.As(err, &blockedError) {
 			cacheUntil = blockedError.BlockedUntil
+			rateLimitState = RateLimitStateUserTemporaryBlock
+		} else if errors.Is(err, osm.ErrServiceBlocked) {
+			rateLimitState = RateLimitStateServiceBlocked
 		}
+
 		// If fetch failed, try to serve stale cache as fallback
 		if cached != nil {
 			// Extend the cache time if needed to cover any block
@@ -126,7 +133,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 				FromCache:      true,
 				CachedAt:       cached.CachedAt,
 				CacheExpiresAt: cached.ValidUntil,
-				RateLimitState: RateLimitStateBlocked,
+				RateLimitState: rateLimitState,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to fetch patrol scores: %w", err)
@@ -203,9 +210,12 @@ func (s *PatrolScoreService) calculateCacheTTL(state RateLimitState) time.Durati
 
 	switch state {
 	// We can't get here while blocked because we'll have gone into the error handling code.
-	case RateLimitStateBlocked:
-		// Critical: 30 minute cache
+	case RateLimitStateUserTemporaryBlock:
+		// User blocked: 30 minute cache
 		return 30 * time.Minute
+	case RateLimitStateServiceBlocked:
+		// Service blocked: 6 hour cache (takes time to resolve)
+		return 6 * time.Hour
 	case RateLimitStateDegraded:
 		// Degraded: 15 minute cache
 		return 15 * time.Minute

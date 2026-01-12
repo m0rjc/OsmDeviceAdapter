@@ -72,13 +72,15 @@ None. The section and term are automatically determined based on the authorized 
 
 ### Response Fields
 
-| Field | Type | Description                                                                                 |
-|-------|------|---------------------------------------------------------------------------------------------|
-| `patrols` | Array | List of patrol scores (see Patrol Object below)                                             |
-| `from_cache` | Boolean | `true` if data was served from cache, `false` if freshly fetched                            |
-| `cached_at` | ISO 8601 Timestamp | When this data was originally cached (now if this is fresh data)                            |
-| `cache_expires_at` | ISO 8601 Timestamp | When the cache expires. Use this to determine when next to poll.                            |
-| `rate_limit_state` | String | **Informational only:** Current rate limiting state: `"NONE"`, `"DEGRADED"`, or `"BLOCKED"` |
+| Field | Type | Description                                                                                           |
+|-------|------|-------------------------------------------------------------------------------------------------------|
+| `patrols` | Array | List of patrol scores (see Patrol Object below)                                                       |
+| `from_cache` | Boolean | `true` if data was served from cache, `false` if freshly fetched                                      |
+| `cached_at` | ISO 8601 Timestamp | When this data was originally cached (now if this is fresh data)                                      |
+| `cache_expires_at` | ISO 8601 Timestamp | When the cache expires. Use this to determine when next to poll.                                      |
+| `rate_limit_state` | String | Current rate limiting state: `"NONE"`, `"DEGRADED"`, `"USER_TEMPORARY_BLOCK"`, or `"SERVICE_BLOCKED"` |
+
+The rate limit state is used in place of a HTTP Error return when cached data is available.
 
 #### Patrol Object
 
@@ -96,15 +98,21 @@ None. The section and term are automatically determined based on the authorized 
 ## Caching Behavior
 
 The server caches patrol scores to protect the OSM API. A default short lifetime is chosen, but this cache lifetime will
-increase as OSM reports usage close to limits for the user. If usage exceeds OSM's limit, then the state will become "Blocked"
-and the cache expiry set to the time given by OSM for the block to be released. 
+increase as OSM reports usage close to limits for the user.
 
-It will not be possible to return any data if the server cache has expired and any old
-cache record has been cleared from the database. The server will respond with
-HTTP 429 in this case.
+### User Temporary Blocks (HTTP 429)
 
-OSM can permanently block the application if it repeatedly exceeds request limits. If this is the case, then the
-service will return from cache for as long as it can, then return HTTP 503.
+If a specific user exceeds OSM's rate limit, the state will become `"USER_TEMPORARY_BLOCK"` and the cache expiry will be set to the time given by OSM for the block to be released (typically 30 minutes).
+
+It will not be possible to return any data if the server cache has expired and any old cache record has been cleared from the database. The server will respond with HTTP 429 in this case.
+
+### Service-Wide Blocks (HTTP 503)
+
+OSM can permanently block the entire application if it repeatedly exceeds request limits across multiple users (detected via the `X-Blocked` header). If this occurs:
+- The state will become `"SERVICE_BLOCKED"`
+- The service will return cached data for as long as possible (up to 6 hours)
+- Once the cache expires and no cached data is available, the service returns HTTP 503
+- **This requires manual intervention** by the service administrator to resolve with OSM
 
 ### Client Polling Strategy
 
@@ -150,11 +158,11 @@ service will return from cache for as long as it can, then return HTTP 503.
 
 ---
 
-### 429 Too Many Requests - Rate Limited
+### 429 Too Many Requests - User Temporarily Blocked
 
 ```json
 {
-  "error": "rate_limit_exceeded",
+  "error": "user_temporary_block",
   "message": "User temporarily blocked due to rate limiting",
   "blocked_until": "2026-01-12T11:00:00Z",
   "retry_after": 1800
@@ -166,7 +174,7 @@ service will return from cache for as long as it can, then return HTTP 503.
 Retry-After: 1800
 ```
 
-**Cause:** The OSM user account has exceeded OSM's rate limits and no cached data is available.
+**Cause:** The specific OSM user account has exceeded OSM's rate limits (user-specific temporary block) and no cached data is available.
 
 **Response Fields:**
 | Field | Type | Description |
@@ -179,6 +187,29 @@ Retry-After: 1800
 - Display a user-friendly countdown timer
 - Consider adding extra buffer time (30-60 seconds) for safety
 - If the client has previously cached data, display it with a "temporarily unavailable" notice
+
+---
+
+### 503 Service Unavailable - Service Blocked
+
+```json
+{
+  "error": "service_blocked",
+  "message": "Service blocked by OSM"
+}
+```
+
+**Cause:** The entire service has been blocked by OSM (service-wide block via `X-Blocked` header). This is typically due to repeated violations of rate limits across multiple users. This is a critical situation that requires manual intervention.
+
+**Resolution:**
+- **This is a service-wide issue, not user-specific** - All users are affected
+- The service will serve cached data for as long as it can, but this will become stale.
+- Display a message indicating the service is unavailable – contact the administrator to resolve.
+- Retry after an extended period (suggested: 1+ hours)
+- If the block persists, contact the service administrator
+- The service administrator must investigate and resolve the issue with OSM
+
+**Note:** Unlike 429 (user temporary blocks), this error has no `Retry-After` header since service-wide blocks require manual resolution and have indefinite duration.
 
 ## Security Notes
 

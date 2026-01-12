@@ -122,7 +122,7 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 				w.WriteHeader(http.StatusTooManyRequests)
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":        "rate_limit_exceeded",
+					"error":        "user_temporary_block",
 					"message":      "User temporarily blocked due to rate limiting",
 					"blocked_until": userBlockedErr.BlockedUntil.Format(time.RFC3339),
 					"retry_after":   retryAfterSeconds,
