@@ -92,11 +92,12 @@ class ScoreboardApp:
         """Perform device flow authentication."""
         logger.info("Starting device flow authentication...")
 
-        def on_code_received(user_code: str, verification_uri: str):
+        def on_code_received(user_code: str, verification_uri: str, verification_uri_complete: str):
             """Called when device code is received."""
             logger.info(f"User code: {user_code}")
             logger.info(f"Verification URI: {verification_uri}")
-            self.display.show_device_code(user_code, verification_uri)
+            logger.info(f"Complete URI: {verification_uri_complete}")
+            self.display.show_device_code(user_code, verification_uri, verification_uri_complete)
 
         def on_waiting():
             """Called while waiting for authorization."""

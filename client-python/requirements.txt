@@ -3,6 +3,10 @@
 # HTTP client for API communication
 requests>=2.31.0
 
+# QR code generation for device authorization display
+qrcode[pil]>=7.4.2,<8.0
+pillow>=9.0.0,<11.0
+
 # Note: The RGB Matrix library must be installed separately on Raspberry Pi
 # Installation instructions in README.md
 # On development machines, the app will run in simulation mode without it

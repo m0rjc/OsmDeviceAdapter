@@ -288,7 +288,7 @@ class OSMDeviceClient:
         """Perform full device flow authentication.
 
         Args:
-            on_code_received: Callback(user_code, verification_uri) when code is ready
+            on_code_received: Callback(user_code, verification_uri, verification_uri_complete) when code is ready
             on_waiting: Callback() called on each poll attempt
 
         Returns:
@@ -302,7 +302,7 @@ class OSMDeviceClient:
 
         # Notify about the code
         if on_code_received:
-            on_code_received(auth.user_code, auth.verification_uri)
+            on_code_received(auth.user_code, auth.verification_uri, auth.verification_uri_complete)
 
         # Step 2: Poll for token
         start_time = time.time()

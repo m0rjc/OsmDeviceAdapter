@@ -12,6 +12,15 @@ except ImportError:
     MATRIX_AVAILABLE = False
     print("WARNING: rgbmatrix library not available. Running in simulation mode.")
 
+try:
+    import qrcode
+    from PIL import Image
+    QR_AVAILABLE = True
+except ImportError:
+    QR_AVAILABLE = False
+    if MATRIX_AVAILABLE:  # Only warn if we have the matrix but not QR
+        print("WARNING: qrcode library not available. QR codes will not be displayed.")
+
 
 class PatrolScore:
     """Represents a patrol and its score."""
@@ -137,34 +146,104 @@ class MatrixDisplay:
         else:
             print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x_start},{y_start}) color={color}")
 
-    def show_device_code(self, code: str, url: str):
-        """Display the device authorization code.
+    def generate_qr_image(self, url: str):
+        """Generate a QR code image for the given URL.
 
         Args:
-            code: User code to display (e.g., "ABCD-EFGH")
-            url: Verification URL
+            url: The URL to encode in the QR code
+
+        Returns:
+            PIL Image object containing the QR code (31x31 pixels)
+        """
+        if not QR_AVAILABLE:
+            # Return a blank 31x31 image if QR library not available
+            return Image.new('RGB', (31, 31), color=(0, 0, 0))
+
+        try:
+            qr = qrcode.QRCode(
+                version=3,  # 29x29 modules
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=1,  # 1 pixel per module
+                border=1,    # Minimal quiet zone (results in 31x31px total)
+            )
+            qr.add_data(url)
+            qr.make(fit=True)  # Auto-adjust version if URL too long
+
+            img = qr.make_image(fill_color="white", back_color="black")
+
+            # Verify it fits our display constraints
+            if img.size[0] > 32 or img.size[1] > 32:
+                print(f"WARNING: QR code is {img.size}, may not fit display (expected 31x31)")
+
+            return img
+        except Exception as e:
+            print(f"ERROR: Failed to generate QR code: {e}")
+            # Return a blank 31x31 image as fallback
+            return Image.new('RGB', (31, 31), color=(0, 0, 0))
+
+    def show_device_code(self, code: str, url: str, url_complete: Optional[str] = None):
+        """Display the device authorization code with QR code and text.
+
+        Args:
+            code: User code to display (e.g., "MRHQ-TDY4")
+            url: Verification URL (basic URL)
+            url_complete: Complete verification URL with user code embedded (for QR)
         """
         self.clear()
 
-        # Draw title
-        self.draw_text(2, 6, "Enter Code:", color=(0, 255, 255))
+        # Use QR code layout if available and url_complete provided
+        if QR_AVAILABLE and url_complete and not self.simulate:
+            # Generate and display QR code on left side (31x31 at position 0,0)
+            qr_img = self.generate_qr_image(url_complete)
+            self.canvas.SetImage(qr_img.convert('RGB'), 0, 0)
 
-        # Draw the code prominently
-        self.draw_text(4, 20, code, color=(255, 255, 0))
+            # Display wrapped device code on right side
+            # Code format: "MRHQ-TDY4" (9 chars total)
+            # Split into two lines to fit in 30px width
+            self.draw_text(34, 10, code[:4], color=(255, 255, 0))      # "MRHQ"
+            self.draw_text(34, 20, code[5:], color=(255, 255, 0))      # "TDY4" (skip hyphen)
 
-        # Draw URL hint (may be truncated)
-        url_short = url.replace("https://", "").replace("http://", "")
-        if len(url_short) > 12:
-            url_short = url_short[:12] + "..."
-        self.draw_text(2, 30, url_short, color=(100, 100, 100))
+            self.show()
 
-        self.show()
+        elif self.simulate and QR_AVAILABLE and url_complete:
+            # Simulation mode with QR capability - print both
+            print(f"\n{'='*50}")
+            print(f"DEVICE AUTHORIZATION")
+            print(f"{'='*50}")
+            print(f"Scan QR code or visit: {url}")
+            print(f"Direct link: {url_complete}")
+            print(f"\nDevice Code: {code}")
+            print(f"  Line 1: {code[:4]}")
+            print(f"  Line 2: {code[5:]}")
+            print(f"{'='*50}\n")
 
-        if self.simulate:
-            print(f"\n{'='*40}")
-            print(f"DEVICE CODE: {code}")
-            print(f"Visit: {url}")
-            print(f"{'='*40}\n")
+            # Generate ASCII QR for terminal display
+            try:
+                qr = qrcode.QRCode()
+                qr.add_data(url_complete)
+                qr.make(fit=True)
+                qr.print_ascii(invert=True)
+            except Exception as e:
+                print(f"Could not generate ASCII QR: {e}")
+
+        else:
+            # Fallback to text-only display (QR not available or no complete URL)
+            self.draw_text(2, 6, "Enter Code:", color=(0, 255, 255))
+            self.draw_text(4, 20, code, color=(255, 255, 0))
+
+            # Draw URL hint (may be truncated)
+            url_short = url.replace("https://", "").replace("http://", "")
+            if len(url_short) > 12:
+                url_short = url_short[:12] + "..."
+            self.draw_text(2, 30, url_short, color=(100, 100, 100))
+
+            self.show()
+
+            if self.simulate:
+                print(f"\n{'='*40}")
+                print(f"DEVICE CODE: {code}")
+                print(f"Visit: {url}")
+                print(f"{'='*40}\n")
 
     def show_waiting(self, message: str = "Waiting..."):
         """Display a waiting message.
