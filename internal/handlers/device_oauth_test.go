@@ -9,6 +9,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -26,14 +27,17 @@ func setupTestDeps(t *testing.T, allowedClientIDs []string) *Dependencies {
 	}
 
 	cfg := &config.Config{
-		ExposedDomain:      "https://example.com",
-		DeviceCodeExpiry:   600,
-		DevicePollInterval: 5,
-		AllowedClientIDs:   allowedClientIDs,
+		ExposedDomain:            "https://example.com",
+		DeviceCodeExpiry:         300,
+		DevicePollInterval:       5,
+		AllowedClientIDs:         allowedClientIDs,
+		DeviceAuthorizeRateLimit: 6,
+		DeviceEntryRateLimit:     5,
 	}
 
-	// Create connections wrapper (Redis is nil for tests that don't need it)
+	// Create connections wrapper with mock rate limiter (no Redis required for tests)
 	conns := db.NewConnections(database, nil)
+	conns.RateLimiter = db.NewMockRateLimiter() // Use mock that allows all requests
 
 	return &Dependencies{
 		Config: cfg,
@@ -53,6 +57,15 @@ func TestDeviceAuthorizeHandler_ValidClientID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/device/authorize", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+
+	// Add remote metadata to context (simulating middleware)
+	ctx := middleware.ContextWithRemote(req.Context(), middleware.RemoteMetadata{
+		IP:       "192.168.1.1",
+		Protocol: "https",
+		Country:  "US",
+	})
+	req = req.WithContext(ctx)
+
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -89,6 +102,11 @@ func TestDeviceAuthorizeHandler_InvalidClientID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/device/authorize", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+
+	// Add remote metadata to context
+	ctx := middleware.ContextWithRemote(req.Context(), middleware.RemoteMetadata{IP: "192.168.1.1"})
+	req = req.WithContext(ctx)
+
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -114,6 +132,11 @@ func TestDeviceAuthorizeHandler_EmptyClientID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/device/authorize", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+
+	// Add remote metadata to context
+	ctx := middleware.ContextWithRemote(req.Context(), middleware.RemoteMetadata{IP: "192.168.1.1"})
+	req = req.WithContext(ctx)
+
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -136,6 +159,11 @@ func TestDeviceAuthorizeHandler_MissingClientID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/device/authorize", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+
+	// Add remote metadata to context
+	ctx := middleware.ContextWithRemote(req.Context(), middleware.RemoteMetadata{IP: "192.168.1.1"})
+	req = req.WithContext(ctx)
+
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -159,6 +187,11 @@ func TestDeviceAuthorizeHandler_MultipleAllowedClients(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodPost, "/device/authorize", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+
+		// Add remote metadata to context
+		ctx := middleware.ContextWithRemote(req.Context(), middleware.RemoteMetadata{IP: "192.168.1.1"})
+		req = req.WithContext(ctx)
+
 		w := httptest.NewRecorder()
 
 		handler(w, req)

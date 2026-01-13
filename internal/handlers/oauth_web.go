@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -46,6 +48,57 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 
 		if userCode == "" {
 			http.Error(w, "user_code is required", http.StatusBadRequest)
+			return
+		}
+
+		// Rate limit device entry submissions (1 per N seconds per IP)
+		remoteMetadata := middleware.RemoteFromContext(r.Context())
+		clientIP := remoteMetadata.IP
+
+		entryRateLimit := time.Duration(deps.Config.DeviceEntryRateLimit) * time.Second
+		entryRateLimitKey := fmt.Sprintf("%s:device_entry", clientIP)
+
+		rateLimitResult, err := deps.Conns.GetRateLimiter().CheckRateLimit(
+			r.Context(),
+			"device_entry",
+			entryRateLimitKey,
+			1, // Only 1 submission allowed per window
+			entryRateLimit,
+		)
+
+		if err != nil {
+			slog.Error("device.entry.rate_limit_error",
+				"component", "oauth_web",
+				"event", "entry.rate_limit_error",
+				"client_ip", clientIP,
+				"error", err,
+			)
+			// Continue on error - don't block legitimate requests
+		} else if !rateLimitResult.Allowed {
+			slog.Warn("device.entry.rate_limited",
+				"component", "oauth_web",
+				"event", "entry.rate_limited",
+				"client_ip", clientIP,
+				"retry_after", rateLimitResult.RetryAfter.Seconds(),
+			)
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprintf(w, `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Please Slow Down</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
+        .warning { color: #ff6b6b; }
+    </style>
+</head>
+<body>
+    <h1 class="warning">Please Slow Down</h1>
+    <p>You're submitting codes too quickly. Please wait %d seconds before trying again.</p>
+    <p><a href="/device">Return to device authorization</a></p>
+</body>
+</html>
+			`, deps.Config.DeviceEntryRateLimit)
 			return
 		}
 

@@ -33,6 +33,10 @@ type Config struct {
 	DevicePollInterval int      // seconds
 	AllowedClientIDs   []string // List of allowed OAuth client IDs
 
+	// Rate limiting configuration
+	DeviceAuthorizeRateLimit int // max requests per minute per IP for /device/authorize (default: 6)
+	DeviceEntryRateLimit     int // seconds between device entry submissions per IP (default: 5)
+
 	// Cache configuration (for patrol scores and other data)
 	CacheFallbackTTL int // seconds - how long to keep stale data for emergency use (default: 8 days)
 
@@ -54,13 +58,15 @@ func Load() (*Config, error) {
 		DatabaseURL:        getEnv("DATABASE_URL", ""),
 		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379"),
 		RedisKeyPrefix:     getEnv("REDIS_KEY_PREFIX", ""),
-		DeviceCodeExpiry:   getEnvAsInt("DEVICE_CODE_EXPIRY", 600),      // 10 minutes default
-		DevicePollInterval: getEnvAsInt("DEVICE_POLL_INTERVAL", 5),      // 5 seconds default
-		AllowedClientIDs:   parseClientIDs(getEnv("ALLOWED_CLIENT_IDS", "")),
-		CacheFallbackTTL:   getEnvAsInt("CACHE_FALLBACK_TTL", 691200),   // 8 days default (for weekly scout meetings)
-		RateLimitCaution:   getEnvAsInt("RATE_LIMIT_CAUTION", 200),      // Start extending cache TTL
-		RateLimitWarning:   getEnvAsInt("RATE_LIMIT_WARNING", 100),      // Extend cache TTL further
-		RateLimitCritical:  getEnvAsInt("RATE_LIMIT_CRITICAL", 20),      // Maximum cache TTL extension
+		DeviceCodeExpiry:         getEnvAsInt("DEVICE_CODE_EXPIRY", 300),           // 5 minutes default
+		DevicePollInterval:       getEnvAsInt("DEVICE_POLL_INTERVAL", 5),           // 5 seconds default
+		AllowedClientIDs:         parseClientIDs(getEnv("ALLOWED_CLIENT_IDS", "")),
+		DeviceAuthorizeRateLimit: getEnvAsInt("DEVICE_AUTHORIZE_RATE_LIMIT", 6),    // 6 per minute
+		DeviceEntryRateLimit:     getEnvAsInt("DEVICE_ENTRY_RATE_LIMIT", 5),        // 5 seconds between entries
+		CacheFallbackTTL:              getEnvAsInt("CACHE_FALLBACK_TTL", 691200),        // 8 days default (for weekly scout meetings)
+		RateLimitCaution:              getEnvAsInt("RATE_LIMIT_CAUTION", 200),           // Start extending cache TTL
+		RateLimitWarning:              getEnvAsInt("RATE_LIMIT_WARNING", 100),           // Extend cache TTL further
+		RateLimitCritical:             getEnvAsInt("RATE_LIMIT_CRITICAL", 20),           // Maximum cache TTL extension
 	}
 
 	// Validate required configuration
@@ -99,6 +105,15 @@ func getEnvAsInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
 		}
 	}
 	return defaultValue

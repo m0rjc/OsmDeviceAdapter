@@ -116,13 +116,24 @@ spec:
             configMapKeyRef:
               name: {{ include "osm-device-adapter.fullname" . }}
               key: allowed-client-ids
+        # Device endpoint rate limiting
+        - name: DEVICE_AUTHORIZE_RATE_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: device-authorize-rate-limit
+        - name: DEVICE_ENTRY_RATE_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: device-entry-rate-limit
         # Cache configuration
         - name: CACHE_FALLBACK_TTL
           valueFrom:
             configMapKeyRef:
               name: {{ include "osm-device-adapter.fullname" . }}
               key: cache-fallback-ttl
-        # Rate limiting thresholds
+        # OSM API rate limiting thresholds for dynamic cache TTL
         - name: RATE_LIMIT_CAUTION
           valueFrom:
             configMapKeyRef:

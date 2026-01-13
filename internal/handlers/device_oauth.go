@@ -13,6 +13,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 )
 
 type DeviceAuthorizationRequest struct {
@@ -51,6 +52,42 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Get client IP from context
+		remoteMetadata := middleware.RemoteFromContext(r.Context())
+		clientIP := remoteMetadata.IP
+
+		// Check rate limit (6 requests per minute per IP)
+		rateLimitKey := fmt.Sprintf("%s:/device/authorize", clientIP)
+		rateLimitResult, err := deps.Conns.GetRateLimiter().CheckRateLimit(
+			r.Context(),
+			"device_authorize",
+			rateLimitKey,
+			int64(deps.Config.DeviceAuthorizeRateLimit),
+			time.Minute,
+		)
+		if err != nil {
+			slog.Error("device.authorize.rate_limit_error",
+				"component", "device_oauth",
+				"event", "authorize.rate_limit_error",
+				"client_ip", clientIP,
+				"error", err,
+			)
+			// Continue on rate limit check error - don't block legitimate requests
+		} else if !rateLimitResult.Allowed {
+			slog.Warn("device.authorize.rate_limited",
+				"component", "device_oauth",
+				"event", "authorize.rate_limited",
+				"client_ip", clientIP,
+				"remaining", rateLimitResult.Remaining,
+				"retry_after", rateLimitResult.RetryAfter.Seconds(),
+			)
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(rateLimitResult.RetryAfter.Seconds())))
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", deps.Config.DeviceAuthorizeRateLimit))
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
 			return
 		}
 
@@ -174,6 +211,39 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 
 		if req.DeviceCode == "" {
 			sendTokenError(w, "invalid_request", "device_code is required")
+			return
+		}
+
+		// Enforce slow_down - client must not poll faster than the configured interval
+		pollInterval := time.Duration(deps.Config.DevicePollInterval) * time.Second
+		pollKey := fmt.Sprintf("device_token_poll:%s", req.DeviceCode)
+
+		// Check if polling too fast using rate limiter (1 request per poll interval)
+		pollResult, err := deps.Conns.GetRateLimiter().CheckRateLimit(
+			r.Context(),
+			"device_token_poll",
+			pollKey,
+			1, // Only 1 request allowed
+			pollInterval,
+		)
+
+		if err != nil {
+			slog.Error("device.token.poll_check_error",
+				"component", "device_oauth",
+				"event", "token.poll_check_error",
+				"client_id", req.ClientID,
+				"error", err,
+			)
+			// Continue on error - don't block legitimate requests
+		} else if !pollResult.Allowed {
+			slog.Debug("device.token.slow_down",
+				"component", "device_oauth",
+				"event", "token.slow_down",
+				"client_id", req.ClientID,
+				"device_code_hash", fmt.Sprintf("%s...", req.DeviceCode[:8]),
+				"retry_after", pollResult.RetryAfter.Seconds(),
+			)
+			sendTokenError(w, "slow_down", fmt.Sprintf("Polling too fast. Please wait at least %d seconds between requests.", deps.Config.DevicePollInterval))
 			return
 		}
 

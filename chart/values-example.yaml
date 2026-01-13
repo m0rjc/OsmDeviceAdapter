@@ -18,13 +18,22 @@ config:
   osmDomain: "https://www.onlinescoutmanager.co.uk"
 
   # Device OAuth configuration
-  deviceCodeExpiry: 600      # 10 minutes
+  deviceCodeExpiry: 300       # 5 minutes (shortened for security)
   devicePollInterval: 5       # 5 seconds
 
   # REQUIRED: List of allowed OAuth client IDs that can use this service
   allowedClientIds:
     - "scoreboard-device-123"
     - "scoreboard-device-456"
+
+  # Rate limiting configuration for OAuth endpoints (protects against abuse)
+  deviceRateLimit:
+    # Maximum requests per minute per IP for /device/authorize
+    # Prevents rapid device authorization attempts
+    authorize: 6
+    # Seconds between device entry submissions per IP (for /device endpoint)
+    # Prevents rapid code guessing attempts
+    entry: 5
 
   # Cache configuration for patrol scores
   cache:
