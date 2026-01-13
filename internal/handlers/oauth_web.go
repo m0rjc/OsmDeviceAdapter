@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"html"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/templates"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -21,29 +21,11 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 
 		if userCode == "" && r.Method == http.MethodGet {
 			// Show form to enter user code
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Device Authorization</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
-        input { padding: 10px; font-size: 16px; width: 200px; text-transform: uppercase; }
-        button { padding: 10px 20px; font-size: 16px; background: #007bff; color: white; border: none; cursor: pointer; }
-        button:hover { background: #0056b3; }
-    </style>
-</head>
-<body>
-    <h1>Device Authorization</h1>
-    <p>Enter the code displayed on your device:</p>
-    <form method="GET" action="/device">
-        <input type="text" name="user_code" placeholder="XXXX-XXXX" required />
-        <button type="submit">Continue</button>
-    </form>
-</body>
-</html>
-			`)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := templates.RenderDeviceAuth(w); err != nil {
+				slog.Error("template render failed", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -82,24 +64,11 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 				"client_ip", clientIP,
 				"retry_after", rateLimitResult.RetryAfter.Seconds(),
 			)
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Please Slow Down</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
-        .warning { color: #ff6b6b; }
-    </style>
-</head>
-<body>
-    <h1 class="warning">Please Slow Down</h1>
-    <p>You're submitting codes too quickly. Please wait %d seconds before trying again.</p>
-    <p><a href="/device">Return to device authorization</a></p>
-</body>
-</html>
-			`, deps.Config.DeviceEntryRateLimit)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := templates.RenderRateLimited(w, deps.Config.DeviceEntryRateLimit); err != nil {
+				slog.Error("template render failed", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -299,54 +268,11 @@ func OAuthCancelHandler(deps *Dependencies) http.HandlerFunc {
 		)
 
 		// Show cancellation page
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-	<title>Authorization Cancelled</title>
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<style>
-		body { 
-			font-family: Arial, sans-serif; 
-			max-width: 600px; 
-			margin: 50px auto; 
-			padding: 20px;
-			text-align: center;
-			background: #f5f5f5;
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := templates.RenderAuthCancelled(w); err != nil {
+			slog.Error("template render failed", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
-		.cancelled-icon {
-			color: #dc3545;
-			font-size: 72px;
-			margin: 20px 0;
-		}
-		.content {
-			background: white;
-			padding: 30px;
-			border-radius: 5px;
-			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-		}
-		h1 {
-			color: #dc3545;
-			margin: 20px 0;
-		}
-		p {
-			color: #666;
-			line-height: 1.6;
-			margin: 15px 0;
-		}
-	</style>
-</head>
-<body>
-	<div class="content">
-		<div class="cancelled-icon">✖</div>
-		<h1>Authorization Cancelled</h1>
-		<p>You have denied access to the device. The authorization request has been cancelled.</p>
-		<p>The device will not be able to access your patrol scores.</p>
-		<p style="margin-top: 30px; font-size: 14px; color: #999;">You may close this window.</p>
-	</div>
-</body>
-</html>
-		`)
 	}
 }
 
@@ -362,16 +288,11 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 			if state != "" {
 				markDeviceCodeStatus(deps.Conns, state, "denied")
 			}
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, `
-<!DOCTYPE html>
-<html>
-<body>
-    <h1>Authorization Denied</h1>
-    <p>You have denied access to your device. You may close this window.</p>
-</body>
-</html>
-			`)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := templates.RenderAuthDenied(w); err != nil {
+				slog.Error("template render failed", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+			}
 			return
 		}
 
@@ -469,24 +390,11 @@ func OAuthSelectSectionHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Show success page
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorization Successful</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
-        .success { color: #28a745; font-size: 48px; }
-    </style>
-</head>
-<body>
-    <h1 class="success">Authorization Successful</h1>
-    <p>Your device has been authorized and configured for the selected scout section.</p>
-    <p>You may close this window and return to your device.</p>
-</body>
-</html>
-		`)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := templates.RenderAuthSuccess(w); err != nil {
+			slog.Error("template render failed", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
 	}
 }
 
@@ -503,314 +411,47 @@ func markDeviceCodeStatus(conns *db.Connections, sessionID, status string) {
 }
 
 func showDeviceConfirmationPage(w http.ResponseWriter, userCode string, deviceCode *db.DeviceCode, currentMetadata middleware.RemoteMetadata, sessionID string) {
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	// Extract device metadata (handle NULL for old codes)
-	// HTML-escape all values to prevent XSS injection
+	// Note: html/template provides automatic HTML escaping
 	deviceIP := "Unknown"
 	if deviceCode.DeviceRequestIP != nil {
-		deviceIP = html.EscapeString(*deviceCode.DeviceRequestIP)
+		deviceIP = *deviceCode.DeviceRequestIP
 	}
 
 	deviceCountry := "Unknown"
 	if deviceCode.DeviceRequestCountry != nil {
-		deviceCountry = html.EscapeString(*deviceCode.DeviceRequestCountry)
+		deviceCountry = *deviceCode.DeviceRequestCountry
 	}
 
 	deviceTime := "Unknown"
 	if deviceCode.DeviceRequestTime != nil {
-		deviceTime = html.EscapeString(deviceCode.DeviceRequestTime.Format("2006-01-02 15:04:05 MST"))
+		deviceTime = deviceCode.DeviceRequestTime.Format("2006-01-02 15:04:05 MST")
 	}
 
 	// Current user metadata
-	// HTML-escape to prevent header injection attacks
-	currentIP := html.EscapeString(currentMetadata.IP)
+	currentIP := currentMetadata.IP
 	currentCountry := currentMetadata.Country
 	if currentCountry == "" {
 		currentCountry = "Unknown"
-	} else {
-		currentCountry = html.EscapeString(currentCountry)
 	}
 
-	// Build country mismatch warning HTML
-	countryWarning := ""
-	if deviceCountry != "Unknown" && currentCountry != "Unknown" && deviceCountry != currentCountry {
-		countryWarning = fmt.Sprintf(`
-	<div class="warning">
-		<div class="warning-title">⚠️ Country Mismatch Detected</div>
-		<p>The device made its request from <strong>%s</strong>, but you are currently connecting from <strong>%s</strong>.</p>
-		<p>This could indicate:</p>
-		<ul>
-			<li>You are using a VPN or proxy</li>
-			<li>You are traveling</li>
-			<li>Someone else may be attempting to authorize a device</li>
-		</ul>
-		<p><strong>Only continue if you recognize this device and initiated this authorization request.</strong></p>
-	</div>
-		`, deviceCountry, currentCountry)
+	// Determine if we should show country mismatch warning
+	showCountryWarning := deviceCountry != "Unknown" && currentCountry != "Unknown" && deviceCountry != currentCountry
+
+	if err := templates.RenderDeviceConfirm(w, userCode, deviceIP, deviceCountry, deviceTime, currentIP, currentCountry, sessionID, showCountryWarning); err != nil {
+		slog.Error("template render failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
-
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-	<title>Confirm Device Authorization</title>
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<style>
-		body { 
-			font-family: Arial, sans-serif; 
-			max-width: 600px; 
-			margin: 50px auto; 
-			padding: 20px;
-			background: #f5f5f5;
-		}
-		h1 {
-			color: #333;
-			border-bottom: 2px solid #4CAF50;
-			padding-bottom: 10px;
-		}
-		.intro {
-			background: white;
-			padding: 20px;
-			border-radius: 5px;
-			margin: 20px 0;
-			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-		}
-		.user-code {
-			font-size: 32px;
-			font-weight: bold;
-			letter-spacing: 3px;
-			margin: 20px 0;
-			padding: 20px;
-			background: #f0f0f0;
-			border-radius: 5px;
-			text-align: center;
-			border: 2px solid #4CAF50;
-			font-family: 'Courier New', monospace;
-		}
-		.info-section {
-			background: white;
-			margin: 20px 0;
-			padding: 20px;
-			border: 1px solid #ddd;
-			border-radius: 5px;
-			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-		}
-		.info-section h3 {
-			margin-top: 0;
-			color: #555;
-			border-bottom: 1px solid #ddd;
-			padding-bottom: 10px;
-		}
-		.info-row {
-			margin: 12px 0;
-			display: flex;
-		}
-		.label {
-			font-weight: bold;
-			min-width: 120px;
-			color: #666;
-		}
-		.value {
-			color: #333;
-		}
-		.warning {
-			background: #fff3cd;
-			border: 2px solid #ffc107;
-			padding: 20px;
-			margin: 20px 0;
-			border-radius: 5px;
-			color: #856404;
-			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-		}
-		.warning-title {
-			font-weight: bold;
-			font-size: 20px;
-			margin-bottom: 15px;
-		}
-		.warning ul {
-			margin: 10px 0;
-			padding-left: 25px;
-		}
-		.warning li {
-			margin: 8px 0;
-		}
-		.buttons {
-			margin-top: 30px;
-			display: flex;
-			gap: 15px;
-		}
-		button {
-			padding: 15px 30px;
-			font-size: 16px;
-			font-weight: bold;
-			border: none;
-			border-radius: 5px;
-			cursor: pointer;
-			transition: background 0.3s;
-		}
-		.btn-confirm {
-			background: #28a745;
-			color: white;
-			flex: 1;
-		}
-		.btn-confirm:hover {
-			background: #218838;
-		}
-		.btn-cancel {
-			background: #dc3545;
-			color: white;
-			flex: 1;
-		}
-		.btn-cancel:hover {
-			background: #c82333;
-		}
-		@media (max-width: 600px) {
-			body {
-				margin: 10px;
-				padding: 10px;
-			}
-			.user-code {
-				font-size: 24px;
-			}
-			.buttons {
-				flex-direction: column;
-			}
-		}
-	</style>
-</head>
-<body>
-	<h1>Confirm Device Authorization</h1>
-	
-	<div class="intro">
-		<p><strong>A device is requesting access to view Patrol Scores for your scout section.</strong></p>
-		<p>Before proceeding, please verify the information below.</p>
-	</div>
-
-	<div class="info-section">
-		<h3>Verify Device Code</h3>
-		<p>Ensure that your device displays this code:</p>
-		<div class="user-code">%s</div>
-	</div>
-
-	<div class="info-section">
-		<h3>Device Information</h3>
-		<div class="info-row">
-			<span class="label">IP Address:</span>
-			<span class="value">%s</span>
-		</div>
-		<div class="info-row">
-			<span class="label">Country:</span>
-			<span class="value">%s</span>
-		</div>
-		<div class="info-row">
-			<span class="label">Requested:</span>
-			<span class="value">%s</span>
-		</div>
-	</div>
-
-	<div class="info-section">
-		<h3>Your Current Connection</h3>
-		<div class="info-row">
-			<span class="label">IP Address:</span>
-			<span class="value">%s</span>
-		</div>
-		<div class="info-row">
-			<span class="label">Country:</span>
-			<span class="value">%s</span>
-		</div>
-	</div>
-
-	%s
-
-	<form method="POST" action="/device/confirm">
-		<input type="hidden" name="user_code" value="%s">
-		<input type="hidden" name="session_id" value="%s">
-		<div class="buttons">
-			<button type="submit" class="btn-confirm">Confirm and Continue</button>
-			<button type="button" class="btn-cancel" onclick="if(confirm('Are you sure you want to cancel this authorization?')) { window.location.href='/device/cancel?user_code=%s'; }">Cancel</button>
-		</div>
-	</form>
-</body>
-</html>
-	`, html.EscapeString(userCode), deviceIP, deviceCountry, deviceTime, currentIP, currentCountry, countryWarning, html.EscapeString(userCode), html.EscapeString(sessionID), html.EscapeString(userCode))
 }
 
 
 func showSectionSelectionPage(w http.ResponseWriter, sessionID string, sections []types.OSMSection) {
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	// Build section options HTML
-	sectionOptions := ""
-	for _, section := range sections {
-		sectionOptions += fmt.Sprintf(`
-        <div class="section-option">
-            <input type="radio" id="section_%d" name="section_id" value="%d" required>
-            <label for="section_%d">
-                <strong>%s</strong><br>
-                <span class="group-name">%s</span>
-            </label>
-        </div>
-		`, section.SectionID, section.SectionID, section.SectionID, section.SectionName, section.GroupName)
+	if err := templates.RenderSectionSelect(w, sessionID, sections); err != nil {
+		slog.Error("template render failed", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
-
-	fmt.Fprintf(w, `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Select Scout Section</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 600px;
-            margin: 50px auto;
-            padding: 20px;
-        }
-        h1 { color: #333; }
-        .section-option {
-            margin: 15px 0;
-            padding: 15px;
-            border: 2px solid #ddd;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .section-option:hover {
-            background-color: #f5f5f5;
-        }
-        .section-option input[type="radio"] {
-            margin-right: 10px;
-        }
-        .section-option label {
-            cursor: pointer;
-            display: block;
-        }
-        .group-name {
-            color: #666;
-            font-size: 0.9em;
-        }
-        button {
-            padding: 12px 24px;
-            font-size: 16px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-top: 20px;
-        }
-        button:hover {
-            background: #0056b3;
-        }
-    </style>
-</head>
-<body>
-    <h1>Select Your Scout Section</h1>
-    <p>Please select which scout section/troop you want to connect to your device:</p>
-    <form method="POST" action="/device/select-section">
-        <input type="hidden" name="session_id" value="%s">
-        %s
-        <button type="submit">Continue</button>
-    </form>
-</body>
-</html>
-	`, sessionID, sectionOptions)
 }
