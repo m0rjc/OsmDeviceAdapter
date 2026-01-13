@@ -2,6 +2,8 @@
 
 A Go service that bridges the OAuth Device Flow for scoreboard devices with the Online Scout Manager (OSM) OAuth Web Flow, enabling secure access to patrol scores.
 
+*This document is out of date. I will ask Claude to update it with all that has happened since this very early version.*
+
 ## Architecture Overview
 
 This service implements a complete OAuth bridge that:
@@ -13,6 +15,8 @@ This service implements a complete OAuth bridge that:
 5. **REST API**: Provides a simple JSON endpoint for scoreboards to fetch patrol scores
 
 ### Flow Diagram
+
+**Out of Date**
 
 ```
 ┌──────────────┐          ┌─────────────────────┐          ┌─────────────┐
@@ -38,7 +42,8 @@ This service implements a complete OAuth bridge that:
 6. OSM redirects back with authorization code
 7. Service exchanges code for OSM access token
 8. Scoreboard polls `POST /device/token` until authorized
-9. Service returns access token to scoreboard
+9. Service creates an access token valid for this API and returns that token to the scoreboard
+10. The scoreboard uses its token to access the Patrol Scores API on this server.
 
 ## API Endpoints
 
