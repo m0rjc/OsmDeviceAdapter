@@ -1,0 +1,8 @@
+{{define "content"}}
+    <h1>Device Authorization</h1>
+    <p>Enter the code displayed on your device:</p>
+    <form method="GET" action="/device">
+        <input type="text" name="user_code" placeholder="XXXX-XXXX" required style="text-transform: uppercase;" />
+        <button type="submit" class="btn-primary">Continue</button>
+    </form>
+{{end}}

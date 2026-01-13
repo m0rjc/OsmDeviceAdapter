@@ -1,0 +1,137 @@
+{{define "content"}}
+    <style>
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        .intro {
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .user-code {
+            font-size: 32px;
+            font-weight: bold;
+            letter-spacing: 3px;
+            margin: 20px 0;
+            padding: 20px;
+            background: #f0f0f0;
+            border-radius: 5px;
+            text-align: center;
+            border: 2px solid #4CAF50;
+            font-family: 'Courier New', monospace;
+        }
+        .info-section {
+            background: white;
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .info-section h3 {
+            margin-top: 0;
+            color: #555;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .info-row {
+            margin: 12px 0;
+            display: flex;
+        }
+        .label {
+            font-weight: bold;
+            min-width: 120px;
+            color: #666;
+        }
+        .value {
+            color: #333;
+        }
+        .buttons {
+            margin-top: 30px;
+            display: flex;
+            gap: 15px;
+        }
+        .btn-confirm {
+            flex: 1;
+        }
+        .btn-cancel {
+            flex: 1;
+        }
+        @media (max-width: 600px) {
+            .user-code {
+                font-size: 24px;
+            }
+            .buttons {
+                flex-direction: column;
+            }
+        }
+    </style>
+
+    <h1>Confirm Device Authorization</h1>
+
+    <div class="intro">
+        <p><strong>A device is requesting access to view Patrol Scores for your scout section.</strong></p>
+        <p>Before proceeding, please verify the information below.</p>
+    </div>
+
+    <div class="info-section">
+        <h3>Verify Device Code</h3>
+        <p>Ensure that your device displays this code:</p>
+        <div class="user-code">{{.UserCode}}</div>
+    </div>
+
+    <div class="info-section">
+        <h3>Device Information</h3>
+        <div class="info-row">
+            <span class="label">IP Address:</span>
+            <span class="value">{{.DeviceIP}}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Country:</span>
+            <span class="value">{{.DeviceCountry}}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Requested:</span>
+            <span class="value">{{.DeviceTime}}</span>
+        </div>
+    </div>
+
+    <div class="info-section">
+        <h3>Your Current Connection</h3>
+        <div class="info-row">
+            <span class="label">IP Address:</span>
+            <span class="value">{{.CurrentIP}}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Country:</span>
+            <span class="value">{{.CurrentCountry}}</span>
+        </div>
+    </div>
+
+    {{if .ShowCountryWarning}}
+    <div class="warning">
+        <div class="warning-title">⚠️ Country Mismatch Detected</div>
+        <p>The device made its request from <strong>{{.DeviceCountry}}</strong>, but you are currently connecting from <strong>{{.CurrentCountry}}</strong>.</p>
+        <p>This could indicate:</p>
+        <ul>
+            <li>You are using a VPN or proxy</li>
+            <li>You are traveling</li>
+            <li>Someone else may be attempting to authorize a device</li>
+        </ul>
+        <p><strong>Only continue if you recognize this device and initiated this authorization request.</strong></p>
+    </div>
+    {{end}}
+
+    <form method="POST" action="/device/confirm">
+        <input type="hidden" name="user_code" value="{{.UserCode}}">
+        <input type="hidden" name="session_id" value="{{.SessionID}}">
+        <div class="buttons">
+            <button type="submit" class="btn-confirm">Confirm and Continue</button>
+            <button type="button" class="btn-cancel" onclick="if(confirm('Are you sure you want to cancel this authorization?')) { window.location.href='/device/cancel?user_code={{.UserCode}}'; }">Cancel</button>
+        </div>
+    </form>
+{{end}}

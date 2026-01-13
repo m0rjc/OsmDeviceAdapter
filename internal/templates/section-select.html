@@ -1,0 +1,45 @@
+{{define "content"}}
+    <style>
+        h1 { color: #333; }
+        .section-option {
+            margin: 15px 0;
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .section-option:hover {
+            background-color: #f5f5f5;
+        }
+        .section-option input[type="radio"] {
+            margin-right: 10px;
+        }
+        .section-option label {
+            cursor: pointer;
+            display: block;
+        }
+        .group-name {
+            color: #666;
+            font-size: 0.9em;
+        }
+        button {
+            margin-top: 20px;
+        }
+    </style>
+
+    <h1>Select Your Scout Section</h1>
+    <p>Please select which scout section/troop you want to connect to your device:</p>
+    <form method="POST" action="/device/select-section">
+        <input type="hidden" name="session_id" value="{{.SessionID}}">
+        {{range .Sections}}
+        <div class="section-option">
+            <input type="radio" id="section_{{.SectionID}}" name="section_id" value="{{.SectionID}}" required>
+            <label for="section_{{.SectionID}}">
+                <strong>{{.SectionName}}</strong><br>
+                <span class="group-name">{{.GroupName}}</span>
+            </label>
+        </div>
+        {{end}}
+        <button type="submit" class="btn-primary">Continue</button>
+    </form>
+{{end}}
