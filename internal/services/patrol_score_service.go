@@ -64,29 +64,16 @@ func NewPatrolScoreService(
 
 // GetPatrolScores fetches patrol scores for a device, managing term discovery,
 // caching, and rate limiting automatically.
-func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode string) (*PatrolScoreResponse, error) {
+// Accepts user and device from the authentication middleware to avoid redundant database queries.
+func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.User, device *db.DeviceCode) (*PatrolScoreResponse, error) {
 	var err error
-
-	// Get device from database
-	device, err := db.FindDeviceCodeByCode(s.conns, deviceCode)
-	if err != nil {
-		return nil, fmt.Errorf("database error: %w", err)
-	}
-	if device == nil {
-		return nil, fmt.Errorf("device not found")
-	}
 
 	if device.SectionID == nil {
 		return nil, osm.ErrNoSectionConfigured
 	}
 
-	user := device.User()
-	if user == nil {
-		return nil, fmt.Errorf("device not authorized")
-	}
-
 	// Check patrol scores cache
-	cached, err := s.getCachedPatrolScores(ctx, deviceCode)
+	cached, err := s.getCachedPatrolScores(ctx, device.DeviceCode)
 	if err == nil && time.Now().Before(cached.ValidUntil) {
 		// Cache is still valid
 		return &PatrolScoreResponse{
@@ -103,7 +90,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 	var termID int
 	var patrols []types.PatrolScore
 	var rateLimitInfo osm.UserRateLimitInfo
-	termID, err = s.ensureTermInfo(ctx, device)
+	termID, err = s.ensureTermInfo(ctx, user, device)
 	if err == nil {
 		// Fetch patrol scores from OSM
 		patrols, rateLimitInfo, err = s.osmClient.FetchPatrolScores(ctx, user, *device.SectionID, termID)
@@ -126,7 +113,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 			// Extend the cache time if needed to cover any block
 			if cached.ValidUntil.Before(cacheUntil) {
 				cached.ValidUntil = cacheUntil
-				s.cachePatrolScores(ctx, deviceCode, cached)
+				s.cachePatrolScores(ctx, device.DeviceCode, cached)
 			}
 			return &PatrolScoreResponse{
 				Patrols:        cached.Patrols,
@@ -147,7 +134,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 	// Caching is best effort
 	now := time.Now()
 	validUntil := now.Add(cacheTTL)
-	s.cachePatrolScores(ctx, deviceCode, &CachedPatrolScores{
+	s.cachePatrolScores(ctx, device.DeviceCode, &CachedPatrolScores{
 		Patrols:        patrols,
 		CachedAt:       now,
 		ValidUntil:     validUntil,
@@ -167,7 +154,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, deviceCode str
 // It refreshes the term if needed (24 hours old or expired).
 // TODO: Move this into a separate Term Service. We're going to have to fix dependency injection. I think we'll
 // need to borrow GPS-Game's Command Pattern
-func (s *PatrolScoreService) ensureTermInfo(ctx context.Context, device *db.DeviceCode) (int, error) {
+func (s *PatrolScoreService) ensureTermInfo(ctx context.Context, user types.User, device *db.DeviceCode) (int, error) {
 	now := time.Now()
 
 	// Check if we need to refresh term information
@@ -182,7 +169,6 @@ func (s *PatrolScoreService) ensureTermInfo(ctx context.Context, device *db.Devi
 	}
 
 	// Fetch fresh term information
-	user := device.User()
 	termInfo, err := s.osmClient.FetchActiveTermForSection(ctx, user, *device.SectionID)
 	if err != nil {
 		return 0, err

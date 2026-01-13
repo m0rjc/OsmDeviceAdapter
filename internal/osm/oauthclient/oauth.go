@@ -35,11 +35,16 @@ func (c *WebFlowClient) RefreshToken(ctx context.Context, refreshToken string) (
 	data.Set("client_secret", c.clientSecret)
 
 	var tokenResp types.OSMTokenResponse
-	_, err := c.osm.Request(ctx, http.MethodPost, &tokenResp,
+	resp, err := c.osm.Request(ctx, http.MethodPost, &tokenResp,
 		osm.WithPath("/oauth/token"),
 		osm.WithUrlEncodedBody(&data),
+		osm.WithSensitive(),
 	)
 	if err != nil {
+		// Check if this is a 401 (user revoked access) vs other errors
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("OSM access unauthorized (revoked): %w", err)
+		}
 		return nil, err
 	}
 

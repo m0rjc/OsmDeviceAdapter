@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/services"
 )
 
 // GetPatrolScoresHandler handles GET /api/v1/patrols requests.
-// It authenticates the device using the bearer token and returns patrol scores
-// with intelligent caching and rate limiting.
+// Expects authentication middleware to have already run and added User to context.
+// Returns patrol scores with intelligent caching and rate limiting.
 func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -23,34 +24,33 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Extract device access token from Authorization header
-		authHeader := r.Header.Get("Authorization")
-		deviceAccessToken := extractBearerToken(authHeader)
-
-		if deviceAccessToken == "" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="API"`)
-			http.Error(w, "Missing or invalid authorization", http.StatusUnauthorized)
-			return
-		}
-
-		// Find device by access token
 		ctx := r.Context()
-		device, err := db.FindDeviceCodeByDeviceAccessToken(deps.Conns, deviceAccessToken)
-		if err != nil {
-			slog.Error("api.patrol_scores.database_error",
+
+		// Get authenticated user from context (set by middleware)
+		user, ok := middleware.UserFromContext(ctx)
+		if !ok {
+			// This should never happen if middleware is properly configured
+			slog.Error("api.patrol_scores.no_user_in_context",
 				"component", "api",
 				"event", "auth.error",
-				"error", err,
+				"error", "user not found in context - middleware not configured?",
 			)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		if device == nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="API"`)
-			http.Error(w, "Invalid or expired device token", http.StatusUnauthorized)
+		// Get device code record from auth context
+		authCtx, ok := user.(interface{ DeviceCode() *db.DeviceCode })
+		if !ok {
+			slog.Error("api.patrol_scores.auth_context_error",
+				"component", "api",
+				"event", "auth.error",
+				"error", "user does not implement DeviceCode() method",
+			)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
+		device := authCtx.DeviceCode()
 
 		// Create patrol score service
 		patrolService := services.NewPatrolScoreService(
@@ -60,7 +60,7 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 		)
 
 		// Get patrol scores with caching and term management
-		response, err := patrolService.GetPatrolScores(ctx, device.DeviceCode)
+		response, err := patrolService.GetPatrolScores(ctx, user, device)
 		if err != nil {
 			slog.Error("api.patrol_scores.fetch_error",
 				"component", "api",

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -317,22 +318,25 @@ func generateDeviceAccessToken() (string, error) {
 }
 
 func generateUserCode() (string, error) {
-	// Generate a user-friendly code (e.g., ABCD-EFGH format)
-	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Avoid ambiguous characters
+	// Base20: No vowels (prevents accidental words), no ambiguous chars. RFC-8628
+	const charset = "BCDFGHJKLMNPQRSTVWXZ"
 	const codeLength = 8
 
-	bytes := make([]byte, codeLength)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
+	var code strings.Builder
+	max := big.NewInt(int64(len(charset)))
+
+	for i := 0; i < codeLength; i++ {
+		// Use crypto/rand.Int to avoid modulo bias
+		idx, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		code.WriteByte(charset[idx.Int64()])
 	}
 
-	code := make([]byte, codeLength)
-	for i, b := range bytes {
-		code[i] = charset[int(b)%len(charset)]
-	}
-
-	// Format as XXXX-XXXX
-	return fmt.Sprintf("%s-%s", string(code[:4]), string(code[4:])), nil
+	raw := code.String()
+	// Returns format: XXXX-XXXX
+	return fmt.Sprintf("%s-%s", raw[:4], raw[4:]), nil
 }
 
 func extractBearerToken(authHeader string) string {

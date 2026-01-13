@@ -10,6 +10,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/handlers"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -26,11 +27,16 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	mux.HandleFunc("/oauth/callback", handlers.OAuthCallbackHandler(deps))
 	mux.HandleFunc("/device/select-section", handlers.OAuthSelectSectionHandler(deps))
 
-	// API endpoints for scoreboard
-	mux.HandleFunc("/api/v1/patrols", handlers.GetPatrolScoresHandler(deps))
+	// API endpoints for scoreboard (requires authentication)
+	deviceAuthMiddleware := middleware.DeviceAuthMiddleware(deps.DeviceAuth)
+	mux.Handle("/api/v1/patrols", deviceAuthMiddleware(handlers.GetPatrolScoresHandler(deps)))
 
-	// Wrap with middleware
-	handler := loggingMiddleware(mux)
+	// Apply middleware chain:
+	// 1. Remote metadata (Cloudflare headers, HTTPS redirect, HSTS) - applied to all routes
+	// 2. Logging middleware - applied to all routes
+	handler := loggingMiddleware(
+		middleware.RemoteMetadataMiddleware(cfg.ExposedDomain)(mux),
+	)
 
 	return &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),

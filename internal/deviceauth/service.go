@@ -1,12 +1,22 @@
 package deviceauth
 
 import (
-	"net/http"
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+)
+
+// Authentication errors
+var (
+	ErrInvalidToken       = errors.New("invalid access token")
+	ErrTokenRevoked       = errors.New("OSM access revoked by user")
+	ErrTokenRefreshFailed = errors.New("temporary failure refreshing token")
 )
 
 // Service handles device authentication and authorization
@@ -44,30 +54,24 @@ func (a *AuthContext) DeviceCode() *db.DeviceCode {
 	return a.deviceCodeRecord
 }
 
-// AuthenticateRequest handles authentication and authorization for API endpoints.
-// It extracts the bearer token, verifies it, refreshes OSM tokens if needed, and returns
-// the authentication context. Returns nil and false if authentication fails (error response
-// is written to w).
-func (s *Service) AuthenticateRequest(w http.ResponseWriter, r *http.Request) (types.User, bool) {
+// Authenticate verifies a bearer token and returns the authenticated user.
+// It handles token refresh if the OSM token is near expiry.
+// Returns ErrInvalidToken, ErrTokenRevoked, or ErrTokenRefreshFailed on failure.
+func (s *Service) Authenticate(ctx context.Context, authHeader string) (types.User, error) {
 	// Extract bearer token from Authorization header
-	authHeader := r.Header.Get("Authorization")
 	accessToken := extractBearerToken(authHeader)
 
 	if accessToken == "" {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="API"`)
-		http.Error(w, "Missing or invalid authorization", http.StatusUnauthorized)
-		return nil, false
+		return nil, ErrInvalidToken
 	}
 
 	// Verify the device access token belongs to a valid device
 	deviceCodeRecord, err := db.FindDeviceCodeByDeviceAccessToken(s.conns, accessToken)
 	if err != nil {
-		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		return nil, false
+		return nil, ErrInvalidToken
 	}
 	if deviceCodeRecord == nil {
-		http.Error(w, "Invalid access token", http.StatusUnauthorized)
-		return nil, false
+		return nil, ErrInvalidToken
 	}
 
 	osmRefreshToken := ""
@@ -83,17 +87,39 @@ func (s *Service) AuthenticateRequest(w http.ResponseWriter, r *http.Request) (t
 	// Check if we need to refresh the OSM token
 	if deviceCodeRecord.OSMTokenExpiry != nil && time.Now().After(deviceCodeRecord.OSMTokenExpiry.Add(-5*time.Minute)) {
 		// Token is expired or about to expire, refresh it
-		newTokens, err := s.osmAuth.RefreshToken(r.Context(), osmRefreshToken)
+		newTokens, err := s.osmAuth.RefreshToken(ctx, osmRefreshToken)
 		if err != nil {
-			http.Error(w, "Failed to refresh token", http.StatusInternalServerError)
-			return nil, false
+			// Check if this is an authorization error (user revoked access)
+			if strings.Contains(err.Error(), "unauthorized (revoked)") {
+				slog.Warn("deviceauth.token_revoked",
+					"component", "deviceauth",
+					"event", "token.revoked",
+					"device_code_hash", deviceCodeRecord.DeviceCode[:8],
+					"error", err,
+				)
+				return nil, ErrTokenRevoked
+			}
+
+			// Temporary error (network, OSM server issue, etc.)
+			slog.Error("deviceauth.token_refresh_failed",
+				"component", "deviceauth",
+				"event", "token.refresh_error",
+				"device_code_hash", deviceCodeRecord.DeviceCode[:8],
+				"error", err,
+			)
+			return nil, ErrTokenRefreshFailed
 		}
 
 		// Update tokens in database
 		newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
 		if err := db.UpdateDeviceCodeTokensOnly(s.conns, deviceCodeRecord.DeviceCode, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
-			http.Error(w, "Failed to update tokens", http.StatusInternalServerError)
-			return nil, false
+			slog.Error("deviceauth.token_update_failed",
+				"component", "deviceauth",
+				"event", "token.update_error",
+				"device_code_hash", deviceCodeRecord.DeviceCode[:8],
+				"error", err,
+			)
+			return nil, ErrTokenRefreshFailed
 		}
 
 		osmAccessToken = newTokens.AccessToken
@@ -102,7 +128,7 @@ func (s *Service) AuthenticateRequest(w http.ResponseWriter, r *http.Request) (t
 	return &AuthContext{
 		deviceCodeRecord: deviceCodeRecord,
 		osmAccessToken:   osmAccessToken,
-	}, true
+	}, nil
 }
 
 // extractBearerToken extracts the token from a Bearer authorization header
