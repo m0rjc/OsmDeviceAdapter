@@ -76,6 +76,17 @@ type DeviceCode struct {
 	// Extracted from OSM API response and used for cache invalidation.
 	TermEndDate *time.Time `gorm:"column:term_end_date;index:idx_device_codes_term_end_date"`
 
+	// DeviceRequestIP is the client IP at device code generation time.
+	// Captured from CF-Connecting-IP for security auditing.
+	DeviceRequestIP *string `gorm:"column:device_request_ip;type:varchar(255)"`
+
+	// DeviceRequestCountry is the ISO country code at device code generation.
+	// Captured from CF-IPCountry for geographic verification.
+	DeviceRequestCountry *string `gorm:"column:device_request_country;type:varchar(10)"`
+
+	// DeviceRequestTime is when the device initiated authorization.
+	DeviceRequestTime *time.Time `gorm:"column:device_request_time"`
+
 	// DeviceSessions are temporary web sessions used during the OAuth flow.
 	// These are automatically deleted when the device code is deleted.
 	DeviceSessions []DeviceSession `gorm:"foreignKey:DeviceCode;constraint:OnDelete:CASCADE"`

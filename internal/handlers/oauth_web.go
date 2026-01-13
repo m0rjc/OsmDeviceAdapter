@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -137,11 +138,218 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Redirect to OSM OAuth authorization
+		// Log confirmation page display
+		deviceCountry := "unknown"
+		if deviceCodeRecord.DeviceRequestCountry != nil {
+			deviceCountry = *deviceCodeRecord.DeviceRequestCountry
+		}
+		slog.Info("device.confirmation.shown",
+			"component", "oauth_web",
+			"event", "confirmation.shown",
+			"user_code", userCode,
+			"device_country", deviceCountry,
+			"user_country", remoteMetadata.Country,
+		)
+
+		// Show confirmation page instead of immediate OAuth redirect
+		showDeviceConfirmationPage(w, userCode, deviceCodeRecord, remoteMetadata, sessionID)
+	}
+}
+
+func OAuthConfirmHandler(deps *Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Parse form
+		if err := r.ParseForm(); err != nil {
+			slog.Error("device.confirmation.parse_error",
+				"component", "oauth_web",
+				"event", "confirmation.parse_error",
+				"error", err,
+			)
+			http.Error(w, "Invalid form data", http.StatusBadRequest)
+			return
+		}
+
+		userCode := r.FormValue("user_code")
+		sessionID := r.FormValue("session_id")
+
+		if userCode == "" || sessionID == "" {
+			slog.Warn("device.confirmation.missing_fields",
+				"component", "oauth_web",
+				"event", "confirmation.missing_fields",
+			)
+			http.Error(w, "Missing required fields", http.StatusBadRequest)
+			return
+		}
+
+		// Validate session exists and matches device code (CSRF protection)
+		session, err := db.FindDeviceSessionByID(deps.Conns, sessionID)
+		if err != nil || session == nil {
+			slog.Warn("device.confirmation.invalid_session",
+				"component", "oauth_web",
+				"event", "confirmation.invalid_session",
+				"session_id", sessionID,
+			)
+			http.Error(w, "Invalid or expired session", http.StatusBadRequest)
+			return
+		}
+
+		// Lookup device code
+		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, strings.ToUpper(userCode))
+		if err != nil || deviceCodeRecord == nil {
+			slog.Warn("device.confirmation.invalid_code",
+				"component", "oauth_web",
+				"event", "confirmation.invalid_code",
+				"user_code", userCode,
+			)
+			http.Error(w, "Invalid or expired user code", http.StatusBadRequest)
+			return
+		}
+
+		// Verify session belongs to this device code (CSRF protection)
+		if session.DeviceCode != deviceCodeRecord.DeviceCode {
+			slog.Error("device.confirmation.session_mismatch",
+				"component", "oauth_web",
+				"event", "confirmation.session_mismatch",
+				"session_id", sessionID,
+				"user_code", userCode,
+			)
+			http.Error(w, "Session mismatch", http.StatusBadRequest)
+			return
+		}
+
+		// Check device code status
+		if deviceCodeRecord.Status != "pending" {
+			slog.Warn("device.confirmation.already_used",
+				"component", "oauth_web",
+				"event", "confirmation.already_used",
+				"user_code", userCode,
+				"status", deviceCodeRecord.Status,
+			)
+			http.Error(w, "This code has already been used", http.StatusBadRequest)
+			return
+		}
+
+		// Log confirmation
+		remoteMetadata := middleware.RemoteFromContext(r.Context())
+		deviceCountry := "unknown"
+		if deviceCodeRecord.DeviceRequestCountry != nil {
+			deviceCountry = *deviceCodeRecord.DeviceRequestCountry
+		}
+		countryMatch := deviceCountry == remoteMetadata.Country
+
+		slog.Info("device.confirmation.accepted",
+			"component", "oauth_web",
+			"event", "confirmation.accepted",
+			"user_code", userCode,
+			"device_country", deviceCountry,
+			"user_country", remoteMetadata.Country,
+			"country_match", countryMatch,
+		)
+
+		// Proceed with OAuth authorization
 		authURL := deps.OSMAuth.BuildAuthURL("", sessionID)
 		http.Redirect(w, r, authURL, http.StatusFound)
 	}
 }
+
+func OAuthCancelHandler(deps *Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userCode := r.URL.Query().Get("user_code")
+		if userCode == "" {
+			http.Error(w, "user_code is required", http.StatusBadRequest)
+			return
+		}
+
+		// Look up device code
+		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, strings.ToUpper(userCode))
+		if err != nil || deviceCodeRecord == nil {
+			slog.Warn("device.cancel.invalid_code",
+				"component", "oauth_web",
+				"event", "cancel.invalid_code",
+				"user_code", userCode,
+			)
+			http.Error(w, "Invalid or expired user code", http.StatusBadRequest)
+			return
+		}
+
+		// Mark as denied
+		if err := db.UpdateDeviceCodeStatus(deps.Conns, deviceCodeRecord.DeviceCode, "denied"); err != nil {
+			slog.Error("device.cancel.update_failed",
+				"component", "oauth_web",
+				"event", "cancel.update_failed",
+				"user_code", userCode,
+				"error", err,
+			)
+			http.Error(w, "Failed to cancel authorization", http.StatusInternalServerError)
+			return
+		}
+
+		// Log cancellation
+		remoteMetadata := middleware.RemoteFromContext(r.Context())
+		slog.Info("device.confirmation.cancelled",
+			"component", "oauth_web",
+			"event", "confirmation.cancelled",
+			"user_code", userCode,
+			"client_ip", remoteMetadata.IP,
+		)
+
+		// Show cancellation page
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head>
+	<title>Authorization Cancelled</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body { 
+			font-family: Arial, sans-serif; 
+			max-width: 600px; 
+			margin: 50px auto; 
+			padding: 20px;
+			text-align: center;
+			background: #f5f5f5;
+		}
+		.cancelled-icon {
+			color: #dc3545;
+			font-size: 72px;
+			margin: 20px 0;
+		}
+		.content {
+			background: white;
+			padding: 30px;
+			border-radius: 5px;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+		}
+		h1 {
+			color: #dc3545;
+			margin: 20px 0;
+		}
+		p {
+			color: #666;
+			line-height: 1.6;
+			margin: 15px 0;
+		}
+	</style>
+</head>
+<body>
+	<div class="content">
+		<div class="cancelled-icon">✖</div>
+		<h1>Authorization Cancelled</h1>
+		<p>You have denied access to the device. The authorization request has been cancelled.</p>
+		<p>The device will not be able to access your patrol scores.</p>
+		<p style="margin-top: 30px; font-size: 14px; color: #999;">You may close this window.</p>
+	</div>
+</body>
+</html>
+		`)
+	}
+}
+
 
 func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +501,240 @@ func markDeviceCodeStatus(conns *db.Connections, sessionID, status string) {
 		return
 	}
 }
+
+func showDeviceConfirmationPage(w http.ResponseWriter, userCode string, deviceCode *db.DeviceCode, currentMetadata middleware.RemoteMetadata, sessionID string) {
+	w.Header().Set("Content-Type", "text/html")
+
+	// Extract device metadata (handle NULL for old codes)
+	// HTML-escape all values to prevent XSS injection
+	deviceIP := "Unknown"
+	if deviceCode.DeviceRequestIP != nil {
+		deviceIP = html.EscapeString(*deviceCode.DeviceRequestIP)
+	}
+
+	deviceCountry := "Unknown"
+	if deviceCode.DeviceRequestCountry != nil {
+		deviceCountry = html.EscapeString(*deviceCode.DeviceRequestCountry)
+	}
+
+	deviceTime := "Unknown"
+	if deviceCode.DeviceRequestTime != nil {
+		deviceTime = html.EscapeString(deviceCode.DeviceRequestTime.Format("2006-01-02 15:04:05 MST"))
+	}
+
+	// Current user metadata
+	// HTML-escape to prevent header injection attacks
+	currentIP := html.EscapeString(currentMetadata.IP)
+	currentCountry := currentMetadata.Country
+	if currentCountry == "" {
+		currentCountry = "Unknown"
+	} else {
+		currentCountry = html.EscapeString(currentCountry)
+	}
+
+	// Build country mismatch warning HTML
+	countryWarning := ""
+	if deviceCountry != "Unknown" && currentCountry != "Unknown" && deviceCountry != currentCountry {
+		countryWarning = fmt.Sprintf(`
+	<div class="warning">
+		<div class="warning-title">⚠️ Country Mismatch Detected</div>
+		<p>The device made its request from <strong>%s</strong>, but you are currently connecting from <strong>%s</strong>.</p>
+		<p>This could indicate:</p>
+		<ul>
+			<li>You are using a VPN or proxy</li>
+			<li>You are traveling</li>
+			<li>Someone else may be attempting to authorize a device</li>
+		</ul>
+		<p><strong>Only continue if you recognize this device and initiated this authorization request.</strong></p>
+	</div>
+		`, deviceCountry, currentCountry)
+	}
+
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head>
+	<title>Confirm Device Authorization</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body { 
+			font-family: Arial, sans-serif; 
+			max-width: 600px; 
+			margin: 50px auto; 
+			padding: 20px;
+			background: #f5f5f5;
+		}
+		h1 {
+			color: #333;
+			border-bottom: 2px solid #4CAF50;
+			padding-bottom: 10px;
+		}
+		.intro {
+			background: white;
+			padding: 20px;
+			border-radius: 5px;
+			margin: 20px 0;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+		}
+		.user-code {
+			font-size: 32px;
+			font-weight: bold;
+			letter-spacing: 3px;
+			margin: 20px 0;
+			padding: 20px;
+			background: #f0f0f0;
+			border-radius: 5px;
+			text-align: center;
+			border: 2px solid #4CAF50;
+			font-family: 'Courier New', monospace;
+		}
+		.info-section {
+			background: white;
+			margin: 20px 0;
+			padding: 20px;
+			border: 1px solid #ddd;
+			border-radius: 5px;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+		}
+		.info-section h3 {
+			margin-top: 0;
+			color: #555;
+			border-bottom: 1px solid #ddd;
+			padding-bottom: 10px;
+		}
+		.info-row {
+			margin: 12px 0;
+			display: flex;
+		}
+		.label {
+			font-weight: bold;
+			min-width: 120px;
+			color: #666;
+		}
+		.value {
+			color: #333;
+		}
+		.warning {
+			background: #fff3cd;
+			border: 2px solid #ffc107;
+			padding: 20px;
+			margin: 20px 0;
+			border-radius: 5px;
+			color: #856404;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+		}
+		.warning-title {
+			font-weight: bold;
+			font-size: 20px;
+			margin-bottom: 15px;
+		}
+		.warning ul {
+			margin: 10px 0;
+			padding-left: 25px;
+		}
+		.warning li {
+			margin: 8px 0;
+		}
+		.buttons {
+			margin-top: 30px;
+			display: flex;
+			gap: 15px;
+		}
+		button {
+			padding: 15px 30px;
+			font-size: 16px;
+			font-weight: bold;
+			border: none;
+			border-radius: 5px;
+			cursor: pointer;
+			transition: background 0.3s;
+		}
+		.btn-confirm {
+			background: #28a745;
+			color: white;
+			flex: 1;
+		}
+		.btn-confirm:hover {
+			background: #218838;
+		}
+		.btn-cancel {
+			background: #dc3545;
+			color: white;
+			flex: 1;
+		}
+		.btn-cancel:hover {
+			background: #c82333;
+		}
+		@media (max-width: 600px) {
+			body {
+				margin: 10px;
+				padding: 10px;
+			}
+			.user-code {
+				font-size: 24px;
+			}
+			.buttons {
+				flex-direction: column;
+			}
+		}
+	</style>
+</head>
+<body>
+	<h1>Confirm Device Authorization</h1>
+	
+	<div class="intro">
+		<p><strong>A device is requesting access to view Patrol Scores for your scout section.</strong></p>
+		<p>Before proceeding, please verify the information below.</p>
+	</div>
+
+	<div class="info-section">
+		<h3>Verify Device Code</h3>
+		<p>Ensure that your device displays this code:</p>
+		<div class="user-code">%s</div>
+	</div>
+
+	<div class="info-section">
+		<h3>Device Information</h3>
+		<div class="info-row">
+			<span class="label">IP Address:</span>
+			<span class="value">%s</span>
+		</div>
+		<div class="info-row">
+			<span class="label">Country:</span>
+			<span class="value">%s</span>
+		</div>
+		<div class="info-row">
+			<span class="label">Requested:</span>
+			<span class="value">%s</span>
+		</div>
+	</div>
+
+	<div class="info-section">
+		<h3>Your Current Connection</h3>
+		<div class="info-row">
+			<span class="label">IP Address:</span>
+			<span class="value">%s</span>
+		</div>
+		<div class="info-row">
+			<span class="label">Country:</span>
+			<span class="value">%s</span>
+		</div>
+	</div>
+
+	%s
+
+	<form method="POST" action="/device/confirm">
+		<input type="hidden" name="user_code" value="%s">
+		<input type="hidden" name="session_id" value="%s">
+		<div class="buttons">
+			<button type="submit" class="btn-confirm">Confirm and Continue</button>
+			<button type="button" class="btn-cancel" onclick="if(confirm('Are you sure you want to cancel this authorization?')) { window.location.href='/device/cancel?user_code=%s'; }">Cancel</button>
+		</div>
+	</form>
+</body>
+</html>
+	`, html.EscapeString(userCode), deviceIP, deviceCountry, deviceTime, currentIP, currentCountry, countryWarning, html.EscapeString(userCode), html.EscapeString(sessionID), html.EscapeString(userCode))
+}
+
 
 func showSectionSelectionPage(w http.ResponseWriter, sessionID string, sections []types.OSMSection) {
 	w.Header().Set("Content-Type", "text/html")

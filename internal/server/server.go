@@ -20,8 +20,10 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// Device OAuth Flow endpoints
 	mux.HandleFunc("/device/authorize", handlers.DeviceAuthorizeHandler(deps))
 	mux.HandleFunc("/device/token", handlers.DeviceTokenHandler(deps))
-	mux.HandleFunc("/device", handlers.OAuthAuthorizeHandler(deps)) // User verification page
-	mux.HandleFunc("/d/", handlers.ShortCodeRedirectHandler(deps))  // Short URL redirect for QR codes
+	mux.HandleFunc("/device", handlers.OAuthAuthorizeHandler(deps))       // User verification page
+	mux.HandleFunc("/d/", handlers.ShortCodeRedirectHandler(deps))        // Short URL redirect for QR codes
+	mux.HandleFunc("/device/confirm", handlers.OAuthConfirmHandler(deps)) // Device authorization confirmation
+	mux.HandleFunc("/device/cancel", handlers.OAuthCancelHandler(deps))   // Device authorization cancellation
 
 	// OAuth Web Flow endpoints (for OSM)
 	mux.HandleFunc("/oauth/authorize", handlers.OAuthAuthorizeHandler(deps))

@@ -144,14 +144,18 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Store in database
 		expiresAt := time.Now().Add(time.Duration(deps.Config.DeviceCodeExpiry) * time.Second)
-		deviceCodeRecord := &db.DeviceCode{
-			DeviceCode: deviceCode,
-			UserCode:   userCode,
-			ClientID:   req.ClientID,
-			ExpiresAt:  expiresAt,
-			Status:     "pending",
-			CreatedAt:  time.Now(),
-		}
+	now := time.Now()
+	deviceCodeRecord := &db.DeviceCode{
+		DeviceCode:           deviceCode,
+		UserCode:             userCode,
+		ClientID:             req.ClientID,
+		ExpiresAt:            expiresAt,
+		Status:               "pending",
+		CreatedAt:            now,
+		DeviceRequestIP:      &remoteMetadata.IP,
+		DeviceRequestCountry: &remoteMetadata.Country,
+		DeviceRequestTime:    &now,
+	}
 		if err := db.CreateDeviceCode(deps.Conns, deviceCodeRecord); err != nil {
 			slog.Error("device.authorize.db_store_failed",
 				"component", "device_oauth",
