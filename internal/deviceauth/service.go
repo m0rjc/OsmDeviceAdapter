@@ -74,11 +74,6 @@ func (s *Service) Authenticate(ctx context.Context, authHeader string) (types.Us
 		return nil, ErrInvalidToken
 	}
 
-	osmRefreshToken := ""
-	if deviceCodeRecord.OSMRefreshToken != nil {
-		osmRefreshToken = *deviceCodeRecord.OSMRefreshToken
-	}
-
 	osmAccessToken := ""
 	if deviceCodeRecord.OSMAccessToken != nil {
 		osmAccessToken = *deviceCodeRecord.OSMAccessToken
@@ -87,42 +82,13 @@ func (s *Service) Authenticate(ctx context.Context, authHeader string) (types.Us
 	// Check if we need to refresh the OSM token
 	if deviceCodeRecord.OSMTokenExpiry != nil && time.Now().After(deviceCodeRecord.OSMTokenExpiry.Add(-5*time.Minute)) {
 		// Token is expired or about to expire, refresh it
-		newTokens, err := s.osmAuth.RefreshToken(ctx, osmRefreshToken)
+		newAccessToken, err := s.RefreshUserTokenFromRecord(ctx, deviceCodeRecord)
 		if err != nil {
-			// Check if this is an authorization error (user revoked access)
-			if strings.Contains(err.Error(), "unauthorized (revoked)") {
-				slog.Warn("deviceauth.token_revoked",
-					"component", "deviceauth",
-					"event", "token.revoked",
-					"device_code_hash", deviceCodeRecord.DeviceCode[:8],
-					"error", err,
-				)
-				return nil, ErrTokenRevoked
-			}
-
-			// Temporary error (network, OSM server issue, etc.)
-			slog.Error("deviceauth.token_refresh_failed",
-				"component", "deviceauth",
-				"event", "token.refresh_error",
-				"device_code_hash", deviceCodeRecord.DeviceCode[:8],
-				"error", err,
-			)
-			return nil, ErrTokenRefreshFailed
+			// RefreshUserTokenFromRecord already handles logging and database updates
+			return nil, err
 		}
 
-		// Update tokens in database
-		newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
-		if err := db.UpdateDeviceCodeTokensOnly(s.conns, deviceCodeRecord.DeviceCode, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
-			slog.Error("deviceauth.token_update_failed",
-				"component", "deviceauth",
-				"event", "token.update_error",
-				"device_code_hash", deviceCodeRecord.DeviceCode[:8],
-				"error", err,
-			)
-			return nil, ErrTokenRefreshFailed
-		}
-
-		osmAccessToken = newTokens.AccessToken
+		osmAccessToken = newAccessToken
 	}
 
 	// Update last_used_at timestamp for this device
@@ -140,6 +106,88 @@ func (s *Service) Authenticate(ctx context.Context, authHeader string) (types.Us
 		deviceCodeRecord: deviceCodeRecord,
 		osmAccessToken:   osmAccessToken,
 	}, nil
+}
+
+// RefreshUserTokenFromRecord implements the osm.TokenRefresher interface.
+// It attempts to refresh the OSM access token for the given device code record.
+// If refresh fails with 401 (user revoked access), it marks the device as revoked.
+// Returns the new access token on success, or an error if refresh fails.
+func (s *Service) RefreshUserTokenFromRecord(ctx context.Context, deviceCodeRecordInterface interface{}) (string, error) {
+	// Type assert the interface{} to *db.DeviceCode
+	deviceCodeRecord, ok := deviceCodeRecordInterface.(*db.DeviceCode)
+	if !ok {
+		slog.Error("deviceauth.refresh_user_token.invalid_type",
+			"component", "deviceauth",
+			"event", "token.refresh_error",
+			"error", "deviceCodeRecord is not *db.DeviceCode",
+		)
+		return "", ErrInvalidToken
+	}
+
+	deviceCode := deviceCodeRecord.DeviceCode
+
+	// Get the refresh token
+	if deviceCodeRecord.OSMRefreshToken == nil {
+		slog.Error("deviceauth.refresh_user_token.no_refresh_token",
+			"component", "deviceauth",
+			"event", "token.refresh_error",
+			"device_code_hash", deviceCode[:8],
+		)
+		return "", ErrTokenRefreshFailed
+	}
+
+	// Attempt to refresh the token
+	newTokens, err := s.osmAuth.RefreshToken(ctx, *deviceCodeRecord.OSMRefreshToken)
+	if err != nil {
+		// Check if this is an authorization error (user revoked access) // FIXME: Use sentinel error here.
+		if strings.Contains(err.Error(), "unauthorized (revoked)") {
+			slog.Warn("deviceauth.refresh_user_token.revoked",
+				"component", "deviceauth",
+				"event", "token.revoked",
+				"device_code_hash", deviceCode[:8],
+				"error", err,
+			)
+			// Mark device as revoked in database
+			if revokeErr := db.RevokeDeviceCode(s.conns, deviceCode); revokeErr != nil {
+				slog.Error("deviceauth.refresh_user_token.revoke_failed",
+					"component", "deviceauth",
+					"event", "token.revoke_error",
+					"device_code_hash", deviceCode[:8],
+					"error", revokeErr,
+				)
+			}
+			return "", ErrTokenRevoked
+		}
+
+		// Temporary error (network, OSM server issue, etc.)
+		slog.Error("deviceauth.refresh_user_token.failed",
+			"component", "deviceauth",
+			"event", "token.refresh_error",
+			"device_code_hash", deviceCode[:8],
+			"error", err,
+		)
+		return "", ErrTokenRefreshFailed
+	}
+
+	// Update tokens in database
+	newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
+	if err := db.UpdateDeviceCodeTokensOnly(s.conns, deviceCode, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
+		slog.Error("deviceauth.refresh_user_token.update_failed",
+			"component", "deviceauth",
+			"event", "token.update_error",
+			"device_code_hash", deviceCode[:8],
+			"error", err,
+		)
+		return "", ErrTokenRefreshFailed
+	}
+
+	slog.Info("deviceauth.refresh_user_token.success",
+		"component", "deviceauth",
+		"event", "token.refreshed",
+		"device_code_hash", deviceCode[:8],
+	)
+
+	return newTokens.AccessToken, nil
 }
 
 // extractBearerToken extracts the token from a Bearer authorization header

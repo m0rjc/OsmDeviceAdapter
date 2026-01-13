@@ -10,13 +10,15 @@ type Client struct {
 	httpClient *http.Client
 	rlStore    RateLimitStore
 	recorder   LatencyRecorder
+	refresher  TokenRefresher
 }
 
-func NewClient(baseURL string, rlStore RateLimitStore, recorder LatencyRecorder) *Client {
+func NewClient(baseURL string, rlStore RateLimitStore, recorder LatencyRecorder, refresher TokenRefresher) *Client {
 	return &Client{
-		baseURL:  baseURL,
-		rlStore:  rlStore,
-		recorder: recorder,
+		baseURL:   baseURL,
+		rlStore:   rlStore,
+		recorder:  recorder,
+		refresher: refresher,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},

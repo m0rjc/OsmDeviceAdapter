@@ -35,6 +35,7 @@ type DeviceCode struct {
 	// - "awaiting_section": authorized but user needs to select a section
 	// - "authorized": fully authorized and ready for API access
 	// - "denied": user explicitly denied authorization
+	// - "revoked": OSM access was revoked by user (token refresh failed with 401)
 	Status string `gorm:"column:status;type:varchar(50);default:'pending'"`
 
 	// DeviceAccessToken is the token returned to and used by the device for API requests.

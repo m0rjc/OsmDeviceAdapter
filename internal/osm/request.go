@@ -65,6 +65,15 @@ type LatencyRecorder interface {
 	RecordRateLimit(userId *int, limitRemaining int, limitTotal int, limitResetSeconds int)
 }
 
+// TokenRefresher handles refreshing expired or expiring OSM access tokens.
+// Implementations should refresh the token, update the database, and handle revocation.
+type TokenRefresher interface {
+	// RefreshUserTokenFromRecord attempts to refresh the OSM access token for the given device.
+	// Returns the new access token on success, or an error if refresh fails.
+	// If the token was revoked by the user (401 from OSM), the device should be marked as revoked.
+	RefreshUserTokenFromRecord(ctx context.Context, deviceCodeRecord interface{}) (newAccessToken string, err error)
+}
+
 // requestConfig holds the configuration for a single OSM API request.
 type requestConfig struct {
 	path            string
@@ -74,6 +83,7 @@ type requestConfig struct {
 	sensitive       bool
 	userId          *int
 	userToken       string
+	retryAttempted  bool
 }
 
 // RequestOption defines a functional option for configuring an OSM API Request.
@@ -315,6 +325,80 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 			c.rlStore.MarkUserTemporarilyBlocked(ctx, *config.userId, blockedUntil)
 		}
 		return osmResponse, &ErrUserBlocked{blockedUntil}
+	}
+
+	// Handle 401 Unauthorized - attempt token refresh and retry
+	// Only attempt if we have a refresher and haven't already retried
+	if resp.StatusCode == http.StatusUnauthorized && c.refresher != nil && !config.retryAttempted {
+		slog.Info("osm.api.unauthorized_attempting_refresh",
+			"component", "osm_api",
+			"event", "api.retry",
+			"endpoint", endpoint,
+		)
+
+		// Extract device code from context (must be authenticated device request)
+		user, ok := ctx.Value(types.UserContextKey).(types.User)
+		if !ok {
+			slog.Debug("osm.api.no_user_in_context_for_retry",
+				"component", "osm_api",
+				"event", "api.retry.skip",
+				"endpoint", endpoint,
+			)
+			// No user in context - not a device request, can't refresh
+		} else {
+			// Type assert to get device code
+			type DeviceCodeProvider interface {
+				DeviceCode() interface{}
+			}
+			if authCtx, ok := user.(DeviceCodeProvider); ok {
+				deviceCodeRecord := authCtx.DeviceCode()
+
+				// Attempt to refresh the token
+				newToken, err := c.refresher.RefreshUserTokenFromRecord(ctx, deviceCodeRecord)
+				if err == nil {
+					// Token refresh succeeded - retry the request with the new token
+					slog.Info("osm.api.retry_with_new_token",
+						"component", "osm_api",
+						"event", "api.retry.success",
+						"endpoint", endpoint,
+					)
+
+					// Rebuild options with updated config
+					retryOptions := []RequestOption{
+						WithPath(config.path),
+						WithUser(types.NewUser(config.userId, newToken)),
+					}
+					if len(config.queryParameters) > 0 {
+						retryOptions = append(retryOptions, WithQueryParameters(config.queryParameters))
+					}
+					if config.sensitive {
+						retryOptions = append(retryOptions, WithSensitive())
+					}
+					if config.body != nil {
+						retryOptions = append(retryOptions, WithPostBody(config.body))
+					}
+					if config.contentType != "" {
+						retryOptions = append(retryOptions, WithContentType(config.contentType))
+					}
+
+					// Mark that we've already attempted a retry to prevent infinite loops
+					retryOptions = append(retryOptions, func(c *requestConfig) {
+						c.retryAttempted = true
+					})
+
+					// Retry the request
+					return c.Request(ctx, method, target, retryOptions...)
+				}
+
+				// Token refresh failed - log and continue to error handling below
+				// (RefreshUserTokenFromRecord already logged details)
+				slog.Debug("osm.api.token_refresh_failed_continuing",
+					"component", "osm_api",
+					"event", "api.retry.failed",
+					"endpoint", endpoint,
+				)
+			}
+		}
 	}
 
 	if resp.StatusCode != http.StatusOK {

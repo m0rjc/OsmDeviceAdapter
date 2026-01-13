@@ -2,6 +2,14 @@ package types
 
 import "time"
 
+// ContextKey is a type for context keys to avoid collisions
+type ContextKey string
+
+// Context keys used across the application
+const (
+	UserContextKey ContextKey = "user"
+)
+
 // User represents a user for the OSM API client.
 type User interface {
 	// UserID The OSM User ID if known

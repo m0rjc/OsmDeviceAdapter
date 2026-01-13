@@ -10,7 +10,6 @@ import (
 type contextKey string
 
 const (
-	userContextKey    contextKey = "user"
 	remoteIPKey       contextKey = "remote_ip"
 	remoteProtocolKey contextKey = "remote_protocol"
 	remoteCountryKey  contextKey = "remote_country"
@@ -25,12 +24,12 @@ type RemoteMetadata struct {
 
 // ContextWithUser adds a user to the context
 func ContextWithUser(ctx context.Context, user types.User) context.Context {
-	return context.WithValue(ctx, userContextKey, user)
+	return context.WithValue(ctx, types.UserContextKey, user)
 }
 
 // UserFromContext retrieves the user from the context
 func UserFromContext(ctx context.Context) (types.User, bool) {
-	user, ok := ctx.Value(userContextKey).(types.User)
+	user, ok := ctx.Value(types.UserContextKey).(types.User)
 	return user, ok
 }
 

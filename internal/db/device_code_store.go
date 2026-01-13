@@ -89,7 +89,7 @@ func FindDeviceCodeByAccessToken(conns *Connections, accessToken string) (*Devic
 
 // FindDeviceCodeByDeviceAccessToken finds a device code by its device access token
 // This is used for authenticating device API requests
-// Returns nil if not found or not authorized
+// Returns nil if not found, not authorized, or revoked
 func FindDeviceCodeByDeviceAccessToken(conns *Connections, deviceAccessToken string) (*DeviceCode, error) {
 	var record DeviceCode
 	err := conns.DB.Where("device_access_token = ? AND status = ?", deviceAccessToken, "authorized").First(&record).Error
@@ -139,10 +139,24 @@ func UpdateDeviceCodeLastUsed(conns *Connections, deviceCode string) error {
 		Update("last_used_at", time.Now()).Error
 }
 
+// RevokeDeviceCode marks a device as revoked and clears its OSM tokens.
+// This is called when OSM token refresh fails with a 401, indicating the user revoked access.
+func RevokeDeviceCode(conns *Connections, deviceCode string) error {
+	updates := map[string]interface{}{
+		"status":            "revoked",
+		"osm_access_token":  nil,
+		"osm_refresh_token": nil,
+		"osm_token_expiry":  nil,
+	}
+	return conns.DB.Model(&DeviceCode{}).
+		Where("device_code = ?", deviceCode).
+		Updates(updates).Error
+}
+
 // DeleteUnusedDeviceCodes deletes device codes that haven't been used within the threshold duration
-// and are in authorized status (to avoid deleting pending authorization flows)
+// and are in authorized or revoked status (to avoid deleting pending authorization flows)
 func DeleteUnusedDeviceCodes(conns *Connections, unusedThreshold time.Duration) error {
 	cutoffTime := time.Now().Add(-unusedThreshold)
-	return conns.DB.Where("status = ? AND (last_used_at IS NULL OR last_used_at < ?)", "authorized", cutoffTime).
+	return conns.DB.Where("status IN (?, ?) AND (last_used_at IS NULL OR last_used_at < ?)", "authorized", "revoked", cutoffTime).
 		Delete(&DeviceCode{}).Error
 }
