@@ -183,17 +183,15 @@ The 64x32 matrix displays up to 4 patrols:
 
 ```
 Eagles            145
-----------------------------
 Hawks             132
-----------------------------
 Wolves            128
-----------------------------
 Bears             115
 ```
 
-- Patrol names: Left justified (truncated to 8 characters if longer)
+- Patrol names: Left justified (truncated to 11 characters with small font)
 - Scores: Right justified
-- Separator lines between patrols
+- Clean layout without separator lines for maximum readability
+- Status indicator (2x2 pixel) in top-right corner shows connection/rate limit state
 
 ## Troubleshooting
 

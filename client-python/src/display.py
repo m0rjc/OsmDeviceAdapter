@@ -348,25 +348,20 @@ class MatrixDisplay:
         # Display up to 4 patrols
         row_height = 8
         for i, patrol in enumerate(patrols[:4]):
-            y = (i * row_height) + 7  # Baseline for text
+            y = (i * row_height) + 8  # Baseline for text (moved down slightly)
 
-            # Draw patrol name (left justified)
+            # Draw patrol name (left justified, using small font)
             name = patrol.name
-            if len(name) > 8:  # Truncate long names
-                name = name[:8]
-            self.draw_text(1, y, name, color=(0, 255, 0))
+            if len(name) > 11:  # Truncate long names (small font fits more)
+                name = name[:11]
+            self.draw_text(1, y, name, color=(0, 255, 0), font_size="small")
 
-            # Draw score (right justified)
+            # Draw score (right justified, using small font)
             score_text = str(patrol.score)
-            # Estimate text width (rough: 5 pixels per character)
+            # Small font is 5 pixels wide per character
             score_width = len(score_text) * 5
-            score_x = self.cols - score_width - 1
-            self.draw_text(score_x, y, score_text, color=(255, 255, 0))
-
-            # Draw separator line between patrols
-            if i < len(patrols) - 1:
-                line_y = (i + 1) * row_height - 1
-                self.draw_line(0, line_y, self.cols - 1, line_y, color=(50, 50, 50))
+            score_x = self.cols - score_width - 2  # Extra padding from edge
+            self.draw_text(score_x, y, score_text, color=(255, 255, 0), font_size="small")
 
         # Draw status indicator
         self.draw_status_indicator(rate_limit_state)
