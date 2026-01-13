@@ -6,7 +6,7 @@ DOCKER_REGISTRY?=k8s.localdev:32000
 DOCKER_TAG?=latest
 IMAGE=$(DOCKER_REGISTRY)/$(APP_NAME):$(DOCKER_TAG)
 HELM_RELEASE?=osm-device-adapter
-HELM_NAMESPACE?=default
+HELM_NAMESPACE?=osm-adapter
 MONITORING_NAMESPACE?=monitoring
 
 # Build the Go application

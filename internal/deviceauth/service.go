@@ -125,6 +125,17 @@ func (s *Service) Authenticate(ctx context.Context, authHeader string) (types.Us
 		osmAccessToken = newTokens.AccessToken
 	}
 
+	// Update last_used_at timestamp for this device
+	if err := db.UpdateDeviceCodeLastUsed(s.conns, deviceCodeRecord.DeviceCode); err != nil {
+		// Log the error but don't fail the authentication
+		slog.Error("deviceauth.last_used_update_failed",
+			"component", "deviceauth",
+			"event", "last_used.update_error",
+			"device_code_hash", deviceCodeRecord.DeviceCode[:8],
+			"error", err,
+		)
+	}
+
 	return &AuthContext{
 		deviceCodeRecord: deviceCodeRecord,
 		osmAccessToken:   osmAccessToken,

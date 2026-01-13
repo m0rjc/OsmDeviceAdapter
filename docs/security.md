@@ -205,6 +205,8 @@ This section documents the security controls that have been implemented and are 
 - ✅ **CSRF Protection**: Session validation and state parameter verification
 - ✅ **Audit Logging**: Structured logging of all security events
 - ✅ **Credential Review**: Full codebase audit completed for credential exposure
+- ✅ **Database Cleanup**: Automated cleanup of expired codes/sessions and unused devices
+- ✅ **Sliding Expiration**: Inactive devices automatically revoked after configurable period
 
 **Code Review Status:** As of January 2026, the entire codebase has been manually reviewed for credential exposure, token leakage, and security vulnerabilities. The implementation follows security best practices with defense-in-depth approach.
 
@@ -413,38 +415,43 @@ The application validates that required secrets are present at startup (see `int
    - ✅ Documented in "Implemented Protection Mechanisms" section above
    - **Status:** Fully implemented with graceful degradation
 
-3. **⏳ Session lifecycle validation** - PARTIALLY COMPLETE
+3. **✅ Session lifecycle validation** - COMPLETED
    - ✅ Sessions expire after 15 minutes (configured in code)
    - ✅ Database-backed sessions prevent client-side tampering
-   - ⏳ Automated cleanup job for expired sessions - See "Outstanding Tasks" below
-   - **Status:** Sessions are time-limited; automated cleanup pending
+   - ✅ Automated cleanup job for expired sessions via Kubernetes CronJob
+   - **Status:** Fully implemented with automated cleanup
 
 ### Outstanding Tasks
 
 #### Priority 1: Token Lifecycle Management
 
-1. **Automated cleanup of expired data**
+1. **✅ Automated cleanup of expired data** - COMPLETED
    - **Goal:** Prevent database bloat and limit exposure window for expired codes
-   - **Tasks:**
-     - Implement routine calls to `DeleteExpiredDeviceCodes()` and `DeleteExpiredSessions()`
-     - Create cleanup command in `cmd/cleanup/main.go`
-     - Add Kubernetes CronJob in `chart/templates/cronjob.yaml`
-     - Configure cleanup schedule in `chart/values.yaml` (recommend: hourly for sessions, daily for device codes)
-   - **Reference:** See `SecurityNeeded.md:15-23`
+   - **Implementation:**
+     - ✅ Created cleanup command in `cmd/cleanup/main.go`
+     - ✅ Added Kubernetes CronJob in `chart/templates/cronjob.yaml`
+     - ✅ Configured cleanup schedule in `chart/values.yaml` (default: daily at 2 AM)
+     - ✅ Cleanup runs: `DeleteExpiredDeviceCodes()` and `DeleteExpiredSessions()`
+   - **Configuration:**
+     - `cleanup.enabled: true` - Enable/disable cleanup CronJob
+     - `cleanup.schedule: "0 2 * * *"` - Cron schedule (default: daily at 2 AM)
+     - `cleanup.unusedThresholdDays: 30` - Days of inactivity before device cleanup
+   - **Status:** Fully implemented with configurable schedule and thresholds
 
-2. **Sliding device expiration**
+2. **✅ Sliding device expiration** - COMPLETED
    - **Goal:** Automatically expire devices that haven't been used in extended period
-   - **Tasks:**
-     - Add `last_used_at` timestamp to `DeviceCode` model
-     - Update timestamp on each authenticated API request (in auth middleware)
-     - Implement automatic expiry after inactivity period (recommend: 30-90 days)
-     - Add cleanup logic to remove expired device tokens
-     - Log when devices are expired due to inactivity
+   - **Implementation:**
+     - ✅ Added `last_used_at` timestamp to `DeviceCode` model (see `internal/db/models.go:91`)
+     - ✅ Update timestamp on each authenticated API request (see `internal/deviceauth/service.go:130-139`)
+     - ✅ Implemented `DeleteUnusedDeviceCodes()` with configurable inactivity period (default: 30 days)
+     - ✅ Added `UpdateDeviceCodeLastUsed()` method (see `internal/db/device_code_store.go:135-139`)
+     - ✅ Cleanup integrated into scheduled CronJob
    - **Benefits:**
      - Limits exposure if device is compromised and abandoned
      - Provides natural cleanup of unused authorizations
      - Balances security (automatic expiry) with convenience (no explicit refresh needed)
-   - **Reference:** See `docs/security.md:303-315`, `SecurityNeeded.md:24-27`
+     - Users will need to re-authenticate after extended periods (e.g., summer holidays)
+   - **Status:** Fully implemented with 30-day default (configurable via `--unused-threshold` flag)
 
 3. **OSM token revocation handling**
    - **Goal:** Gracefully handle cases where user revokes OSM access
@@ -548,12 +555,15 @@ The application validates that required secrets are present at startup (see `int
 - ✅ Comprehensive security audit of credential handling
 - ✅ Safe logging practices (truncated hashes, no token exposure)
 - ✅ Database-backed sessions (no client-side session data)
+- ✅ Automated cleanup of expired device codes and sessions (Kubernetes CronJob)
+- ✅ Sliding device expiration based on inactivity (configurable, default 30 days)
+- ✅ Last-used tracking for device access tokens
 
 ### Outstanding Tasks (Priority Order)
 
 **Priority 1 - Token Lifecycle:**
-1. Automated cleanup of expired device codes and sessions (CronJob)
-2. Sliding device expiration based on inactivity
+1. ✅ ~~Automated cleanup of expired device codes and sessions (CronJob)~~ - COMPLETED
+2. ✅ ~~Sliding device expiration based on inactivity~~ - COMPLETED
 3. OSM token revocation handling
 
 **Priority 2 - Secrets Management:**
@@ -579,8 +589,10 @@ The current implementation provides **strong security** for a personal/small-sca
 - Device confirmation flow protects against phishing and geographic attacks
 - Token isolation ensures OSM credentials never reach devices
 - Comprehensive audit logging enables security review
+- Automated database cleanup prevents data bloat and limits credential exposure windows
+- Sliding device expiration ensures unused devices are automatically revoked
 
-The system is **production-ready** for personal use and small-scale deployments. Outstanding tasks are primarily operational improvements (automated cleanup, monitoring) and future scalability enhancements.
+The system is **production-ready** for personal use and small-scale deployments. Outstanding tasks are primarily operational improvements (monitoring, secret rotation) and future scalability enhancements.
 
 ## References
 

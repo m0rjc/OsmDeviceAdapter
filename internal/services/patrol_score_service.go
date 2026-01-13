@@ -255,7 +255,7 @@ func (s *PatrolScoreService) cachePatrolScores(
 	key := fmt.Sprintf("patrol_scores:%s", deviceCode)
 	// Use fallback TTL for Redis (8 days) to keep stale data for emergency use
 	// TODO: Configure this as a Duration
-	fallbackTTL := time.Duration(s.config.CacheFallbackTTL) * time.Second
+	fallbackTTL := time.Duration(s.config.Cache.CacheFallbackTTL) * time.Second
 	err = s.conns.Redis.Set(ctx, key, data, fallbackTTL).Err()
 	if err != nil {
 		slog.Error("patrol_score_service.cachePatrolScores", "message", "cannot write to REDIS cache", "error", err)

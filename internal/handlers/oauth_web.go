@@ -38,7 +38,7 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		remoteMetadata := middleware.RemoteFromContext(r.Context())
 		clientIP := remoteMetadata.IP
 
-		entryRateLimit := time.Duration(deps.Config.DeviceEntryRateLimit) * time.Second
+		entryRateLimit := time.Duration(deps.Config.RateLimit.DeviceEntryRateLimit) * time.Second
 		entryRateLimitKey := fmt.Sprintf("%s:device_entry", clientIP)
 
 		rateLimitResult, err := deps.Conns.GetRateLimiter().CheckRateLimit(
@@ -65,7 +65,7 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 				"retry_after", rateLimitResult.RetryAfter.Seconds(),
 			)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if err := templates.RenderRateLimited(w, deps.Config.DeviceEntryRateLimit); err != nil {
+			if err := templates.RenderRateLimited(w, deps.Config.RateLimit.DeviceEntryRateLimit); err != nil {
 				slog.Error("template render failed", "error", err)
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
 			}

@@ -184,3 +184,25 @@ observability:
   serviceMonitor:
     enabled: true
     interval: 30s
+
+# Database cleanup configuration
+cleanup:
+  # Enable database cleanup CronJob
+  enabled: true
+  # Cron schedule for cleanup job (default: daily at 2 AM)
+  schedule: "0 2 * * *"
+  # Days of inactivity before a device is considered unused and cleaned up
+  # Default: 30 days (devices will need to re-authenticate after summer holidays)
+  unusedThresholdDays: 30
+  # Number of successful job history to keep
+  successfulJobsHistoryLimit: 3
+  # Number of failed job history to keep
+  failedJobsHistoryLimit: 3
+  # Resource limits for cleanup job
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi

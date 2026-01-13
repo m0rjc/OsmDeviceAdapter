@@ -28,11 +28,17 @@ func TestDeviceAuthorizeHandler_RateLimitExceeded(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		ExposedDomain:            "https://example.com",
-		DeviceCodeExpiry:         300,
-		DevicePollInterval:       5,
-		AllowedClientIDs:         []string{"test-client"},
-		DeviceAuthorizeRateLimit: 6,
+		ExternalDomains: config.ExternalDomainsConfig{
+			ExposedDomain: "https://example.com",
+		},
+		DeviceOAuth: config.DeviceOAuthConfig{
+			DeviceCodeExpiry:   300,
+			DevicePollInterval: 5,
+			AllowedClientIDs:   "test-client",
+		},
+		RateLimit: config.RateLimitConfig{
+			DeviceAuthorizeRateLimit: 6,
+		},
 	}
 
 	// Create mock rate limiter that denies requests
@@ -93,11 +99,17 @@ func TestDeviceAuthorizeHandler_RateLimitCustomBehavior(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		ExposedDomain:            "https://example.com",
-		DeviceCodeExpiry:         300,
-		DevicePollInterval:       5,
-		AllowedClientIDs:         []string{"test-client"},
-		DeviceAuthorizeRateLimit: 3, // Allow 3 requests
+		ExternalDomains: config.ExternalDomainsConfig{
+			ExposedDomain: "https://example.com",
+		},
+		DeviceOAuth: config.DeviceOAuthConfig{
+			DeviceCodeExpiry:   300,
+			DevicePollInterval: 5,
+			AllowedClientIDs:   "test-client",
+		},
+		RateLimit: config.RateLimitConfig{
+			DeviceAuthorizeRateLimit: 3, // Allow 3 requests
+		},
 	}
 
 	// Create mock with custom logic: allow first 3 requests, deny the 4th
@@ -194,8 +206,10 @@ func TestDeviceTokenHandler_SlowDown(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		DevicePollInterval: 5,
-		AllowedClientIDs:   []string{"test-client"},
+		DeviceOAuth: config.DeviceOAuthConfig{
+			DevicePollInterval: 5,
+			AllowedClientIDs:   "test-client",
+		},
 	}
 
 	// Mock rate limiter that denies (too fast polling)
@@ -252,10 +266,16 @@ func TestMockRateLimiter_CallTracking(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		ExposedDomain:            "https://example.com",
-		DeviceCodeExpiry:         300,
-		AllowedClientIDs:         []string{"test-client"},
-		DeviceAuthorizeRateLimit: 6,
+		ExternalDomains: config.ExternalDomainsConfig{
+			ExposedDomain: "https://example.com",
+		},
+		DeviceOAuth: config.DeviceOAuthConfig{
+			DeviceCodeExpiry: 300,
+			AllowedClientIDs: "test-client",
+		},
+		RateLimit: config.RateLimitConfig{
+			DeviceAuthorizeRateLimit: 6,
+		},
 	}
 
 	mockRateLimiter := db.NewMockRateLimiter()

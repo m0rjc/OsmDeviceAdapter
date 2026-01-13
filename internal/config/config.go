@@ -1,130 +1,116 @@
 package config
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
+
+	"github.com/m0rjc/goconfig"
 )
 
-type Config struct {
-	// Server configuration
-	Port int
-	Host string
-
-	// External domains
-	ExposedDomain string // The domain where this service is exposed
-	OSMDomain     string // Online Scout Manager domain
-
-	// OAuth configuration for OSM
-	OSMClientID     string
-	OSMClientSecret string
-	OSMRedirectURI  string
-
-	// Database
-	DatabaseURL string
-
-	// Redis
-	RedisURL       string
-	RedisKeyPrefix string
-
-	// Device OAuth configuration
-	DeviceCodeExpiry   int      // seconds
-	DevicePollInterval int      // seconds
-	AllowedClientIDs   []string // List of allowed OAuth client IDs
-
-	// Rate limiting configuration
-	DeviceAuthorizeRateLimit int // max requests per minute per IP for /device/authorize (default: 6)
-	DeviceEntryRateLimit     int // seconds between device entry submissions per IP (default: 5)
-
-	// Cache configuration (for patrol scores and other data)
-	CacheFallbackTTL int // seconds - how long to keep stale data for emergency use (default: 8 days)
-
-	// Rate limiting thresholds for dynamic cache TTL
-	RateLimitCaution  int // remaining requests threshold for caution level (default: 200)
-	RateLimitWarning  int // remaining requests threshold for warning level (default: 100)
-	RateLimitCritical int // remaining requests threshold for critical level (default: 20)
+// ServerConfig holds HTTP server configuration
+type ServerConfig struct {
+	Port int    `key:"PORT" default:"8080" min:"1" max:"65535"`
+	Host string `key:"HOST" default:"0.0.0.0"`
 }
 
-func Load() (*Config, error) {
-	cfg := &Config{
-		Port:               getEnvAsInt("PORT", 8080),
-		Host:               getEnv("HOST", "0.0.0.0"),
-		ExposedDomain:      getEnv("EXPOSED_DOMAIN", ""),
-		OSMDomain:          getEnv("OSM_DOMAIN", "https://www.onlinescoutmanager.co.uk"),
-		OSMClientID:        getEnv("OSM_CLIENT_ID", ""),
-		OSMClientSecret:    getEnv("OSM_CLIENT_SECRET", ""),
-		OSMRedirectURI:     getEnv("OSM_REDIRECT_URI", ""),
-		DatabaseURL:        getEnv("DATABASE_URL", ""),
-		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379"),
-		RedisKeyPrefix:     getEnv("REDIS_KEY_PREFIX", ""),
-		DeviceCodeExpiry:         getEnvAsInt("DEVICE_CODE_EXPIRY", 300),           // 5 minutes default
-		DevicePollInterval:       getEnvAsInt("DEVICE_POLL_INTERVAL", 5),           // 5 seconds default
-		AllowedClientIDs:         parseClientIDs(getEnv("ALLOWED_CLIENT_IDS", "")),
-		DeviceAuthorizeRateLimit: getEnvAsInt("DEVICE_AUTHORIZE_RATE_LIMIT", 6),    // 6 per minute
-		DeviceEntryRateLimit:     getEnvAsInt("DEVICE_ENTRY_RATE_LIMIT", 5),        // 5 seconds between entries
-		CacheFallbackTTL:              getEnvAsInt("CACHE_FALLBACK_TTL", 691200),        // 8 days default (for weekly scout meetings)
-		RateLimitCaution:              getEnvAsInt("RATE_LIMIT_CAUTION", 200),           // Start extending cache TTL
-		RateLimitWarning:              getEnvAsInt("RATE_LIMIT_WARNING", 100),           // Extend cache TTL further
-		RateLimitCritical:             getEnvAsInt("RATE_LIMIT_CRITICAL", 20),           // Maximum cache TTL extension
-	}
+// ExternalDomainsConfig holds external domain configuration
+type ExternalDomainsConfig struct {
+	ExposedDomain string `key:"EXPOSED_DOMAIN" required:"true"` // The domain where this service is exposed
+	OSMDomain     string `key:"OSM_DOMAIN" default:"https://www.onlinescoutmanager.co.uk"`
+}
 
-	// Validate required configuration
-	if cfg.ExposedDomain == "" {
-		return nil, fmt.Errorf("EXPOSED_DOMAIN is required")
-	}
-	if cfg.OSMClientID == "" {
-		return nil, fmt.Errorf("OSM_CLIENT_ID is required")
-	}
-	if cfg.OSMClientSecret == "" {
-		return nil, fmt.Errorf("OSM_CLIENT_SECRET is required")
-	}
-	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required")
-	}
-	if len(cfg.AllowedClientIDs) == 0 {
-		return nil, fmt.Errorf("ALLOWED_CLIENT_IDS is required")
+// OAuthConfig holds OAuth configuration for OSM
+type OAuthConfig struct {
+	OSMClientID     string `key:"OSM_CLIENT_ID" required:"true"`
+	OSMClientSecret string `key:"OSM_CLIENT_SECRET" required:"true"`
+	OSMRedirectURI  string `key:"OSM_REDIRECT_URI"` // Computed from ExposedDomain if not set
+}
+
+// DatabaseConfig holds database connection configuration
+type DatabaseConfig struct {
+	DatabaseURL string `key:"DATABASE_URL" required:"true"`
+}
+
+// RedisConfig holds Redis connection configuration
+type RedisConfig struct {
+	RedisURL       string `key:"REDIS_URL" default:"redis://localhost:6379"`
+	RedisKeyPrefix string `key:"REDIS_KEY_PREFIX"`
+}
+
+// DeviceOAuthConfig holds device OAuth flow configuration
+type DeviceOAuthConfig struct {
+	DeviceCodeExpiry   int    `key:"DEVICE_CODE_EXPIRY" default:"300" min:"60"`   // seconds (5 minutes default)
+	DevicePollInterval int    `key:"DEVICE_POLL_INTERVAL" default:"5" min:"1"`    // seconds
+	AllowedClientIDs   string `key:"ALLOWED_CLIENT_IDS" required:"true"`          // Comma-separated list
+}
+
+// RateLimitConfig holds rate limiting configuration
+type RateLimitConfig struct {
+	DeviceAuthorizeRateLimit int `key:"DEVICE_AUTHORIZE_RATE_LIMIT" default:"6" min:"1"` // max requests per minute per IP
+	DeviceEntryRateLimit     int `key:"DEVICE_ENTRY_RATE_LIMIT" default:"5" min:"1"`     // seconds between entries
+}
+
+// CacheConfig holds cache configuration for patrol scores and other data
+type CacheConfig struct {
+	CacheFallbackTTL  int `key:"CACHE_FALLBACK_TTL" default:"691200" min:"0"` // seconds (8 days default for weekly scout meetings)
+	RateLimitCaution  int `key:"RATE_LIMIT_CAUTION" default:"200" min:"0"`    // remaining requests threshold for caution
+	RateLimitWarning  int `key:"RATE_LIMIT_WARNING" default:"100" min:"0"`    // remaining requests threshold for warning
+	RateLimitCritical int `key:"RATE_LIMIT_CRITICAL" default:"20" min:"0"`    // remaining requests threshold for critical
+}
+
+// Config is the complete application configuration
+type Config struct {
+	Server         ServerConfig
+	ExternalDomains ExternalDomainsConfig
+	OAuth          OAuthConfig
+	Database       DatabaseConfig
+	Redis          RedisConfig
+	DeviceOAuth    DeviceOAuthConfig
+	RateLimit      RateLimitConfig
+	Cache          CacheConfig
+}
+
+// MinimalConfig is the minimal configuration needed for database cleanup jobs
+type MinimalConfig struct {
+	Database DatabaseConfig
+	Redis    RedisConfig
+}
+
+// Load loads the complete application configuration from environment variables
+func Load() (*Config, error) {
+	cfg := &Config{}
+
+	if err := goconfig.Load(context.Background(), cfg); err != nil {
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
 	// Set OSM redirect URI if not explicitly provided
-	if cfg.OSMRedirectURI == "" {
-		cfg.OSMRedirectURI = fmt.Sprintf("%s/oauth/callback", cfg.ExposedDomain)
+	if cfg.OAuth.OSMRedirectURI == "" {
+		cfg.OAuth.OSMRedirectURI = fmt.Sprintf("%s/oauth/callback", cfg.ExternalDomains.ExposedDomain)
 	}
 
 	return cfg, nil
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+// LoadMinimal loads only database and Redis configuration (for cleanup jobs)
+func LoadMinimal() (*MinimalConfig, error) {
+	cfg := &MinimalConfig{}
+
+	if err := goconfig.Load(context.Background(), cfg); err != nil {
+		return nil, fmt.Errorf("failed to load minimal configuration: %w", err)
 	}
-	return defaultValue
+
+	return cfg, nil
 }
 
-func getEnvAsInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
-
-func getEnvAsBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
-		}
-	}
-	return defaultValue
-}
-
-func parseClientIDs(value string) []string {
-	if value == "" {
+// ParseClientIDs parses the comma-separated list of client IDs
+func (d *DeviceOAuthConfig) ParseClientIDs() []string {
+	if d.AllowedClientIDs == "" {
 		return []string{}
 	}
 
-	parts := strings.Split(value, ",")
+	parts := strings.Split(d.AllowedClientIDs, ",")
 	clientIDs := make([]string, 0, len(parts))
 
 	for _, part := range parts {

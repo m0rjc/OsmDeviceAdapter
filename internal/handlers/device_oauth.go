@@ -66,7 +66,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			r.Context(),
 			"device_authorize",
 			rateLimitKey,
-			int64(deps.Config.DeviceAuthorizeRateLimit),
+			int64(deps.Config.RateLimit.DeviceAuthorizeRateLimit),
 			time.Minute,
 		)
 		if err != nil {
@@ -86,7 +86,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 				"retry_after", rateLimitResult.RetryAfter.Seconds(),
 			)
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(rateLimitResult.RetryAfter.Seconds())))
-			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", deps.Config.DeviceAuthorizeRateLimit))
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", deps.Config.RateLimit.DeviceAuthorizeRateLimit))
 			w.Header().Set("X-RateLimit-Remaining", "0")
 			http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
 			return
@@ -104,7 +104,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Validate client ID
-		if !isClientIDAllowed(req.ClientID, deps.Config.AllowedClientIDs) {
+		if !isClientIDAllowed(req.ClientID, deps.Config.DeviceOAuth.ParseClientIDs()) {
 			slog.Warn("device.authorize.denied",
 				"component", "device_oauth",
 				"event", "authorize.denied",
@@ -143,7 +143,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Store in database
-		expiresAt := time.Now().Add(time.Duration(deps.Config.DeviceCodeExpiry) * time.Second)
+		expiresAt := time.Now().Add(time.Duration(deps.Config.DeviceOAuth.DeviceCodeExpiry) * time.Second)
 	now := time.Now()
 	deviceCodeRecord := &db.DeviceCode{
 		DeviceCode:           deviceCode,
@@ -169,11 +169,11 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Build verification URLs
-		verificationURI := fmt.Sprintf("%s/device", deps.Config.ExposedDomain)
-		verificationURIComplete := fmt.Sprintf("%s/device?user_code=%s", deps.Config.ExposedDomain, userCode)
+		verificationURI := fmt.Sprintf("%s/device", deps.Config.ExternalDomains.ExposedDomain)
+		verificationURIComplete := fmt.Sprintf("%s/device?user_code=%s", deps.Config.ExternalDomains.ExposedDomain, userCode)
 		// Short URL for QR codes (no hyphen in user code)
 		userCodeNoHyphen := strings.ReplaceAll(userCode, "-", "")
-		verificationURIShort := fmt.Sprintf("%s/d/%s", deps.Config.ExposedDomain, userCodeNoHyphen)
+		verificationURIShort := fmt.Sprintf("%s/d/%s", deps.Config.ExternalDomains.ExposedDomain, userCodeNoHyphen)
 
 		slog.Info("device.authorize.success",
 			"component", "device_oauth",
@@ -181,7 +181,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			"client_id", req.ClientID,
 			"user_code", userCode,
 			"device_code_hash", fmt.Sprintf("%s...", deviceCode[:8]), // Log truncated for security
-			"expires_in", deps.Config.DeviceCodeExpiry,
+			"expires_in", deps.Config.DeviceOAuth.DeviceCodeExpiry,
 		)
 		metrics.DeviceAuthRequests.WithLabelValues(req.ClientID, "success").Inc()
 
@@ -191,8 +191,8 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			VerificationURI:         verificationURI,
 			VerificationURIComplete: verificationURIComplete,
 			VerificationURIShort:    verificationURIShort,
-			ExpiresIn:               deps.Config.DeviceCodeExpiry,
-			Interval:                deps.Config.DevicePollInterval,
+			ExpiresIn:               deps.Config.DeviceOAuth.DeviceCodeExpiry,
+			Interval:                deps.Config.DeviceOAuth.DevicePollInterval,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -224,7 +224,7 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Enforce slow_down - client must not poll faster than the configured interval
-		pollInterval := time.Duration(deps.Config.DevicePollInterval) * time.Second
+		pollInterval := time.Duration(deps.Config.DeviceOAuth.DevicePollInterval) * time.Second
 		pollKey := fmt.Sprintf("device_token_poll:%s", req.DeviceCode)
 
 		// Check if polling too fast using rate limiter (1 request per poll interval)
@@ -252,7 +252,7 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 				"device_code_hash", fmt.Sprintf("%s...", req.DeviceCode[:8]),
 				"retry_after", pollResult.RetryAfter.Seconds(),
 			)
-			sendTokenError(w, "slow_down", fmt.Sprintf("Polling too fast. Please wait at least %d seconds between requests.", deps.Config.DevicePollInterval))
+			sendTokenError(w, "slow_down", fmt.Sprintf("Polling too fast. Please wait at least %d seconds between requests.", deps.Config.DeviceOAuth.DevicePollInterval))
 			return
 		}
 

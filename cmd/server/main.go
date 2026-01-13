@@ -36,7 +36,7 @@ func main() {
 	slog.Info("configuration loaded successfully")
 
 	// Initialize database connections (GORM now handles migrations automatically)
-	dbConn, err := db.NewPostgresConnection(cfg.DatabaseURL)
+	dbConn, err := db.NewPostgresConnection(cfg.Database.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
@@ -50,21 +50,21 @@ func main() {
 	slog.Info("database connection established")
 
 	// Initialize Redis cache
-	redisClient, err := db.NewRedisClient(cfg.RedisURL, cfg.RedisKeyPrefix)
+	redisClient, err := db.NewRedisClient(cfg.Redis.RedisURL, cfg.Redis.RedisKeyPrefix)
 	if err != nil {
 		slog.Error("failed to connect to Redis", "error", err)
 		os.Exit(1)
 	}
 	defer redisClient.Close()
-	slog.Info("redis connection established", "key_prefix", cfg.RedisKeyPrefix)
+	slog.Info("redis connection established", "key_prefix", cfg.Redis.RedisKeyPrefix)
 
 	// Create database connections wrapper
 	conns := db.NewConnections(dbConn, redisClient)
 
 	rlStore := osm.NewPrometheusRateLimitDecorator(redisClient)
 	recorder := osm.NewPrometheusLatencyRecorder()
-	osmClient := osm.NewClient(cfg.OSMDomain, rlStore, recorder)
-	oauthClient := oauthclient.New(cfg.OSMClientID, cfg.OSMClientSecret, cfg.OSMRedirectURI, osmClient)
+	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder)
+	oauthClient := oauthclient.New(cfg.OAuth.OSMClientID, cfg.OAuth.OSMClientSecret, cfg.OAuth.OSMRedirectURI, osmClient)
 	deviceAuthService := deviceauth.NewService(conns, oauthClient)
 
 	// Create handler dependencies
@@ -94,8 +94,8 @@ func main() {
 
 	// Start main server in a goroutine
 	go func() {
-		addr := fmt.Sprintf(":%d", cfg.Port)
-		slog.Info("server listening", "address", addr, "port", cfg.Port)
+		addr := fmt.Sprintf(":%d", cfg.Server.Port)
+		slog.Info("server listening", "address", addr, "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)

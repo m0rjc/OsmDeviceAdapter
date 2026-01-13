@@ -87,6 +87,10 @@ type DeviceCode struct {
 	// DeviceRequestTime is when the device initiated authorization.
 	DeviceRequestTime *time.Time `gorm:"column:device_request_time"`
 
+	// LastUsedAt is when the device last made an API request.
+	// Used to identify and clean up unused devices after a configurable period.
+	LastUsedAt *time.Time `gorm:"column:last_used_at;index:idx_device_codes_last_used"`
+
 	// DeviceSessions are temporary web sessions used during the OAuth flow.
 	// These are automatically deleted when the device code is deleted.
 	DeviceSessions []DeviceSession `gorm:"foreignKey:DeviceCode;constraint:OnDelete:CASCADE"`

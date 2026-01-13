@@ -26,13 +26,28 @@ func setupTestDeps(t *testing.T, allowedClientIDs []string) *Dependencies {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// Convert allowedClientIDs slice to comma-separated string
+	allowedClientIDsStr := ""
+	if len(allowedClientIDs) > 0 {
+		allowedClientIDsStr = allowedClientIDs[0]
+		for i := 1; i < len(allowedClientIDs); i++ {
+			allowedClientIDsStr += "," + allowedClientIDs[i]
+		}
+	}
+
 	cfg := &config.Config{
-		ExposedDomain:            "https://example.com",
-		DeviceCodeExpiry:         300,
-		DevicePollInterval:       5,
-		AllowedClientIDs:         allowedClientIDs,
-		DeviceAuthorizeRateLimit: 6,
-		DeviceEntryRateLimit:     5,
+		ExternalDomains: config.ExternalDomainsConfig{
+			ExposedDomain: "https://example.com",
+		},
+		DeviceOAuth: config.DeviceOAuthConfig{
+			DeviceCodeExpiry:   300,
+			DevicePollInterval: 5,
+			AllowedClientIDs:   allowedClientIDsStr,
+		},
+		RateLimit: config.RateLimitConfig{
+			DeviceAuthorizeRateLimit: 6,
+			DeviceEntryRateLimit:     5,
+		},
 	}
 
 	// Create connections wrapper with mock rate limiter (no Redis required for tests)

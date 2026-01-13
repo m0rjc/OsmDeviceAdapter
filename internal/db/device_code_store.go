@@ -131,3 +131,18 @@ func UpdateDeviceCodeTermInfo(conns *Connections, deviceCode string, userID int,
 		Where("device_code = ?", deviceCode).
 		Updates(updates).Error
 }
+
+// UpdateDeviceCodeLastUsed updates the last_used_at timestamp for a device
+func UpdateDeviceCodeLastUsed(conns *Connections, deviceCode string) error {
+	return conns.DB.Model(&DeviceCode{}).
+		Where("device_code = ?", deviceCode).
+		Update("last_used_at", time.Now()).Error
+}
+
+// DeleteUnusedDeviceCodes deletes device codes that haven't been used within the threshold duration
+// and are in authorized status (to avoid deleting pending authorization flows)
+func DeleteUnusedDeviceCodes(conns *Connections, unusedThreshold time.Duration) error {
+	cutoffTime := time.Now().Add(-unusedThreshold)
+	return conns.DB.Where("status = ? AND (last_used_at IS NULL OR last_used_at < ?)", "authorized", cutoffTime).
+		Delete(&DeviceCode{}).Error
+}

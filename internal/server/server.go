@@ -38,11 +38,11 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// 1. Remote metadata (Cloudflare headers, HTTPS redirect, HSTS) - applied to all routes
 	// 2. Logging middleware - applied to all routes
 	handler := loggingMiddleware(
-		middleware.RemoteMetadataMiddleware(cfg.ExposedDomain)(mux),
+		middleware.RemoteMetadataMiddleware(cfg.ExternalDomains.ExposedDomain)(mux),
 	)
 
 	return &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler: handler,
 	}
 }
