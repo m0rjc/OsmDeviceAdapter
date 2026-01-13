@@ -51,7 +51,20 @@ make
 # Install Python bindings
 cd bindings/python
 sudo pip3 install -e .
+
+# Install BDF fonts (required for text display)
+cd ~/rpi-rgb-led-matrix
+sudo mkdir -p /usr/local/share/fonts
+sudo cp fonts/*.bdf /usr/local/share/fonts/
 ```
+
+**Important:** The display requires BDF (Bitmap Distribution Format) fonts to show text. The fonts come with the rpi-rgb-led-matrix library. If text doesn't appear on the display, run:
+
+```bash
+./find_fonts.sh
+```
+
+This will locate fonts or provide installation instructions.
 
 ### 3. Install Scoreboard Application
 
@@ -187,6 +200,23 @@ Bears             115
 ### "rgbmatrix library not available"
 
 The RGB matrix library must be compiled and installed separately. See step 2 of Installation.
+
+### No text appears on the display
+
+The display requires BDF fonts (not TrueType fonts). The fonts come with the rpi-rgb-led-matrix library:
+
+```bash
+# Run the font finder script
+cd ~/OsmDeviceAdapter/client-python
+./find_fonts.sh
+
+# If fonts not found, install them manually:
+cd ~/rpi-rgb-led-matrix
+sudo mkdir -p /usr/local/share/fonts
+sudo cp fonts/*.bdf /usr/local/share/fonts/
+```
+
+Required fonts: `7x13.bdf` (normal text) and `5x7.bdf` (small text)
 
 ### Display is flickering
 

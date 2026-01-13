@@ -48,14 +48,13 @@ class ScoreboardApp:
         self.cache_expires_at = None  # Track when to poll next
         self.current_rate_limit_state = "NONE"  # Track current state
 
-        # Set up signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
+        # Set up signal handler for SIGTERM (SIGINT/CTRL-C handled by KeyboardInterrupt)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _signal_handler(self, signum, frame):
-        """Handle shutdown signals."""
+        """Handle SIGTERM signal by raising KeyboardInterrupt for clean shutdown."""
         logger.info(f"Received signal {signum}, shutting down...")
-        self.running = False
+        raise KeyboardInterrupt()
 
     def load_token(self) -> bool:
         """Load saved access token from file.
@@ -92,12 +91,13 @@ class ScoreboardApp:
         """Perform device flow authentication."""
         logger.info("Starting device flow authentication...")
 
-        def on_code_received(user_code: str, verification_uri: str, verification_uri_complete: str):
+        def on_code_received(user_code: str, verification_uri: str, verification_uri_complete: str, verification_uri_short: str):
             """Called when device code is received."""
             logger.info(f"User code: {user_code}")
             logger.info(f"Verification URI: {verification_uri}")
             logger.info(f"Complete URI: {verification_uri_complete}")
-            self.display.show_device_code(user_code, verification_uri, verification_uri_complete)
+            logger.info(f"Short URI: {verification_uri_short}")
+            self.display.show_device_code(user_code, verification_uri, verification_uri_short)
 
         def on_waiting():
             """Called while waiting for authorization."""

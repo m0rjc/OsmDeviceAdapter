@@ -26,6 +26,7 @@ type DeviceAuthorizationResponse struct {
 	UserCode                string `json:"user_code"`
 	VerificationURI         string `json:"verification_uri"`
 	VerificationURIComplete string `json:"verification_uri_complete"`
+	VerificationURIShort    string `json:"verification_uri_short"` // Short URL for QR codes
 	ExpiresIn               int    `json:"expires_in"`
 	Interval                int    `json:"interval"`
 }
@@ -166,6 +167,9 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		// Build verification URLs
 		verificationURI := fmt.Sprintf("%s/device", deps.Config.ExposedDomain)
 		verificationURIComplete := fmt.Sprintf("%s/device?user_code=%s", deps.Config.ExposedDomain, userCode)
+		// Short URL for QR codes (no hyphen in user code)
+		userCodeNoHyphen := strings.ReplaceAll(userCode, "-", "")
+		verificationURIShort := fmt.Sprintf("%s/d/%s", deps.Config.ExposedDomain, userCodeNoHyphen)
 
 		slog.Info("device.authorize.success",
 			"component", "device_oauth",
@@ -182,6 +186,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			UserCode:                userCode,
 			VerificationURI:         verificationURI,
 			VerificationURIComplete: verificationURIComplete,
+			VerificationURIShort:    verificationURIShort,
 			ExpiresIn:               deps.Config.DeviceCodeExpiry,
 			Interval:                deps.Config.DevicePollInterval,
 		}
@@ -407,6 +412,42 @@ func generateUserCode() (string, error) {
 	raw := code.String()
 	// Returns format: XXXX-XXXX
 	return fmt.Sprintf("%s-%s", raw[:4], raw[4:]), nil
+}
+
+// ShortCodeRedirectHandler handles short URL redirects from /d/{code} to /device?user_code={code}
+// This provides shorter URLs suitable for QR codes on small displays
+func ShortCodeRedirectHandler(deps *Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Extract code from path
+		code := strings.TrimPrefix(r.URL.Path, "/d/")
+		if code == "" || code == r.URL.Path {
+			http.Error(w, "Invalid short code", http.StatusBadRequest)
+			return
+		}
+
+		// Remove any remaining slashes or invalid characters
+		code = strings.Trim(code, "/")
+		if len(code) != 8 { // Expecting 8 characters without hyphen
+			http.Error(w, "Invalid short code format", http.StatusBadRequest)
+			return
+		}
+
+		// Reformat code with hyphen: MRHQTDY4 -> MRHQ-TDY4
+		formattedCode := fmt.Sprintf("%s-%s", code[:4], code[4:])
+
+		// Build redirect URL
+		redirectURL := fmt.Sprintf("/device?user_code=%s", formattedCode)
+
+		slog.Info("device.short_redirect",
+			"component", "device_oauth",
+			"event", "short_redirect",
+			"short_code", code,
+			"formatted_code", formattedCode,
+		)
+
+		// Redirect to full URL
+		http.Redirect(w, r, redirectURL, http.StatusFound)
+	}
 }
 
 func extractBearerToken(authHeader string) string {

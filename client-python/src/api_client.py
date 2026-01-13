@@ -17,6 +17,7 @@ class DeviceAuthResponse:
     user_code: str
     verification_uri: str
     verification_uri_complete: str
+    verification_uri_short: str  # Short URL for QR codes
     expires_in: int
     interval: int
 
@@ -136,6 +137,7 @@ class OSMDeviceClient:
                 user_code=data["user_code"],
                 verification_uri=data["verification_uri"],
                 verification_uri_complete=data["verification_uri_complete"],
+                verification_uri_short=data["verification_uri_short"],
                 expires_in=data["expires_in"],
                 interval=data["interval"]
             )
@@ -288,7 +290,7 @@ class OSMDeviceClient:
         """Perform full device flow authentication.
 
         Args:
-            on_code_received: Callback(user_code, verification_uri, verification_uri_complete) when code is ready
+            on_code_received: Callback(user_code, verification_uri, verification_uri_complete, verification_uri_short) when code is ready
             on_waiting: Callback() called on each poll attempt
 
         Returns:
@@ -302,7 +304,7 @@ class OSMDeviceClient:
 
         # Notify about the code
         if on_code_received:
-            on_code_received(auth.user_code, auth.verification_uri, auth.verification_uri_complete)
+            on_code_received(auth.user_code, auth.verification_uri, auth.verification_uri_complete, auth.verification_uri_short)
 
         # Step 2: Poll for token
         start_time = time.time()

@@ -59,11 +59,32 @@ class MatrixDisplay:
             self.matrix = RGBMatrix(options=options)
             self.canvas = self.matrix.CreateFrameCanvas()
 
-            # Load fonts
+            # Load BDF fonts (required by rgbmatrix library)
+            # Try common font locations for rpi-rgb-led-matrix
+            font_paths = [
+                "/usr/local/share/fonts/",  # Common install location
+                "/usr/share/fonts/",         # Alternative location
+                "./fonts/",                  # Local fonts directory
+            ]
+
             self.font = graphics.Font()
-            self.font.LoadFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
             self.small_font = graphics.Font()
-            self.small_font.LoadFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+
+            # Try to load fonts from known locations
+            font_loaded = False
+            for base_path in font_paths:
+                try:
+                    self.font.LoadFont(f"{base_path}7x13.bdf")  # Normal font
+                    self.small_font.LoadFont(f"{base_path}5x7.bdf")  # Small font
+                    font_loaded = True
+                    print(f"[DISPLAY] Loaded fonts from {base_path}")
+                    break
+                except Exception:
+                    continue
+
+            if not font_loaded:
+                print("WARNING: Could not load BDF fonts. Text may not display.")
+                print("Install rpi-rgb-led-matrix fonts or specify font path.")
         else:
             print(f"[DISPLAY] Simulation mode: {cols}x{rows} matrix")
             self.matrix = None
@@ -153,48 +174,69 @@ class MatrixDisplay:
             url: The URL to encode in the QR code
 
         Returns:
-            PIL Image object containing the QR code (31x31 pixels)
+            PIL Image object containing the QR code (32x32 pixels - black on white with border)
         """
         if not QR_AVAILABLE:
-            # Return a blank 31x31 image if QR library not available
-            return Image.new('RGB', (31, 31), color=(0, 0, 0))
+            # Return a blank 32x32 white image if QR library not available
+            return Image.new('RGB', (32, 32), color=(255, 255, 255))
 
         try:
+            # Try version 2 with 2-pixel border (25+4=29px) for better quiet zone
             qr = qrcode.QRCode(
-                version=3,  # 29x29 modules
+                version=2,  # 25x25 modules
                 error_correction=qrcode.constants.ERROR_CORRECT_L,
                 box_size=1,  # 1 pixel per module
-                border=1,    # Minimal quiet zone (results in 31x31px total)
+                border=2,    # 2-pixel white border (quiet zone for scanning)
             )
             qr.add_data(url)
-            qr.make(fit=True)  # Auto-adjust version if URL too long
+            qr.make(fit=False)  # Don't auto-adjust, fail if URL too long
 
-            img = qr.make_image(fill_color="white", back_color="black")
+            img = qr.make_image(fill_color="black", back_color="white")
 
-            # Verify it fits our display constraints
-            if img.size[0] > 32 or img.size[1] > 32:
-                print(f"WARNING: QR code is {img.size}, may not fit display (expected 31x31)")
+            # Version 2 + border 2 = 29x29, center in 32x32
+            padded = Image.new('RGB', (32, 32), color=(255, 255, 255))
+            padded.paste(img, (1, 1))  # Center with 1-2px padding
+            return padded
 
-            return img
-        except Exception as e:
-            print(f"ERROR: Failed to generate QR code: {e}")
-            # Return a blank 31x31 image as fallback
-            return Image.new('RGB', (31, 31), color=(0, 0, 0))
+        except Exception as version2_error:
+            # If version 2 too small, fall back to version 3 with smaller border
+            try:
+                qr = qrcode.QRCode(
+                    version=3,  # 29x29 modules - fits longer URLs
+                    error_correction=qrcode.constants.ERROR_CORRECT_L,
+                    box_size=1,  # 1 pixel per module
+                    border=1,    # 1-pixel white border (minimal quiet zone)
+                )
+                qr.add_data(url)
+                qr.make(fit=False)
 
-    def show_device_code(self, code: str, url: str, url_complete: Optional[str] = None):
+                img = qr.make_image(fill_color="black", back_color="white")
+
+                # Version 3 + border 1 = 31x31, center in 32x32
+                padded = Image.new('RGB', (32, 32), color=(255, 255, 255))
+                padded.paste(img, (0, 0))
+                return padded
+
+            except Exception as e:
+                print(f"ERROR: Failed to generate QR code: {e}")
+                print(f"URL may be too long ({len(url)} chars): {url}")
+                # Return a blank 32x32 white image as fallback
+                return Image.new('RGB', (32, 32), color=(255, 255, 255))
+
+    def show_device_code(self, code: str, url: str, url_short: Optional[str] = None):
         """Display the device authorization code with QR code and text.
 
         Args:
             code: User code to display (e.g., "MRHQ-TDY4")
-            url: Verification URL (basic URL)
-            url_complete: Complete verification URL with user code embedded (for QR)
+            url: Verification URL (basic URL for fallback display)
+            url_short: Short verification URL for QR code (e.g., /d/MRHQTDY4)
         """
         self.clear()
 
-        # Use QR code layout if available and url_complete provided
-        if QR_AVAILABLE and url_complete and not self.simulate:
-            # Generate and display QR code on left side (31x31 at position 0,0)
-            qr_img = self.generate_qr_image(url_complete)
+        # Use QR code layout if available and url_short provided
+        if QR_AVAILABLE and url_short and not self.simulate:
+            # Generate and display QR code on left side (32x32 at position 0,0)
+            qr_img = self.generate_qr_image(url_short)
             self.canvas.SetImage(qr_img.convert('RGB'), 0, 0)
 
             # Display wrapped device code on right side
@@ -205,13 +247,13 @@ class MatrixDisplay:
 
             self.show()
 
-        elif self.simulate and QR_AVAILABLE and url_complete:
+        elif self.simulate and QR_AVAILABLE and url_short:
             # Simulation mode with QR capability - print both
             print(f"\n{'='*50}")
             print(f"DEVICE AUTHORIZATION")
             print(f"{'='*50}")
             print(f"Scan QR code or visit: {url}")
-            print(f"Direct link: {url_complete}")
+            print(f"Short link: {url_short}")
             print(f"\nDevice Code: {code}")
             print(f"  Line 1: {code[:4]}")
             print(f"  Line 2: {code[5:]}")
@@ -220,7 +262,7 @@ class MatrixDisplay:
             # Generate ASCII QR for terminal display
             try:
                 qr = qrcode.QRCode()
-                qr.add_data(url_complete)
+                qr.add_data(url_short)
                 qr.make(fit=True)
                 qr.print_ascii(invert=True)
             except Exception as e:
