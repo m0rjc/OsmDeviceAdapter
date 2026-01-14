@@ -40,9 +40,9 @@ type RedisConfig struct {
 
 // DeviceOAuthConfig holds device OAuth flow configuration
 type DeviceOAuthConfig struct {
-	DeviceCodeExpiry   int    `key:"DEVICE_CODE_EXPIRY" default:"300" min:"60"`   // seconds (5 minutes default)
-	DevicePollInterval int    `key:"DEVICE_POLL_INTERVAL" default:"5" min:"1"`    // seconds
-	AllowedClientIDs   string `key:"ALLOWED_CLIENT_IDS" required:"true"`          // Comma-separated list
+	DeviceCodeExpiry   int    `key:"DEVICE_CODE_EXPIRY" default:"300" min:"60"` // seconds (5 minutes default)
+	DevicePollInterval int    `key:"DEVICE_POLL_INTERVAL" default:"5" min:"1"`  // seconds
+	AllowedClientIDs   string `key:"ALLOWED_CLIENT_IDS" required:"true"`        // Comma-separated list
 }
 
 // RateLimitConfig holds rate limiting configuration
@@ -59,16 +59,25 @@ type CacheConfig struct {
 	RateLimitCritical int `key:"RATE_LIMIT_CRITICAL" default:"20" min:"0"`    // remaining requests threshold for critical
 }
 
+// PathConfig holds configurable endpoint path prefixes
+// These can be changed to make endpoints less predictable to automated scanners
+type PathConfig struct {
+	OAuthPrefix  string `key:"OAUTH_PATH_PREFIX" default:"/oauth"`   // OAuth web flow path prefix
+	DevicePrefix string `key:"DEVICE_PATH_PREFIX" default:"/device"` // Device flow path prefix
+	APIPrefix    string `key:"API_PATH_PREFIX" default:"/api"`       // API endpoints path prefix
+}
+
 // Config is the complete application configuration
 type Config struct {
-	Server         ServerConfig
+	Server          ServerConfig
 	ExternalDomains ExternalDomainsConfig
-	OAuth          OAuthConfig
-	Database       DatabaseConfig
-	Redis          RedisConfig
-	DeviceOAuth    DeviceOAuthConfig
-	RateLimit      RateLimitConfig
-	Cache          CacheConfig
+	OAuth           OAuthConfig
+	Database        DatabaseConfig
+	Redis           RedisConfig
+	DeviceOAuth     DeviceOAuthConfig
+	RateLimit       RateLimitConfig
+	Cache           CacheConfig
+	Paths           PathConfig
 }
 
 // MinimalConfig is the minimal configuration needed for database cleanup jobs
@@ -85,9 +94,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	// Normalize path prefixes (remove trailing slashes)
+	cfg.Paths.OAuthPrefix = strings.TrimSuffix(cfg.Paths.OAuthPrefix, "/")
+	cfg.Paths.DevicePrefix = strings.TrimSuffix(cfg.Paths.DevicePrefix, "/")
+	cfg.Paths.APIPrefix = strings.TrimSuffix(cfg.Paths.APIPrefix, "/")
+
 	// Set OSM redirect URI if not explicitly provided
 	if cfg.OAuth.OSMRedirectURI == "" {
-		cfg.OAuth.OSMRedirectURI = fmt.Sprintf("%s/oauth/callback", cfg.ExternalDomains.ExposedDomain)
+		cfg.OAuth.OSMRedirectURI = fmt.Sprintf("%s%s/callback", cfg.ExternalDomains.ExposedDomain, cfg.Paths.OAuthPrefix)
 	}
 
 	return cfg, nil

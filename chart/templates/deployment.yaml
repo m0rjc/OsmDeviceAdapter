@@ -116,6 +116,28 @@ spec:
             configMapKeyRef:
               name: {{ include "osm-device-adapter.fullname" . }}
               key: allowed-client-ids
+        # Path prefixes for endpoint obscurity
+        {{- if .Values.config.paths.oauthPrefix }}
+        - name: OAUTH_PATH_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: oauth-path-prefix
+        {{- end }}
+        {{- if .Values.config.paths.devicePrefix }}
+        - name: DEVICE_PATH_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: device-path-prefix
+        {{- end }}
+        {{- if .Values.config.paths.apiPrefix }}
+        - name: API_PATH_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "osm-device-adapter.fullname" . }}
+              key: api-path-prefix
+        {{- end }}
         # Device endpoint rate limiting
         - name: DEVICE_AUTHORIZE_RATE_LIMIT
           valueFrom:

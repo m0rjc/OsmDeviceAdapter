@@ -10,6 +10,16 @@ data:
   device-code-expiry: {{ .Values.config.deviceCodeExpiry | quote }}
   device-poll-interval: {{ .Values.config.devicePollInterval | quote }}
   allowed-client-ids: {{ .Values.config.allowedClientIds | join "," | quote }}
+  # Path configuration for endpoint obscurity
+  {{- if .Values.config.paths.oauthPrefix }}
+  oauth-path-prefix: {{ .Values.config.paths.oauthPrefix | quote }}
+  {{- end }}
+  {{- if .Values.config.paths.devicePrefix }}
+  device-path-prefix: {{ .Values.config.paths.devicePrefix | quote }}
+  {{- end }}
+  {{- if .Values.config.paths.apiPrefix }}
+  api-path-prefix: {{ .Values.config.paths.apiPrefix | quote }}
+  {{- end }}
   # Device endpoint rate limiting
   device-authorize-rate-limit: {{ .Values.config.deviceRateLimit.authorize | quote }}
   device-entry-rate-limit: {{ .Values.config.deviceRateLimit.entry | quote }}
