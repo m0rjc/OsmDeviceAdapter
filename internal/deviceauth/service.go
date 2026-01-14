@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -19,14 +18,19 @@ var (
 	ErrTokenRefreshFailed = errors.New("temporary failure refreshing token")
 )
 
+// OAuthClient defines the interface for OAuth operations needed by the service
+type OAuthClient interface {
+	RefreshToken(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error)
+}
+
 // Service handles device authentication and authorization
 type Service struct {
 	conns   *db.Connections
-	osmAuth *oauthclient.WebFlowClient
+	osmAuth OAuthClient
 }
 
 // NewService creates a new device auth service
-func NewService(conns *db.Connections, osmAuth *oauthclient.WebFlowClient) *Service {
+func NewService(conns *db.Connections, osmAuth OAuthClient) *Service {
 	return &Service{
 		conns:   conns,
 		osmAuth: osmAuth,

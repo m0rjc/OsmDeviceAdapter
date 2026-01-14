@@ -17,22 +17,22 @@ import (
 func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	mux := http.NewServeMux()
 
-	// Device OAuth Flow endpoints
-	mux.HandleFunc("/device/authorize", handlers.DeviceAuthorizeHandler(deps))
-	mux.HandleFunc("/device/token", handlers.DeviceTokenHandler(deps))
-	mux.HandleFunc("/device", handlers.OAuthAuthorizeHandler(deps))       // User verification page
-	mux.HandleFunc("/d/", handlers.ShortCodeRedirectHandler(deps))        // Short URL redirect for QR codes
-	mux.HandleFunc("/device/confirm", handlers.OAuthConfirmHandler(deps)) // Device authorization confirmation
-	mux.HandleFunc("/device/cancel", handlers.OAuthCancelHandler(deps))   // Device authorization cancellation
+	// Device OAuth Flow endpoints (configurable path prefix)
+	mux.HandleFunc(fmt.Sprintf("%s/authorize", cfg.Paths.DevicePrefix), handlers.DeviceAuthorizeHandler(deps))
+	mux.HandleFunc(fmt.Sprintf("%s/token", cfg.Paths.DevicePrefix), handlers.DeviceTokenHandler(deps))
+	mux.HandleFunc(cfg.Paths.DevicePrefix, handlers.OAuthAuthorizeHandler(deps))                          // User verification page
+	mux.HandleFunc("/d/", handlers.ShortCodeRedirectHandler(deps))                                        // Short URL redirect for QR codes
+	mux.HandleFunc(fmt.Sprintf("%s/confirm", cfg.Paths.DevicePrefix), handlers.OAuthConfirmHandler(deps)) // Device authorization confirmation
+	mux.HandleFunc(fmt.Sprintf("%s/cancel", cfg.Paths.DevicePrefix), handlers.OAuthCancelHandler(deps))   // Device authorization cancellation
 
-	// OAuth Web Flow endpoints (for OSM)
-	mux.HandleFunc("/oauth/authorize", handlers.OAuthAuthorizeHandler(deps))
-	mux.HandleFunc("/oauth/callback", handlers.OAuthCallbackHandler(deps))
-	mux.HandleFunc("/device/select-section", handlers.OAuthSelectSectionHandler(deps))
+	// OAuth Web Flow endpoints (for OSM) (configurable path prefix)
+	mux.HandleFunc(fmt.Sprintf("%s/authorize", cfg.Paths.OAuthPrefix), handlers.OAuthAuthorizeHandler(deps))
+	mux.HandleFunc(fmt.Sprintf("%s/callback", cfg.Paths.OAuthPrefix), handlers.OAuthCallbackHandler(deps))
+	mux.HandleFunc(fmt.Sprintf("%s/select-section", cfg.Paths.DevicePrefix), handlers.OAuthSelectSectionHandler(deps))
 
-	// API endpoints for scoreboard (requires authentication)
+	// API endpoints for scoreboard (requires authentication) (configurable path prefix)
 	deviceAuthMiddleware := middleware.DeviceAuthMiddleware(deps.DeviceAuth)
-	mux.Handle("/api/v1/patrols", deviceAuthMiddleware(handlers.GetPatrolScoresHandler(deps)))
+	mux.Handle(fmt.Sprintf("%s/v1/patrols", cfg.Paths.APIPrefix), deviceAuthMiddleware(handlers.GetPatrolScoresHandler(deps)))
 
 	// Apply middleware chain:
 	// 1. Remote metadata (Cloudflare headers, HTTPS redirect, HSTS) - applied to all routes

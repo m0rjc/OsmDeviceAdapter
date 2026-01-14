@@ -210,12 +210,16 @@ All configuration is provided via environment variables. See [chart/values.yaml]
 | `PORT` | Main HTTP server port | `8080` |
 | `HOST` | HTTP server bind address | `0.0.0.0` |
 | `OSM_DOMAIN` | Online Scout Manager base URL | `https://www.onlinescoutmanager.co.uk` |
+| `OSM_REDIRECT_URI` | OAuth redirect URI | `{EXPOSED_DOMAIN}/oauth/callback` |
 | `REDIS_URL` | Redis connection URL | `redis://localhost:6379` |
 | `REDIS_KEY_PREFIX` | Redis key namespace | `osm_device_adapter:` |
 | `DEVICE_CODE_EXPIRY` | Device code TTL in seconds | `600` (10 minutes) |
 | `DEVICE_POLL_INTERVAL` | Recommended polling interval in seconds | `5` |
 | `DEVICE_AUTHORIZE_RATE_LIMIT` | Rate limit for `/device/authorize` (requests/minute) | `6` |
 | `DEVICE_ENTRY_RATE_LIMIT` | Rate limit for user code entry (format: `requests/seconds`) | `1/10` |
+| `OAUTH_PATH_PREFIX` | OAuth web flow path prefix (for security obscurity) | `/oauth` |
+| `DEVICE_PATH_PREFIX` | Device flow path prefix (for security obscurity) | `/device` |
+| `API_PATH_PREFIX` | API endpoints path prefix (for security obscurity) | `/api` |
 
 ### Security Configuration
 
