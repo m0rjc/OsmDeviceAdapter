@@ -116,9 +116,9 @@ func (c *Client) FetchPatrolScores(ctx context.Context, user types.User, section
 		})
 	}
 
-	// Sort patrols by name for consistent ordering
+	// Sort patrols by score in descending order (highest first)
 	sort.Slice(patrols, func(i, j int) bool {
-		return patrols[i].Name < patrols[j].Name
+		return patrols[i].Score > patrols[j].Score
 	})
 
 	slog.Info("osm.patrol_scores.success",
