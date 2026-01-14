@@ -25,10 +25,13 @@
 .vscode/
 
 # Values files with actual secrets (NEVER package these!)
+# Note: We list specific patterns instead of using negation (!pattern)
+# to avoid Helm bugs with negation in .helmignore
 values-production.yaml
 values-prod.yaml
-values-*.yaml
-!values-example.yaml
+values-dev.yaml
+values-staging.yaml
+values-test.yaml
 
 # OS files
 .DS_Store

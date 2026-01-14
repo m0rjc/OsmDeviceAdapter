@@ -306,7 +306,7 @@ Deploys the OSM Device Adapter application with all supporting resources (Deploy
 - Includes cleanup CronJob for expired device codes
 - See `charts/osm-device-adapter/README.md` (if exists) or `docs/HELM.md`
 
-### Secrets Chart (`charts/secrets/`)
+### Secrets Chart (`charts/osm-secrets/`)
 Separate chart for managing Kubernetes secrets independently from the application.
 
 **Purpose:**
@@ -322,7 +322,7 @@ Separate chart for managing Kubernetes secrets independently from the applicatio
 **Usage pattern:**
 ```bash
 # 1. Install secrets chart first
-helm install osm-secrets ./charts/secrets -f charts/secrets/values-production.yaml
+helm install osm-secrets ./charts/osm-secrets -f charts/osm-secrets/values-production.yaml
 
 # 2. Deploy main app referencing those secrets
 helm install osm-device-adapter ./charts/osm-device-adapter \
@@ -331,7 +331,7 @@ helm install osm-device-adapter ./charts/osm-device-adapter \
   --set redis.existingSecret=osm-device-adapter
 ```
 
-See `charts/secrets/README.md` for complete documentation.
+See `charts/osm-secrets/README.md` for complete documentation.
 
 ## Documentation References
 
@@ -341,7 +341,7 @@ See `charts/secrets/README.md` for complete documentation.
 - `docs/CLOUDFLARE_SETUP.md`: Cloudflare Tunnel integration
 - `docs/OBSERVABILITY_IMPLEMENTATION.md`: Monitoring setup details
 - `docs/research/OSM-OAuth-Doc.md`: OSM API documentation research
-- `charts/secrets/README.md`: Secrets chart documentation
+- `charts/osm-secrets/README.md`: Secrets chart documentation
 
 ## Deployment
 

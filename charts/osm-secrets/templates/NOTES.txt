@@ -60,7 +60,7 @@ Next Steps:
 
 3. If you need to update secrets later:
 
-   helm upgrade {{ .Release.Name }} ./charts/secrets -f your-values.yaml
+   helm upgrade {{ .Release.Name }} ./charts/osm-secrets -f your-values.yaml
    kubectl rollout restart deployment/osm-device-adapter -n {{ .Values.namespace | default .Release.Namespace }}
 
 Important Notes:
@@ -72,6 +72,6 @@ Important Notes:
 
 Documentation:
 --------------
-• Chart README: charts/secrets/README.md
+• Chart README: charts/osm-secrets/README.md
 • Main chart: charts/osm-device-adapter/README.md
 • Security docs: docs/security.md

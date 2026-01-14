@@ -40,3 +40,4 @@ charts/secrets/values-*.yaml
 
 # Built server (often built here by Claude)
 server
+values-dev.yaml

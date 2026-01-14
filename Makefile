@@ -10,7 +10,7 @@ HELM_SECRETS_RELEASE?=osm-secrets
 HELM_NAMESPACE?=osm-adapter
 MONITORING_NAMESPACE?=monitoring
 CHART_DIR=./charts/osm-device-adapter
-SECRETS_CHART_DIR=./charts/secrets
+SECRETS_CHART_DIR=./charts/osm-secrets
 
 # Build the Go application
 build:

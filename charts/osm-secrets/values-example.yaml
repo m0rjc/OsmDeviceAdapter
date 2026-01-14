@@ -3,7 +3,7 @@
 # DO NOT commit files containing real secrets to version control!
 #
 # Usage:
-#   helm install osm-secrets ./charts/secrets -f values-production.yaml
+#   helm install osm-secrets ./charts/osm-secrets -f values-production.yaml
 #
 # Then configure the main chart to use these secrets:
 #   helm install osm-device-adapter ./charts/osm-device-adapter \

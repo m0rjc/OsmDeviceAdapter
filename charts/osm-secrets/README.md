@@ -32,7 +32,7 @@ cp values-example.yaml values-production.yaml
 Add `values-production.yaml` to your `.gitignore`:
 
 ```bash
-echo "charts/secrets/values-production.yaml" >> .gitignore
+echo "charts/osm-secrets/values-production.yaml" >> .gitignore
 ```
 
 ### Step 2: Install the Secrets Chart
@@ -42,7 +42,7 @@ Install the chart to create the secrets in your Kubernetes cluster:
 ```bash
 # Install to a specific namespace
 helm install osm-secrets ./charts/osm-device-adapters/secrets \
-  -f charts/secrets/values-production.yaml \
+  -f charts/osm-secrets/values-production.yaml \
   -n osm-adapter
 
 # Or use --set for individual values (less secure, visible in shell history)
@@ -178,7 +178,7 @@ To update secrets after initial deployment:
 ```bash
 # Update your values file, then upgrade
 helm upgrade osm-secrets ./charts/osm-device-adapters/secrets \
-  -f charts/secrets/values-production.yaml \
+  -f charts/osm-secrets/values-production.yaml \
   -n osm-adapter
 
 # Restart application pods to pick up new secrets

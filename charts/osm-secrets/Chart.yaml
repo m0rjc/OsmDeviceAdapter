@@ -1,18 +1,16 @@
 apiVersion: v2
-name: osm-device-adapter-secrets
-description: Secrets management chart for OSM Device Adapter
+name: osm-device-adapter
+description: OAuth bridge service for Online Scout Manager device integration
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
-
 keywords:
-  - osm
-  - secrets
   - oauth
-
+  - osm
+  - device-flow
+  - scout-manager
 maintainers:
   - name: m0rjc
-
 home: https://github.com/m0rjc/OsmDeviceAdapter
 sources:
   - https://github.com/m0rjc/OsmDeviceAdapter
