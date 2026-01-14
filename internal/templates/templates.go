@@ -24,8 +24,28 @@ func init() {
 
 // Render executes a template with the given data and writes to w
 func Render(w io.Writer, name string, data interface{}) error {
-	// Execute the base template which will include the content template
-	return templates.ExecuteTemplate(w, "base.html", data)
+	// Create a clone of the template set to avoid race conditions
+	t, err := templates.Clone()
+	if err != nil {
+		return err
+	}
+
+	// Extract template name from filename (e.g., "device-auth.html" -> "device-auth")
+	templateName := name
+	if len(templateName) > 5 && templateName[len(templateName)-5:] == ".html" {
+		templateName = templateName[:len(templateName)-5]
+	}
+
+	// Create a bridge template that defines "content" to invoke our specific template
+	// This allows base.html's {{template "content" .}} to call the correct template
+	bridge := `{{define "content"}}{{template "` + templateName + `" .}}{{end}}`
+	t, err = t.New("bridge").Parse(bridge)
+	if err != nil {
+		return err
+	}
+
+	// Execute the base template which will include our specific content via the bridge
+	return t.ExecuteTemplate(w, "base.html", data)
 }
 
 // DeviceAuthData is the data structure for the device authorization form
