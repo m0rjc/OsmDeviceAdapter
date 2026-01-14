@@ -29,12 +29,18 @@ make lint           # Lint code (requires golangci-lint)
 make docker-build   # Build Docker image
 make docker-push    # Build and push to registry
 
-# Helm
+# Helm - Main Application Chart
 make helm-install   # Install chart to K8s
 make helm-upgrade   # Upgrade existing deployment
 make helm-lint      # Validate Helm chart
 make helm-template  # Preview rendered manifests
 make helm-values    # Show default values
+
+# Helm - Secrets Chart
+make helm-secrets-install SECRETS_VALUES_FILE=values-prod.yaml  # Install secrets
+make helm-secrets-upgrade SECRETS_VALUES_FILE=values-prod.yaml  # Upgrade secrets
+make helm-secrets-lint                                           # Lint secrets chart
+make helm-secrets-template                                       # Preview secrets
 
 # Monitoring
 make monitoring-deploy  # Deploy Prometheus stack
@@ -287,6 +293,46 @@ DELETE FROM allowed_client_ids WHERE client_id = 'my-client-id';
 - Define new metrics in `internal/metrics/metrics.go`
 - Metrics automatically exposed via `/metrics` endpoint on port 9090
 
+## Helm Charts Structure
+
+The project includes two Helm charts in the `charts/` directory:
+
+### Main Application Chart (`charts/osm-device-adapter/`)
+Deploys the OSM Device Adapter application with all supporting resources (Deployment, Service, ConfigMap, etc.).
+
+**Key features:**
+- Supports external secret references via `existingSecret` parameters
+- Configurable resource limits, autoscaling, ingress
+- Includes cleanup CronJob for expired device codes
+- See `charts/osm-device-adapter/README.md` (if exists) or `docs/HELM.md`
+
+### Secrets Chart (`charts/secrets/`)
+Separate chart for managing Kubernetes secrets independently from the application.
+
+**Purpose:**
+- One-time secret initialization during setup
+- Secrets managed independently from application updates
+- Keeps secrets out of git while maintaining IaC practices
+- Helm resource retention preserves secrets during uninstalls
+
+**Two strategies:**
+1. **Unified** (default): Single secret with all credentials
+2. **Separate**: Individual secrets per component (OSM, database, Redis)
+
+**Usage pattern:**
+```bash
+# 1. Install secrets chart first
+helm install osm-secrets ./charts/secrets -f charts/secrets/values-production.yaml
+
+# 2. Deploy main app referencing those secrets
+helm install osm-device-adapter ./charts/osm-device-adapter \
+  --set osm.existingSecret=osm-device-adapter \
+  --set database.existingSecret=osm-device-adapter \
+  --set redis.existingSecret=osm-device-adapter
+```
+
+See `charts/secrets/README.md` for complete documentation.
+
 ## Documentation References
 
 - `README.md`: User-facing documentation, deployment instructions
@@ -295,6 +341,7 @@ DELETE FROM allowed_client_ids WHERE client_id = 'my-client-id';
 - `docs/CLOUDFLARE_SETUP.md`: Cloudflare Tunnel integration
 - `docs/OBSERVABILITY_IMPLEMENTATION.md`: Monitoring setup details
 - `docs/research/OSM-OAuth-Doc.md`: OSM API documentation research
+- `charts/secrets/README.md`: Secrets chart documentation
 
 ## Deployment
 
@@ -306,8 +353,8 @@ make run
 
 ### Kubernetes (Helm)
 1. Build and push Docker image: `make docker-push`
-2. Create values file from `chart/values-example.yaml`
-3. Install: `helm install osm-device-adapter ./chart -f values-production.yaml`
+2. Create values file from `charts/osm-device-adapter/values-example.yaml`
+3. Install: `helm install osm-device-adapter ./charts/osm-device-adapter -f values-production.yaml`
 4. Monitor: `kubectl logs -f -l app.kubernetes.io/name=osm-device-adapter`
 
 ### Kubernetes (kubectl - legacy)

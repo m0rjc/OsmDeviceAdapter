@@ -32,5 +32,11 @@ go.work
 # Kubernetes secrets (never commit these)
 *.secret.yaml
 
+# Helm secrets chart values with real secrets
+charts/secrets/values-production.yaml
+charts/secrets/values-prod.yaml
+charts/secrets/values-*.yaml
+!charts/secrets/values-example.yaml
+
 # Built server (often built here by Claude)
 server

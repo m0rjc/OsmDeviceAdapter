@@ -1,6 +1,6 @@
 # Example values file for OSM Device Adapter
 # Copy this file and customize it for your environment
-# Usage: helm install osm-device-adapter ./chart -f values-production.yaml
+# Usage: helm install osm-device-adapter ./charts/osm-device-adapter -f values-production.yaml
 
 replicaCount: 2
 
