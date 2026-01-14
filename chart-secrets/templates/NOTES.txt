@@ -1,0 +1,77 @@
+✓ OSM Device Adapter Secrets successfully deployed!
+
+{{- if eq .Values.secretStrategy "unified" }}
+
+A unified secret has been created:
+  Name: {{ include "osm-device-adapter-secrets.unifiedSecretName" . }}
+  {{- if .Values.namespace }}
+  Namespace: {{ .Values.namespace }}
+  {{- else }}
+  Namespace: {{ .Release.Namespace }}
+  {{- end }}
+  Contains: osm-client-id, osm-client-secret, database-url, redis-url
+
+{{- else if eq .Values.secretStrategy "separate" }}
+
+Separate secrets have been created:
+  {{- if .Values.namespace }}
+  Namespace: {{ .Values.namespace }}
+  {{- else }}
+  Namespace: {{ .Release.Namespace }}
+  {{- end }}
+
+  OSM OAuth: {{ include "osm-device-adapter-secrets.osmSecretName" . }}
+    Keys: osm-client-id, osm-client-secret
+
+  Database: {{ include "osm-device-adapter-secrets.databaseSecretName" . }}
+    Keys: database-url
+
+  Redis: {{ include "osm-device-adapter-secrets.redisSecretName" . }}
+    Keys: redis-url
+
+{{- end }}
+
+Next Steps:
+-----------
+
+1. Verify secrets were created:
+
+   {{- if eq .Values.secretStrategy "unified" }}
+   kubectl get secret {{ include "osm-device-adapter-secrets.unifiedSecretName" . }} -n {{ .Values.namespace | default .Release.Namespace }}
+   {{- else }}
+   kubectl get secrets -n {{ .Values.namespace | default .Release.Namespace }} | grep -E "({{ include "osm-device-adapter-secrets.osmSecretName" . }}|{{ include "osm-device-adapter-secrets.databaseSecretName" . }}|{{ include "osm-device-adapter-secrets.redisSecretName" . }})"
+   {{- end }}
+
+2. Deploy the main application chart with these secrets:
+
+   {{- if eq .Values.secretStrategy "unified" }}
+   helm install osm-adapter ./chart \
+     --set osm.existingSecret={{ include "osm-device-adapter-secrets.unifiedSecretName" . }} \
+     --set database.existingSecret={{ include "osm-device-adapter-secrets.unifiedSecretName" . }} \
+     --set redis.existingSecret={{ include "osm-device-adapter-secrets.unifiedSecretName" . }} \
+     -n {{ .Values.namespace | default .Release.Namespace }}
+   {{- else }}
+   helm install osm-adapter ./chart \
+     --set osm.existingSecret={{ include "osm-device-adapter-secrets.osmSecretName" . }} \
+     --set database.existingSecret={{ include "osm-device-adapter-secrets.databaseSecretName" . }} \
+     --set redis.existingSecret={{ include "osm-device-adapter-secrets.redisSecretName" . }} \
+     -n {{ .Values.namespace | default .Release.Namespace }}
+   {{- end }}
+
+3. If you need to update secrets later:
+
+   helm upgrade {{ .Release.Name }} ./chart-secrets -f your-values.yaml
+   kubectl rollout restart deployment/osm-device-adapter -n {{ .Values.namespace | default .Release.Namespace }}
+
+Important Notes:
+----------------
+• These secrets have the 'helm.sh/resource-policy: keep' annotation
+• They will NOT be deleted when you uninstall this chart
+• This prevents accidental data loss
+• To delete manually: kubectl delete secret <name> -n {{ .Values.namespace | default .Release.Namespace }}
+
+Documentation:
+--------------
+• Chart README: chart-secrets/README.md
+• Main chart: chart/README.md
+• Security docs: docs/security.md

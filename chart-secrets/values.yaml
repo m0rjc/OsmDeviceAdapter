@@ -1,0 +1,41 @@
+# Default values for osm-device-adapter-secrets
+# This chart creates Kubernetes secrets for the OSM Device Adapter application
+#
+# IMPORTANT: Do not commit this file with actual secrets!
+# Use --set flags or a git-ignored values file for actual deployments
+
+# Namespace where secrets will be created
+# Leave empty to use the release namespace
+namespace: ""
+
+# Secret naming strategy
+# - "unified": Create a single secret with all credentials (default)
+# - "separate": Create separate secrets for OSM, database, and Redis
+secretStrategy: "unified"
+
+# Name for the unified secret (only used when secretStrategy is "unified")
+# If not set, defaults to the release name
+unifiedSecretName: ""
+
+# Individual secret names (only used when secretStrategy is "separate")
+secretNames:
+  osm: "osm-oauth-credentials"
+  database: "database-credentials"
+  redis: "redis-credentials"
+
+# OSM OAuth credentials
+osm:
+  clientId: ""
+  clientSecret: ""
+
+# Database connection
+database:
+  # Full PostgreSQL connection string
+  # Format: postgres://user:password@host:5432/dbname?sslmode=require
+  url: ""
+
+# Redis connection
+redis:
+  # Redis connection URL
+  # Format: redis://host:6379 or redis://user:password@host:6379/0
+  url: ""
