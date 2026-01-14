@@ -32,7 +32,7 @@ cp values-example.yaml values-production.yaml
 Add `values-production.yaml` to your `.gitignore`:
 
 ```bash
-echo "chart-secrets/values-production.yaml" >> .gitignore
+echo "charts/secrets/values-production.yaml" >> .gitignore
 ```
 
 ### Step 2: Install the Secrets Chart
@@ -41,12 +41,12 @@ Install the chart to create the secrets in your Kubernetes cluster:
 
 ```bash
 # Install to a specific namespace
-helm install osm-secrets ./chart-secrets \
-  -f chart-secrets/values-production.yaml \
+helm install osm-secrets ./charts/osm-device-adapters/secrets \
+  -f charts/secrets/values-production.yaml \
   -n osm-adapter
 
 # Or use --set for individual values (less secure, visible in shell history)
-helm install osm-secrets ./chart-secrets \
+helm install osm-secrets ./charts/osm-device-adapters/secrets \
   --set osm.clientId="your-client-id" \
   --set osm.clientSecret="your-secret" \
   --set database.url="postgres://user:pass@host:5432/db" \
@@ -59,14 +59,14 @@ Configure the main chart to use the secrets created by this chart:
 
 ```bash
 # For unified secret strategy (default)
-helm install osm-adapter ./chart \
+helm install osm-adapter ./charts/osm-device-adapter \
   --set osm.existingSecret=osm-device-adapter-secrets \
   --set database.existingSecret=osm-device-adapter-secrets \
   --set redis.existingSecret=osm-device-adapter-secrets \
   -n osm-adapter
 
 # For separate secrets strategy
-helm install osm-adapter ./chart \
+helm install osm-adapter ./charts/osm-device-adapter \
   --set osm.existingSecret=osm-oauth-credentials \
   --set database.existingSecret=database-credentials \
   --set redis.existingSecret=redis-credentials \
@@ -177,8 +177,8 @@ To update secrets after initial deployment:
 
 ```bash
 # Update your values file, then upgrade
-helm upgrade osm-secrets ./chart-secrets \
-  -f chart-secrets/values-production.yaml \
+helm upgrade osm-secrets ./charts/osm-device-adapters/secrets \
+  -f charts/secrets/values-production.yaml \
   -n osm-adapter
 
 # Restart application pods to pick up new secrets
@@ -294,7 +294,7 @@ redis:
 ```
 
 ```bash
-helm install osm-secrets-dev ./chart-secrets -f values-dev.yaml -n osm-dev
+helm install osm-secrets-dev ./charts/osm-device-adapters/secrets -f values-dev.yaml -n osm-dev
 ```
 
 ### Example 2: Production with Separate Secrets
@@ -320,7 +320,7 @@ redis:
 ```
 
 ```bash
-helm install osm-secrets ./chart-secrets -f values-prod.yaml -n osm-production
+helm install osm-secrets ./charts/osm-device-adapters/secrets -f values-prod.yaml -n osm-production
 ```
 
 ## Integration with External Secret Managers
@@ -365,6 +365,6 @@ spec:
 
 ## Related Documentation
 
-- Main application chart: `../chart/README.md`
+- Main application chart: `../charts/osm-device-adapter/README.md`
 - Security documentation: `../docs/security.md`
 - Project README: `../README.md`

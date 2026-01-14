@@ -1118,7 +1118,7 @@ docker build -t your-registry/osm-device-adapter:v1.1.0 .
 docker push your-registry/osm-device-adapter:v1.1.0
 
 # Update Helm chart values
-helm upgrade osm-device-adapter ./chart \
+helm upgrade osm-device-adapter ./charts/osm-device-adapter \
   --set image.tag=v1.1.0 \
   --set metrics.enabled=true \
   --set env.LOG_FORMAT=json \

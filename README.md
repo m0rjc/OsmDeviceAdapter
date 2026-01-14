@@ -452,7 +452,7 @@ go test -cover ./...  # Run tests with coverage
 
 4. **Install with Helm**
    ```bash
-   helm install osm-device-adapter ./chart \
+   helm install osm-device-adapter ./charts/osm-device-adapter \
      --namespace osm-adapter \
      --create-namespace \
      -f values-production.yaml
@@ -477,7 +477,7 @@ go test -cover ./...  # Run tests with coverage
 
 ```bash
 # Upgrade deployment
-helm upgrade osm-device-adapter ./chart \
+helm upgrade osm-device-adapter ./charts/osm-device-adapter \
   --namespace osm-adapter \
   -f values-production.yaml
 
@@ -714,7 +714,7 @@ kubectl exec -n osm-adapter deployment/osm-device-adapter -- \
 # config:
 #   deviceAuthorizeRateLimit: 10  # Increase from default 6
 
-helm upgrade osm-device-adapter ./chart -f values-production.yaml
+helm upgrade osm-device-adapter ./charts/osm-device-adapter -f values-production.yaml
 ```
 
 **Device Token Expired/Revoked**:

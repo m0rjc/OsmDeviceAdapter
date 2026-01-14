@@ -5,21 +5,33 @@ This document provides detailed information about the OSM Device Adapter Helm ch
 ## Chart Structure
 
 ```
-chart/
-├── Chart.yaml                 # Chart metadata
-├── values.yaml               # Default values
-├── values-example.yaml       # Example values for production
-├── templates/
-│   ├── _helpers.tpl         # Template helpers
-│   ├── deployment.yaml      # Deployment manifest
-│   ├── service.yaml         # Service manifest
-│   ├── configmap.yaml       # ConfigMap manifest
-│   ├── secret.yaml          # Secret manifest
-│   ├── ingress.yaml         # Ingress manifest (optional)
-│   ├── serviceaccount.yaml  # ServiceAccount (optional)
-│   ├── hpa.yaml            # HorizontalPodAutoscaler (optional)
-│   └── NOTES.txt           # Post-install notes
-└── .helmignore             # Files to ignore when packaging
+charts/
+├── osm-device-adapter/      # Main application chart
+│   ├── Chart.yaml                 # Chart metadata
+│   ├── values.yaml               # Default values
+│   ├── values-example.yaml       # Example values for production
+│   ├── templates/
+│   │   ├── _helpers.tpl         # Template helpers
+│   │   ├── deployment.yaml      # Deployment manifest
+│   │   ├── service.yaml         # Service manifest
+│   │   ├── configmap.yaml       # ConfigMap manifest
+│   │   ├── secret.yaml          # Secret manifest
+│   │   ├── ingress.yaml         # Ingress manifest (optional)
+│   │   ├── serviceaccount.yaml  # ServiceAccount (optional)
+│   │   ├── hpa.yaml            # HorizontalPodAutoscaler (optional)
+│   │   └── NOTES.txt           # Post-install notes
+│   └── .helmignore             # Files to ignore when packaging
+└── secrets/                 # Secrets management chart
+    ├── Chart.yaml                 # Chart metadata
+    ├── values.yaml               # Default values (empty secrets)
+    ├── values-example.yaml       # Example with documentation
+    ├── templates/
+    │   ├── _helpers.tpl         # Template helpers
+    │   ├── unified-secret.yaml  # Single secret for all credentials
+    │   ├── separate-secrets.yaml# Separate secrets per component
+    │   └── NOTES.txt           # Post-install instructions
+    ├── README.md               # Secrets chart documentation
+    └── .helmignore             # Files to ignore when packaging
 ```
 
 ## Installation
@@ -27,7 +39,7 @@ chart/
 ### Basic Installation
 
 ```bash
-helm install osm-device-adapter ./chart \
+helm install osm-device-adapter ./charts/osm-device-adapter \
   --set config.exposedDomain="https://osm-adapter.example.com" \
   --set osm.clientId="your-client-id" \
   --set osm.clientSecret="your-client-secret" \
@@ -70,7 +82,7 @@ resources:
 Then install:
 
 ```bash
-helm install osm-device-adapter ./chart -f values-production.yaml
+helm install osm-device-adapter ./charts/osm-device-adapter -f values-production.yaml
 ```
 
 ## Configuration
@@ -150,13 +162,13 @@ stringData:
 ### Upgrade with New Values
 
 ```bash
-helm upgrade osm-device-adapter ./chart -f values-production.yaml
+helm upgrade osm-device-adapter ./charts/osm-device-adapter -f values-production.yaml
 ```
 
 ### Upgrade Specific Values
 
 ```bash
-helm upgrade osm-device-adapter ./chart \
+helm upgrade osm-device-adapter ./charts/osm-device-adapter \
   --set image.tag="1.1.0" \
   --reuse-values
 ```
@@ -188,13 +200,13 @@ Create separate values files for each environment:
 
 ```bash
 # Development
-helm install osm-dev ./chart -f values-dev.yaml --namespace dev
+helm install osm-dev ./charts/osm-device-adapter -f values-dev.yaml --namespace dev
 
 # Staging
-helm install osm-staging ./chart -f values-staging.yaml --namespace staging
+helm install osm-staging ./charts/osm-device-adapter -f values-staging.yaml --namespace staging
 
 # Production
-helm install osm-prod ./chart -f values-production.yaml --namespace production
+helm install osm-prod ./charts/osm-device-adapter -f values-production.yaml --namespace production
 ```
 
 ### Custom Resource Limits
@@ -270,19 +282,19 @@ ingress:
 Before installing, preview the rendered templates:
 
 ```bash
-helm template osm-device-adapter ./chart -f values-production.yaml
+helm template osm-device-adapter ./charts/osm-device-adapter -f values-production.yaml
 ```
 
 ### Validate Chart
 
 ```bash
-helm lint ./chart
+helm lint ./charts/osm-device-adapter
 ```
 
 ### Debug Installation
 
 ```bash
-helm install osm-device-adapter ./chart -f values-production.yaml --debug --dry-run
+helm install osm-device-adapter ./charts/osm-device-adapter -f values-production.yaml --debug --dry-run
 ```
 
 ### View Current Values
@@ -361,7 +373,7 @@ spec:
   interval: 5m
   chart:
     spec:
-      chart: ./chart
+      chart: ./charts/osm-device-adapter
       sourceRef:
         kind: GitRepository
         name: osm-device-adapter
@@ -376,13 +388,13 @@ spec:
 
 ```bash
 # Lint the chart
-helm lint ./chart
+helm lint ./charts/osm-device-adapter
 
 # Test installation
-helm install test-release ./chart --dry-run --debug
+helm install test-release ./charts/osm-device-adapter --dry-run --debug
 
 # Package the chart
-helm package ./chart
+helm package ./charts/osm-device-adapter
 
 # Test the packaged chart
 helm install test-release ./osm-device-adapter-0.1.0.tgz --dry-run
