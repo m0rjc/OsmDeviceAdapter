@@ -441,15 +441,18 @@ func ShortCodeRedirectHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Remove any remaining slashes or invalid characters
-		code = strings.Trim(code, "/")
-		if len(code) != 8 { // Expecting 8 characters without hyphen
+		// Normalize user code (uppercase, remove non-alphanumeric, format with dash)
+		formattedCode, err := normalizeUserCode(code)
+		if err != nil {
+			slog.Warn("device.short_redirect.invalid_code",
+				"component", "device_oauth",
+				"event", "short_redirect.invalid",
+				"input_code", code,
+				"error", err,
+			)
 			http.Error(w, "Invalid short code format", http.StatusBadRequest)
 			return
 		}
-
-		// Reformat code with hyphen: MRHQTDY4 -> MRHQ-TDY4
-		formattedCode := fmt.Sprintf("%s-%s", code[:4], code[4:])
 
 		// Build redirect URL using configurable path prefix
 		redirectURL := fmt.Sprintf("%s?user_code=%s", deps.Config.Paths.DevicePrefix, formattedCode)
@@ -457,7 +460,7 @@ func ShortCodeRedirectHandler(deps *Dependencies) http.HandlerFunc {
 		slog.Info("device.short_redirect",
 			"component", "device_oauth",
 			"event", "short_redirect",
-			"short_code", code,
+			"input_code", code,
 			"formatted_code", formattedCode,
 		)
 

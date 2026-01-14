@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,26 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/templates"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
+
+// normalizeUserCode normalizes user input to the standard XXXX-XXXX format
+// Converts to uppercase, removes all non-alphanumeric characters, and adds dash after 4th character
+// Returns an error if the input cannot be normalized to a valid 8-character code
+func normalizeUserCode(input string) (string, error) {
+	// Convert to uppercase
+	input = strings.ToUpper(input)
+
+	// Remove all non-alphanumeric characters (including existing dashes, spaces, etc.)
+	reg := regexp.MustCompile("[^A-Z0-9]+")
+	cleaned := reg.ReplaceAllString(input, "")
+
+	// Validate length (should be 8 characters after cleaning)
+	if len(cleaned) != 8 {
+		return "", fmt.Errorf("invalid user code format: expected 8 characters, got %d", len(cleaned))
+	}
+
+	// Format as XXXX-XXXX
+	return fmt.Sprintf("%s-%s", cleaned[:4], cleaned[4:]), nil
+}
 
 // HomeHandler renders the home page with a welcome message and device code entry form
 func HomeHandler(deps *Dependencies) http.HandlerFunc {
@@ -83,19 +104,38 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
+		// Normalize user code (uppercase + format with dash)
+		userCode, err = normalizeUserCode(userCode)
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			if err := templates.RenderDeviceError(w, "The device code format is invalid. Please enter an 8-character code."); err != nil {
+				slog.Error("template render failed", "error", err)
+			}
+			return
+		}
+
 		// Look up the device code from user code
-		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, strings.ToUpper(userCode))
+		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, userCode)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
 		}
 		if deviceCodeRecord == nil {
-			http.Error(w, "Invalid or expired user code", http.StatusBadRequest)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			if err := templates.RenderDeviceError(w, "This device code is invalid or has expired. Please check the code on your device and try again."); err != nil {
+				slog.Error("template render failed", "error", err)
+			}
 			return
 		}
 
 		if deviceCodeRecord.Status != "pending" {
-			http.Error(w, "This code has already been used", http.StatusBadRequest)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			if err := templates.RenderDeviceError(w, "This device code has already been used or is no longer valid. Please request a new code from your device."); err != nil {
+				slog.Error("template render failed", "error", err)
+			}
 			return
 		}
 
@@ -178,8 +218,15 @@ func OAuthConfirmHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
+		// Normalize user code (uppercase + format with dash)
+		userCode, err = normalizeUserCode(userCode)
+		if err != nil {
+			http.Error(w, "Invalid user code format", http.StatusBadRequest)
+			return
+		}
+
 		// Lookup device code
-		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, strings.ToUpper(userCode))
+		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, userCode)
 		if err != nil || deviceCodeRecord == nil {
 			slog.Warn("device.confirmation.invalid_code",
 				"component", "oauth_web",
@@ -245,8 +292,15 @@ func OAuthCancelHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
+		// Normalize user code (uppercase + format with dash)
+		userCode, err := normalizeUserCode(userCode)
+		if err != nil {
+			http.Error(w, "Invalid user code format", http.StatusBadRequest)
+			return
+		}
+
 		// Look up device code
-		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, strings.ToUpper(userCode))
+		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, userCode)
 		if err != nil || deviceCodeRecord == nil {
 			slog.Warn("device.cancel.invalid_code",
 				"component", "oauth_web",

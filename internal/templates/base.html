@@ -166,5 +166,38 @@
     <div class="container">
         {{template "content" .}}
     </div>
+    <script>
+        // Client-side user code normalization for better UX
+        document.addEventListener('DOMContentLoaded', function() {
+            const userCodeInputs = document.querySelectorAll('input[name="user_code"]');
+
+            userCodeInputs.forEach(function(input) {
+                input.addEventListener('input', function(e) {
+                    let value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+                    // Insert dash after 4th character
+                    if (value.length > 4) {
+                        value = value.slice(0, 4) + '-' + value.slice(4, 8);
+                    }
+
+                    e.target.value = value;
+                });
+
+                // Handle paste events
+                input.addEventListener('paste', function(e) {
+                    e.preventDefault();
+                    let paste = (e.clipboardData || window.clipboardData).getData('text');
+                    let value = paste.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+                    // Insert dash after 4th character
+                    if (value.length > 4) {
+                        value = value.slice(0, 4) + '-' + value.slice(4, 8);
+                    }
+
+                    e.target.value = value;
+                });
+            });
+        });
+    </script>
 </body>
 </html>

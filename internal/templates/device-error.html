@@ -1,0 +1,19 @@
+{{define "device-error"}}
+    <h1>Invalid Device Code</h1>
+
+    <div class="warning">
+        <div class="warning-title">{{.ErrorMessage}}</div>
+    </div>
+
+    <p>Please check your device code and try again. The code should be displayed on your device.</p>
+
+    <h2>Enter Your Device Code</h2>
+    <form method="GET" action="/device">
+        <input type="text" name="user_code" placeholder="XXXX-XXXX" required style="text-transform: uppercase;" />
+        <button type="submit" class="btn-primary">Try Again</button>
+    </form>
+
+    <p style="margin-top: 30px; font-size: 14px; color: #999;">
+        Make sure you're entering the code exactly as shown on your device. The code is 8 characters long and formatted as XXXX-XXXX.
+    </p>
+{{end}}

@@ -79,6 +79,12 @@ type HomeData struct {
 	Title string
 }
 
+// DeviceErrorData is the data structure for device code error page
+type DeviceErrorData struct {
+	Title        string
+	ErrorMessage string
+}
+
 // DeviceConfirmData is the data structure for the device confirmation page
 type DeviceConfirmData struct {
 	Title              string
@@ -178,4 +184,13 @@ func RenderHome(w io.Writer) error {
 		Title: "OSM Device Adapter",
 	}
 	return Render(w, "home.html", data)
+}
+
+// RenderDeviceError renders the device code error page
+func RenderDeviceError(w io.Writer, errorMessage string) error {
+	data := DeviceErrorData{
+		Title:        "Invalid Device Code",
+		ErrorMessage: errorMessage,
+	}
+	return Render(w, "device-error.html", data)
 }
