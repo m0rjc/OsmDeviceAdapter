@@ -9,6 +9,8 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // Test helper to create a device code record
@@ -242,4 +244,309 @@ func TestErrorsAreDistinct(t *testing.T) {
 	if errors.Is(ErrTokenRevoked, ErrTokenRefreshFailed) {
 		t.Error("ErrTokenRevoked and ErrTokenRefreshFailed should be distinct")
 	}
+}
+
+// Test RefreshUserTokenFromRecord with token revocation
+func TestRefreshUserTokenFromRecord_Revocation(t *testing.T) {
+	// Setup test database
+	conns := setupTestDB(t)
+	now := time.Now()
+
+	// Create a device with tokens
+	deviceCode := "test-device"
+	osmToken := "osm-access-token"
+	osmRefresh := "osm-refresh-token"
+	userId := 123
+	device := &db.DeviceCode{
+		DeviceCode:      deviceCode,
+		UserCode:        "TEST",
+		ClientID:        "test-client",
+		Status:          "authorized",
+		ExpiresAt:       now.Add(24 * time.Hour),
+		OSMAccessToken:  &osmToken,
+		OSMRefreshToken: &osmRefresh,
+		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
+		OsmUserID:       &userId,
+	}
+	if err := db.CreateDeviceCode(conns, device); err != nil {
+		t.Fatalf("Failed to create device: %v", err)
+	}
+
+	// Create mock OAuth client that returns revocation error
+	mockClient := &mockWebFlowClient{
+		refreshTokenFunc: func(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
+			return nil, errors.New("token refresh failed: unauthorized (revoked)")
+		},
+	}
+
+	// Create service
+	service := NewService(conns, mockClient)
+
+	// Attempt to refresh token - should detect revocation
+	_, err := service.RefreshUserTokenFromRecord(context.Background(), device)
+	if err != ErrTokenRevoked {
+		t.Errorf("Expected ErrTokenRevoked, got %v", err)
+	}
+
+	// Verify device was marked as revoked in database
+	found, err := db.FindDeviceCodeByCode(conns, deviceCode)
+	if err != nil {
+		t.Fatalf("Error finding device: %v", err)
+	}
+	if found == nil {
+		t.Fatal("Expected device to still exist")
+	}
+	if found.Status != "revoked" {
+		t.Errorf("Expected status 'revoked', got '%s'", found.Status)
+	}
+	if found.OSMAccessToken != nil {
+		t.Error("Expected OSMAccessToken to be cleared")
+	}
+	if found.OSMRefreshToken != nil {
+		t.Error("Expected OSMRefreshToken to be cleared")
+	}
+}
+
+// Test RefreshUserTokenFromRecord with successful token refresh
+func TestRefreshUserTokenFromRecord_Success(t *testing.T) {
+	conns := setupTestDB(t)
+	now := time.Now()
+
+	// Create a device with tokens
+	deviceCode := "test-device"
+	osmToken := "old-osm-token"
+	osmRefresh := "osm-refresh-token"
+	userId := 123
+	device := &db.DeviceCode{
+		DeviceCode:      deviceCode,
+		UserCode:        "TEST",
+		ClientID:        "test-client",
+		Status:          "authorized",
+		ExpiresAt:       now.Add(24 * time.Hour),
+		OSMAccessToken:  &osmToken,
+		OSMRefreshToken: &osmRefresh,
+		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
+		OsmUserID:       &userId,
+	}
+	if err := db.CreateDeviceCode(conns, device); err != nil {
+		t.Fatalf("Failed to create device: %v", err)
+	}
+
+	// Create mock OAuth client that returns new tokens
+	newAccessToken := "new-osm-access-token"
+	newRefreshToken := "new-osm-refresh-token"
+	mockClient := &mockWebFlowClient{
+		refreshTokenFunc: func(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
+			return &types.OSMTokenResponse{
+				AccessToken:  newAccessToken,
+				RefreshToken: newRefreshToken,
+				ExpiresIn:    3600,
+				TokenType:    "Bearer",
+			}, nil
+		},
+	}
+
+	// Create service
+	service := NewService(conns, mockClient)
+
+	// Refresh token
+	returnedToken, err := service.RefreshUserTokenFromRecord(context.Background(), device)
+	if err != nil {
+		t.Fatalf("RefreshUserTokenFromRecord failed: %v", err)
+	}
+	if returnedToken != newAccessToken {
+		t.Errorf("Expected token '%s', got '%s'", newAccessToken, returnedToken)
+	}
+
+	// Verify database was updated with new tokens
+	found, err := db.FindDeviceCodeByCode(conns, deviceCode)
+	if err != nil {
+		t.Fatalf("Error finding device: %v", err)
+	}
+	if found == nil {
+		t.Fatal("Expected device to still exist")
+	}
+	if found.Status != "authorized" {
+		t.Errorf("Expected status 'authorized', got '%s'", found.Status)
+	}
+	if found.OSMAccessToken == nil || *found.OSMAccessToken != newAccessToken {
+		t.Errorf("Expected OSMAccessToken '%s', got '%v'", newAccessToken, found.OSMAccessToken)
+	}
+	if found.OSMRefreshToken == nil || *found.OSMRefreshToken != newRefreshToken {
+		t.Errorf("Expected OSMRefreshToken '%s', got '%v'", newRefreshToken, found.OSMRefreshToken)
+	}
+}
+
+// Test RefreshUserTokenFromRecord with network error
+func TestRefreshUserTokenFromRecord_NetworkError(t *testing.T) {
+	conns := setupTestDB(t)
+	now := time.Now()
+
+	deviceCode := "test-device"
+	osmToken := "osm-access-token"
+	osmRefresh := "osm-refresh-token"
+	userId := 123
+	device := &db.DeviceCode{
+		DeviceCode:      deviceCode,
+		UserCode:        "TEST",
+		ClientID:        "test-client",
+		Status:          "authorized",
+		ExpiresAt:       now.Add(24 * time.Hour),
+		OSMAccessToken:  &osmToken,
+		OSMRefreshToken: &osmRefresh,
+		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
+		OsmUserID:       &userId,
+	}
+	if err := db.CreateDeviceCode(conns, device); err != nil {
+		t.Fatalf("Failed to create device: %v", err)
+	}
+
+	// Create mock OAuth client that returns network error
+	mockClient := &mockWebFlowClient{
+		refreshTokenFunc: func(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
+			return nil, errors.New("network error: connection timeout")
+		},
+	}
+
+	service := NewService(conns, mockClient)
+
+	// Attempt to refresh - should return temporary error
+	_, err := service.RefreshUserTokenFromRecord(context.Background(), device)
+	if err != ErrTokenRefreshFailed {
+		t.Errorf("Expected ErrTokenRefreshFailed, got %v", err)
+	}
+
+	// Verify device status is still authorized (not revoked for network errors)
+	found, err := db.FindDeviceCodeByCode(conns, deviceCode)
+	if err != nil {
+		t.Fatalf("Error finding device: %v", err)
+	}
+	if found == nil {
+		t.Fatal("Expected device to still exist")
+	}
+	if found.Status != "authorized" {
+		t.Errorf("Expected status to remain 'authorized', got '%s'", found.Status)
+	}
+	if found.OSMAccessToken == nil || *found.OSMAccessToken != osmToken {
+		t.Error("Expected OSMAccessToken to remain unchanged")
+	}
+}
+
+// Test RefreshUserTokenFromRecord with invalid device code type
+func TestRefreshUserTokenFromRecord_InvalidType(t *testing.T) {
+	conns := setupTestDB(t)
+	mockClient := &mockWebFlowClient{}
+	service := NewService(conns, mockClient)
+
+	// Pass wrong type (string instead of *db.DeviceCode)
+	_, err := service.RefreshUserTokenFromRecord(context.Background(), "invalid-type")
+	if err != ErrInvalidToken {
+		t.Errorf("Expected ErrInvalidToken for invalid type, got %v", err)
+	}
+}
+
+// Test RefreshUserTokenFromRecord with missing refresh token
+func TestRefreshUserTokenFromRecord_NoRefreshToken(t *testing.T) {
+	conns := setupTestDB(t)
+	now := time.Now()
+
+	deviceCode := "test-device"
+	osmToken := "osm-access-token"
+	userId := 123
+	device := &db.DeviceCode{
+		DeviceCode:      deviceCode,
+		UserCode:        "TEST",
+		ClientID:        "test-client",
+		Status:          "authorized",
+		ExpiresAt:       now.Add(24 * time.Hour),
+		OSMAccessToken:  &osmToken,
+		OSMRefreshToken: nil, // No refresh token
+		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
+		OsmUserID:       &userId,
+	}
+	if err := db.CreateDeviceCode(conns, device); err != nil {
+		t.Fatalf("Failed to create device: %v", err)
+	}
+
+	mockClient := &mockWebFlowClient{}
+	service := NewService(conns, mockClient)
+
+	_, err := service.RefreshUserTokenFromRecord(context.Background(), device)
+	if err != ErrTokenRefreshFailed {
+		t.Errorf("Expected ErrTokenRefreshFailed for missing refresh token, got %v", err)
+	}
+}
+
+// Test Authenticate with last_used_at tracking
+func TestAuthenticate_LastUsedTracking(t *testing.T) {
+	conns := setupTestDB(t)
+	now := time.Now()
+
+	// Create a device with valid token
+	deviceAccessToken := "device-access-token-123"
+	osmToken := "osm-access-token"
+	osmRefresh := "osm-refresh-token"
+	userId := 123
+	device := &db.DeviceCode{
+		DeviceCode:        "test-device",
+		UserCode:          "TEST",
+		ClientID:          "test-client",
+		Status:            "authorized",
+		ExpiresAt:         now.Add(24 * time.Hour),
+		DeviceAccessToken: &deviceAccessToken,
+		OSMAccessToken:    &osmToken,
+		OSMRefreshToken:   &osmRefresh,
+		OSMTokenExpiry:    ptrTime(now.Add(2 * time.Hour)), // Not expiring soon
+		OsmUserID:         &userId,
+		LastUsedAt:        nil, // Never used before
+	}
+	if err := db.CreateDeviceCode(conns, device); err != nil {
+		t.Fatalf("Failed to create device: %v", err)
+	}
+
+	mockClient := &mockWebFlowClient{}
+	service := NewService(conns, mockClient)
+
+	// Authenticate
+	beforeAuth := time.Now()
+	user, err := service.Authenticate(context.Background(), "Bearer "+deviceAccessToken)
+	afterAuth := time.Now()
+
+	if err != nil {
+		t.Fatalf("Authenticate failed: %v", err)
+	}
+	if user == nil {
+		t.Fatal("Expected user to be returned")
+	}
+
+	// Verify last_used_at was updated
+	found, err := db.FindDeviceCodeByCode(conns, "test-device")
+	if err != nil {
+		t.Fatalf("Error finding device: %v", err)
+	}
+	if found.LastUsedAt == nil {
+		t.Fatal("Expected LastUsedAt to be set")
+	}
+	if found.LastUsedAt.Before(beforeAuth) || found.LastUsedAt.After(afterAuth) {
+		t.Errorf("LastUsedAt should be between %v and %v, got %v",
+			beforeAuth, afterAuth, *found.LastUsedAt)
+	}
+}
+
+// Helper function for tests
+func setupTestDB(t *testing.T) *db.Connections {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("Failed to connect to test database: %v", err)
+	}
+
+	if err := db.AutoMigrate(database); err != nil {
+		t.Fatalf("Failed to migrate database: %v", err)
+	}
+
+	return db.NewConnections(database, nil)
+}
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
 }
