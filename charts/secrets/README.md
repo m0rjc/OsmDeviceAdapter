@@ -59,10 +59,10 @@ Configure the main chart to use the secrets created by this chart:
 
 ```bash
 # For unified secret strategy (default)
-helm install osm-adapter ./charts/osm-device-adapter \
-  --set osm.existingSecret=osm-device-adapter-secrets \
-  --set database.existingSecret=osm-device-adapter-secrets \
-  --set redis.existingSecret=osm-device-adapter-secrets \
+helm install osm-device-adapter ./charts/osm-device-adapter \
+  --set osm.existingSecret=osm-device-adapter \
+  --set database.existingSecret=osm-device-adapter \
+  --set redis.existingSecret=osm-device-adapter \
   -n osm-adapter
 
 # For separate secrets strategy
@@ -83,7 +83,7 @@ Creates a single secret containing all credentials. Simpler to manage and refere
 
 ```yaml
 secretStrategy: "unified"
-unifiedSecretName: "osm-device-adapter-secrets"
+unifiedSecretName: "osm-device-adapter"  # Default matches main chart
 
 osm:
   clientId: "your-client-id"
@@ -100,13 +100,13 @@ redis:
 
 ```yaml
 osm:
-  existingSecret: "osm-device-adapter-secrets"
+  existingSecret: "osm-device-adapter"
 
 database:
-  existingSecret: "osm-device-adapter-secrets"
+  existingSecret: "osm-device-adapter"
 
 redis:
-  existingSecret: "osm-device-adapter-secrets"
+  existingSecret: "osm-device-adapter"
 ```
 
 #### Separate Secrets
@@ -151,7 +151,7 @@ redis:
 |-----------|-------------|----------|---------|
 | `namespace` | Namespace where secrets will be created | No | Release namespace |
 | `secretStrategy` | Secret creation strategy: `unified` or `separate` | No | `unified` |
-| `unifiedSecretName` | Name for unified secret | No | Release name |
+| `unifiedSecretName` | Name for unified secret | No | `osm-device-adapter` |
 | `secretNames.osm` | Name for OSM secret (separate mode) | No | `osm-oauth-credentials` |
 | `secretNames.database` | Name for database secret (separate mode) | No | `database-credentials` |
 | `secretNames.redis` | Name for Redis secret (separate mode) | No | `redis-credentials` |
@@ -193,7 +193,7 @@ To delete secrets manually:
 
 ```bash
 # For unified strategy
-kubectl delete secret osm-device-adapter-secrets -n osm-adapter
+kubectl delete secret osm-device-adapter -n osm-adapter
 
 # For separate strategy
 kubectl delete secret osm-oauth-credentials database-credentials redis-credentials -n osm-adapter
@@ -208,10 +208,10 @@ Check that secrets were created correctly:
 kubectl get secrets -n osm-adapter
 
 # View secret keys (without values)
-kubectl describe secret osm-device-adapter-secrets -n osm-adapter
+kubectl describe secret osm-device-adapter -n osm-adapter
 
 # Decode a specific value (use with caution!)
-kubectl get secret osm-device-adapter-secrets -n osm-adapter \
+kubectl get secret osm-device-adapter -n osm-adapter \
   -o jsonpath='{.data.osm-client-id}' | base64 -d
 ```
 
@@ -258,9 +258,9 @@ Ensure the secret names in your main chart configuration match the names created
 helm get values osm-adapter -n osm-adapter | grep existingSecret
 
 # Should show:
-#   osm.existingSecret: "osm-device-adapter-secrets"
-#   database.existingSecret: "osm-device-adapter-secrets"
-#   redis.existingSecret: "osm-device-adapter-secrets"
+#   osm.existingSecret: "osm-device-adapter"
+#   database.existingSecret: "osm-device-adapter"
+#   redis.existingSecret: "osm-device-adapter"
 ```
 
 ### Secrets not updating
@@ -338,12 +338,12 @@ Example with External Secrets Operator:
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: osm-device-adapter-secrets
+  name: osm-device-adapter
 spec:
   secretStoreRef:
     name: vault-backend
   target:
-    name: osm-device-adapter-secrets
+    name: osm-device-adapter
   data:
     - secretKey: osm-client-id
       remoteRef:

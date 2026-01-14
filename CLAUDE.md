@@ -265,10 +265,10 @@ Separate chart for managing Kubernetes secrets independently from the applicatio
 helm install osm-secrets ./charts/secrets -f charts/secrets/values-production.yaml
 
 # 2. Deploy main app referencing those secrets
-helm install osm-adapter ./charts/osm-device-adapter \
-  --set osm.existingSecret=osm-device-adapter-secrets \
-  --set database.existingSecret=osm-device-adapter-secrets \
-  --set redis.existingSecret=osm-device-adapter-secrets
+helm install osm-device-adapter ./charts/osm-device-adapter \
+  --set osm.existingSecret=osm-device-adapter \
+  --set database.existingSecret=osm-device-adapter \
+  --set redis.existingSecret=osm-device-adapter
 ```
 
 See `charts/secrets/README.md` for complete documentation.
