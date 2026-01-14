@@ -65,19 +65,14 @@ func main() {
 	rlStore := osm.NewPrometheusRateLimitDecorator(redisClient)
 	recorder := osm.NewPrometheusLatencyRecorder()
 
-	// Create OAuth client first (needed for deviceAuthService)
-	// We'll pass nil for osmClient initially and set it later
-	var osmClient *osm.Client
-	oauthClient := oauthclient.New(cfg.OAuth.OSMClientID, cfg.OAuth.OSMClientSecret, cfg.OAuth.OSMRedirectURI, nil)
+	// Create OAuth client (no longer depends on osmClient)
+	oauthClient := oauthclient.New(cfg.OAuth.OSMClientID, cfg.OAuth.OSMClientSecret, cfg.OAuth.OSMRedirectURI, cfg.ExternalDomains.OSMDomain)
 
 	// Create device auth service (implements TokenRefresher interface)
 	deviceAuthService := deviceauth.NewService(conns, oauthClient)
 
 	// Create OSM client with token refresher
-	osmClient = osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder, deviceAuthService)
-
-	// Update OAuth client with the actual OSM client
-	oauthClient = oauthclient.New(cfg.OAuth.OSMClientID, cfg.OAuth.OSMClientSecret, cfg.OAuth.OSMRedirectURI, osmClient)
+	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder, deviceAuthService)
 
 	// Create handler dependencies
 	deps := &handlers.Dependencies{

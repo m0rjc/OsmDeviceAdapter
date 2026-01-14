@@ -2,21 +2,23 @@ package oauthclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
-	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
-func New(clientId, clientSecret, redirectUri string, osm *osm.Client) *WebFlowClient {
+func New(clientId, clientSecret, redirectUri, osmDomain string) *WebFlowClient {
 	return &WebFlowClient{
 		clientID:     clientId,
 		clientSecret: clientSecret,
 		redirectURI:  redirectUri,
-		osm:          osm,
+		osmDomain:    osmDomain,
+		httpClient:   &http.Client{},
 	}
 }
 
@@ -24,7 +26,8 @@ type WebFlowClient struct {
 	clientID     string
 	clientSecret string
 	redirectURI  string
-	osm          *osm.Client
+	osmDomain    string
+	httpClient   *http.Client
 }
 
 func (c *WebFlowClient) RefreshToken(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
@@ -34,18 +37,35 @@ func (c *WebFlowClient) RefreshToken(ctx context.Context, refreshToken string) (
 	data.Set("client_id", c.clientID)
 	data.Set("client_secret", c.clientSecret)
 
-	var tokenResp types.OSMTokenResponse
-	resp, err := c.osm.Request(ctx, http.MethodPost, &tokenResp,
-		osm.WithPath("/oauth/token"),
-		osm.WithUrlEncodedBody(&data),
-		osm.WithSensitive(),
-	)
+	// Make direct HTTP request to OSM OAuth endpoint
+	tokenURL := c.osmDomain + "/oauth/token"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		// Check if this is a 401 (user revoked access) vs other errors
-		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("OSM access unauthorized (revoked): %w", err)
-		}
-		return nil, err
+		return nil, fmt.Errorf("failed to create token refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("token refresh request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check for 401 (user revoked access)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("OSM access unauthorized (revoked)")
+	}
+
+	// Check for other non-2xx status codes
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var tokenResp types.OSMTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to decode token response: %w", err)
 	}
 
 	return &tokenResp, nil
@@ -63,7 +83,7 @@ func (c *WebFlowClient) BuildAuthURL(scope, state string) string {
 	params.Set("state", state)
 	params.Set("scope", scope)
 
-	return fmt.Sprintf("%s/oauth/authorize?%s", c.osm.OSMDomain(), params.Encode())
+	return fmt.Sprintf("%s/oauth/authorize?%s", c.osmDomain, params.Encode())
 }
 
 func (c *WebFlowClient) ExchangeCodeForToken(code string) (*types.OSMTokenResponse, error) {
@@ -74,15 +94,30 @@ func (c *WebFlowClient) ExchangeCodeForToken(code string) (*types.OSMTokenRespon
 	data.Set("client_id", c.clientID)
 	data.Set("client_secret", c.clientSecret)
 
-	var tokenResp types.OSMTokenResponse
-	_, err := c.osm.Request(context.Background(), http.MethodPost, &tokenResp,
-		osm.WithPath("/oauth/token"),
-		osm.WithPostBody(strings.NewReader(data.Encode())),
-		osm.WithContentType("application/x-www-form-urlencoded"),
-		osm.WithSensitive(),
-	)
+	// Make direct HTTP request to OSM OAuth endpoint
+	tokenURL := c.osmDomain + "/oauth/token"
+	req, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create token exchange request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("token exchange request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check for non-2xx status codes
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var tokenResp types.OSMTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to decode token response: %w", err)
 	}
 
 	return &tokenResp, nil
