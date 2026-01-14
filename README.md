@@ -90,6 +90,9 @@ All configuration is provided via environment variables:
 | `DEVICE_CODE_EXPIRY` | Device code expiry in seconds | No | `600` |
 | `DEVICE_POLL_INTERVAL` | Recommended polling interval | No | `5` |
 | `ALLOWED_CLIENT_IDS` | Comma-separated list of allowed OAuth client IDs | Yes | - |
+| `OAUTH_PATH_PREFIX` | OAuth web flow path prefix (for obscurity) | No | `/oauth` |
+| `DEVICE_PATH_PREFIX` | Device flow path prefix (for obscurity) | No | `/device` |
+| `API_PATH_PREFIX` | API endpoints path prefix (for obscurity) | No | `/api` |
 
 ## Database Schema
 

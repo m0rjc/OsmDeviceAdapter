@@ -144,18 +144,18 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Store in database
 		expiresAt := time.Now().Add(time.Duration(deps.Config.DeviceOAuth.DeviceCodeExpiry) * time.Second)
-	now := time.Now()
-	deviceCodeRecord := &db.DeviceCode{
-		DeviceCode:           deviceCode,
-		UserCode:             userCode,
-		ClientID:             req.ClientID,
-		ExpiresAt:            expiresAt,
-		Status:               "pending",
-		CreatedAt:            now,
-		DeviceRequestIP:      &remoteMetadata.IP,
-		DeviceRequestCountry: &remoteMetadata.Country,
-		DeviceRequestTime:    &now,
-	}
+		now := time.Now()
+		deviceCodeRecord := &db.DeviceCode{
+			DeviceCode:           deviceCode,
+			UserCode:             userCode,
+			ClientID:             req.ClientID,
+			ExpiresAt:            expiresAt,
+			Status:               "pending",
+			CreatedAt:            now,
+			DeviceRequestIP:      &remoteMetadata.IP,
+			DeviceRequestCountry: &remoteMetadata.Country,
+			DeviceRequestTime:    &now,
+		}
 		if err := db.CreateDeviceCode(deps.Conns, deviceCodeRecord); err != nil {
 			slog.Error("device.authorize.db_store_failed",
 				"component", "device_oauth",
@@ -168,9 +168,9 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Build verification URLs
-		verificationURI := fmt.Sprintf("%s/device", deps.Config.ExternalDomains.ExposedDomain)
-		verificationURIComplete := fmt.Sprintf("%s/device?user_code=%s", deps.Config.ExternalDomains.ExposedDomain, userCode)
+		// Build verification URLs using configurable path prefix
+		verificationURI := fmt.Sprintf("%s%s", deps.Config.ExternalDomains.ExposedDomain, deps.Config.Paths.DevicePrefix)
+		verificationURIComplete := fmt.Sprintf("%s%s?user_code=%s", deps.Config.ExternalDomains.ExposedDomain, deps.Config.Paths.DevicePrefix, userCode)
 		// Short URL for QR codes (no hyphen in user code)
 		userCodeNoHyphen := strings.ReplaceAll(userCode, "-", "")
 		verificationURIShort := fmt.Sprintf("%s/d/%s", deps.Config.ExternalDomains.ExposedDomain, userCodeNoHyphen)
@@ -439,8 +439,8 @@ func ShortCodeRedirectHandler(deps *Dependencies) http.HandlerFunc {
 		// Reformat code with hyphen: MRHQTDY4 -> MRHQ-TDY4
 		formattedCode := fmt.Sprintf("%s-%s", code[:4], code[4:])
 
-		// Build redirect URL
-		redirectURL := fmt.Sprintf("/device?user_code=%s", formattedCode)
+		// Build redirect URL using configurable path prefix
+		redirectURL := fmt.Sprintf("%s?user_code=%s", deps.Config.Paths.DevicePrefix, formattedCode)
 
 		slog.Info("device.short_redirect",
 			"component", "device_oauth",

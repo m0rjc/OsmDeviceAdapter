@@ -26,6 +26,15 @@ config:
     - "scoreboard-device-123"
     - "scoreboard-device-456"
 
+  # Path configuration (for security through obscurity - makes endpoints less predictable)
+  paths:
+    # OAuth web flow path prefix (default: /oauth)
+    oauthPrefix: "/oauth"
+    # Device flow path prefix (default: /device)
+    devicePrefix: "/device"
+    # API endpoints path prefix (default: /api)
+    apiPrefix: "/api"
+
   # Rate limiting configuration for OAuth endpoints (protects against abuse)
   deviceRateLimit:
     # Maximum requests per minute per IP for /device/authorize
