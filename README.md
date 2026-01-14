@@ -201,7 +201,6 @@ All configuration is provided via environment variables. See [chart/values.yaml]
 | `OSM_CLIENT_ID` | OSM OAuth client ID | `your-client-id` |
 | `OSM_CLIENT_SECRET` | OSM OAuth client secret (**CRITICAL SECRET**) | `your-client-secret` |
 | `DATABASE_URL` | PostgreSQL connection string (**CONFIDENTIAL**) | `postgres://user:pass@host:5432/dbname` |
-| `ALLOWED_CLIENT_IDS` | Comma-separated list of allowed device client IDs | `scoreboard-v1,scoreboard-v2` |
 
 ### Optional Configuration
 
@@ -221,6 +220,12 @@ All configuration is provided via environment variables. See [chart/values.yaml]
 | `DEVICE_PATH_PREFIX` | Device flow path prefix (for security obscurity) | `/device` |
 | `API_PATH_PREFIX` | API endpoints path prefix (for security obscurity) | `/api` |
 
+### Deprecated Configuration
+
+| Variable | Description | Replacement |
+|----------|-------------|-------------|
+| `ALLOWED_CLIENT_IDS` | Comma-separated list of allowed device client IDs | Use `allowed_client_ids` database table (see Database Management below) |
+
 ### Security Configuration
 
 See [docs/security.md](docs/security.md) for comprehensive security documentation.
@@ -232,8 +237,9 @@ See [docs/security.md](docs/security.md) for comprehensive security documentatio
 
 **Public Configuration** (can be in version control):
 - `OSM_CLIENT_ID`: Public OAuth client identifier
-- `ALLOWED_CLIENT_IDS`: Device client IDs (extractable from device firmware)
 - All other optional configuration
+
+**Note**: Allowed device client IDs are now managed in the database `allowed_client_ids` table rather than via environment variable. See Database Management section below.
 
 ## Database Schema
 
@@ -302,6 +308,28 @@ CREATE TABLE device_sessions (
 );
 ```
 
+#### `allowed_client_ids` Table
+
+Whitelist of client applications allowed to use the device flow. Uses a surrogate primary key to enable client ID rotation without breaking foreign key relationships.
+
+```sql
+CREATE TABLE allowed_client_ids (
+    id SERIAL PRIMARY KEY,                     -- Surrogate key for foreign key stability
+    client_id VARCHAR(255) UNIQUE NOT NULL,    -- Client application identifier (can be rotated)
+    comment TEXT NOT NULL,                     -- Description of the client application
+    contact_email VARCHAR(255) NOT NULL,       -- Email for client owner/maintainer
+    enabled BOOLEAN NOT NULL DEFAULT true,     -- Enable/disable without deleting
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_allowed_client_ids_enabled (enabled)
+);
+```
+
+Device codes reference this table via `created_by_id` foreign key, allowing client ID rotation while preserving audit trail.
+
+See **Database Management** section below for SQL commands to manage client IDs.
+
 ### Redis Data
 
 Redis is used for:
@@ -348,10 +376,9 @@ Redis is used for:
    export OSM_CLIENT_SECRET=your-client-secret
    export DATABASE_URL=postgres://postgres:devpassword@localhost:5432/osmdeviceadapter?sslmode=disable
    export REDIS_URL=redis://localhost:6379
-   export ALLOWED_CLIENT_IDS=dev-client-1
    ```
 
-5. **Run the service**
+5. **Run the service** (first time - this will create database tables)
    ```bash
    make run
    ```
@@ -360,7 +387,22 @@ Redis is used for:
    - **Main server**: http://localhost:8080 (device auth, web OAuth, API)
    - **Metrics server**: http://localhost:9090 (health checks, Prometheus metrics)
 
+6. **Add an allowed client ID** (required for device authorization)
+
+   Connect to PostgreSQL:
+   ```bash
+   psql $DATABASE_URL
+   ```
+
+   Insert a test client ID:
+   ```sql
+   INSERT INTO allowed_client_ids (client_id, comment, contact_email, enabled)
+   VALUES ('dev-client-1', 'Development Client', 'dev@localhost', true);
+   ```
+
 ### Development Commands
+
+After initial setup, you can use these commands:
 
 ```bash
 make build          # Build binary to bin/server
@@ -548,9 +590,11 @@ This service implements comprehensive security controls suitable for production 
 - If device is compromised, attacker gains only limited API access, not OSM OAuth credentials
 
 **Client ID Validation**:
-- `ALLOWED_CLIENT_IDS` whitelist controls which applications can request authorization
+- Database table `allowed_client_ids` controls which applications can request authorization
+- Each client includes comment, contact email, enabled flag, and supports rotation
 - Device client IDs are public (extractable from firmware) - this is by design
-- Whitelist provides access control and DoS mitigation, not authentication security
+- Validation provides access control and DoS mitigation, not authentication security
+- Audit trail maintained via `device_codes.created_by_id` foreign key
 
 **Rate Limiting**:
 - Layer 1: Cloudflare rate limiting at ingress
@@ -616,6 +660,49 @@ cleanup:
 kubectl create job --from=cronjob/osm-device-adapter-cleanup manual-cleanup-1 -n osm-adapter
 kubectl logs -n osm-adapter job/manual-cleanup-1
 ```
+
+## Database Management
+
+### Managing Allowed Client IDs
+
+Client IDs are managed via direct database access (manual process). Connect to PostgreSQL and use the following commands:
+
+**Add a new client ID**:
+```sql
+INSERT INTO allowed_client_ids (client_id, comment, contact_email, enabled, created_at, updated_at)
+VALUES ('my-client-id', 'Production Scoreboard v1.0', 'admin@example.com', true, NOW(), NOW());
+```
+
+**Disable a client ID** (without deleting):
+```sql
+UPDATE allowed_client_ids SET enabled = false, updated_at = NOW() WHERE client_id = 'my-client-id';
+```
+
+**Re-enable a client ID**:
+```sql
+UPDATE allowed_client_ids SET enabled = true, updated_at = NOW() WHERE client_id = 'my-client-id';
+```
+
+**Rotate a client ID** (if compromised):
+```sql
+UPDATE allowed_client_ids SET client_id = 'new-client-id', updated_at = NOW() WHERE client_id = 'old-client-id';
+```
+
+> **Note**: Client ID rotation preserves the foreign key relationship with existing device codes via the surrogate `id` field, maintaining audit trail.
+
+**List all client IDs**:
+```sql
+SELECT id, client_id, comment, contact_email, enabled, created_at
+FROM allowed_client_ids
+ORDER BY created_at DESC;
+```
+
+**Delete a client ID permanently**:
+```sql
+DELETE FROM allowed_client_ids WHERE client_id = 'my-client-id';
+```
+
+> **Future Enhancement**: An admin API for managing client IDs may be added in the future. For now, use direct database access with appropriate access controls.
 
 ## Observability
 

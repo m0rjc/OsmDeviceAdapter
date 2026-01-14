@@ -103,8 +103,19 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Validate client ID
-		if !isClientIDAllowed(req.ClientID, deps.Config.DeviceOAuth.ParseClientIDs()) {
+		// Validate client ID against database
+		allowed, allowedClientID, err := db.IsClientIDAllowed(deps.Conns, req.ClientID)
+		if err != nil {
+			slog.Error("device.authorize.db_error",
+				"component", "device_oauth",
+				"event", "authorize.error",
+				"client_id", req.ClientID,
+				"error", err,
+			)
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if !allowed {
 			slog.Warn("device.authorize.denied",
 				"component", "device_oauth",
 				"event", "authorize.denied",
@@ -149,6 +160,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			DeviceCode:           deviceCode,
 			UserCode:             userCode,
 			ClientID:             req.ClientID,
+			CreatedByID:          &allowedClientID,
 			ExpiresAt:            expiresAt,
 			Status:               "pending",
 			CreatedAt:            now,
@@ -460,13 +472,4 @@ func extractBearerToken(authHeader string) string {
 		return parts[1]
 	}
 	return ""
-}
-
-func isClientIDAllowed(clientID string, allowedClientIDs []string) bool {
-	for _, allowed := range allowedClientIDs {
-		if clientID == allowed {
-			return true
-		}
-	}
-	return false
 }

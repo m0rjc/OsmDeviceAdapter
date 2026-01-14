@@ -42,7 +42,7 @@ type RedisConfig struct {
 type DeviceOAuthConfig struct {
 	DeviceCodeExpiry   int    `key:"DEVICE_CODE_EXPIRY" default:"300" min:"60"` // seconds (5 minutes default)
 	DevicePollInterval int    `key:"DEVICE_POLL_INTERVAL" default:"5" min:"1"`  // seconds
-	AllowedClientIDs   string `key:"ALLOWED_CLIENT_IDS" required:"true"`        // Comma-separated list
+	AllowedClientIDs   string `key:"ALLOWED_CLIENT_IDS"`                        // DEPRECATED: Use database table instead. Comma-separated list for backward compatibility.
 }
 
 // RateLimitConfig holds rate limiting configuration
