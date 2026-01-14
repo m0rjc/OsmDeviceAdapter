@@ -20,8 +20,12 @@ type DeviceCode struct {
 	UserCode string `gorm:"uniqueIndex;column:user_code;type:varchar(255);not null"`
 
 	// ClientID identifies the client application requesting authorization.
-	// Must match one of the allowed client IDs in the configuration.
+	// This is stored for reference but validation happens via CreatedByID.
 	ClientID string `gorm:"column:client_id;type:varchar(255);not null"`
+
+	// CreatedByID references the allowed_client_ids.id that created this device code.
+	// Using surrogate key allows client ID rotation without breaking this reference.
+	CreatedByID *int `gorm:"column:created_by_id;index:idx_device_codes_created_by"`
 
 	// ExpiresAt is when this device code expires and can no longer be used
 	// to complete the authorization flow.
@@ -123,8 +127,43 @@ func (DeviceSession) TableName() string {
 	return "device_sessions"
 }
 
+// AllowedClientID represents a client application that is allowed to use the device flow.
+// Client IDs can be enabled/disabled, rotated, and include contact information for management.
+// Uses a surrogate primary key to allow client ID rotation without breaking foreign keys.
+type AllowedClientID struct {
+	// ID is the surrogate primary key for this record.
+	// Used in foreign key relationships to allow client ID rotation.
+	ID int `gorm:"primaryKey;autoIncrement;column:id"`
+
+	// ClientID is the current client identifier checked during authorization.
+	// Can be rotated by updating this field (foreign keys remain stable via ID).
+	ClientID string `gorm:"uniqueIndex;column:client_id;type:varchar(255);not null"`
+
+	// Comment is a description of the client application or deployment.
+	// e.g., "Production Scoreboard v1.0" or "Test deployment"
+	Comment string `gorm:"column:comment;type:text;not null"`
+
+	// ContactEmail is the email address for the client owner or maintainer.
+	// Used for communication about service changes or issues.
+	ContactEmail string `gorm:"column:contact_email;type:varchar(255);not null"`
+
+	// Enabled indicates whether this client ID is currently allowed to authorize devices.
+	// Set to false to temporarily disable a client without deleting the record.
+	Enabled bool `gorm:"column:enabled;not null;default:true;index:idx_allowed_client_ids_enabled"`
+
+	// CreatedAt is when this client ID was added to the system.
+	CreatedAt time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+
+	// UpdatedAt is when this record was last modified.
+	UpdatedAt time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
+}
+
+func (AllowedClientID) TableName() string {
+	return "allowed_client_ids"
+}
+
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{})
+	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{})
 }
 
 // User returns the OSM user associated with this Device, or nil if this

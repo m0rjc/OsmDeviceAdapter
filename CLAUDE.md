@@ -135,6 +135,17 @@ The service implements a security boundary between untrusted IoT devices and the
 - `device_code`: Foreign key linking to device authorization
 - Expires after 15 minutes
 
+**`allowed_client_ids` table** - Whitelisted device client applications
+- `id`: Surrogate primary key (auto-increment)
+- `client_id`: Unique client application identifier (can be rotated)
+- `comment`: Description of the client application or deployment
+- `contact_email`: Email address for the client owner or maintainer
+- `enabled`: Boolean flag to enable/disable the client ID
+- `created_at`, `updated_at`: Timestamps for auditing
+- Referenced by `device_codes.created_by_id` for audit trail
+
+**Note**: Uses surrogate primary key to allow client ID rotation without breaking foreign key relationships.
+
 ### Configuration
 
 All configuration via environment variables (see `internal/config/config.go`):
@@ -147,7 +158,6 @@ All configuration via environment variables (see `internal/config/config.go`):
 **Required Config**:
 - `OSM_CLIENT_ID`: OSM OAuth client ID
 - `EXPOSED_DOMAIN`: Public domain (e.g., `https://osm-adapter.example.com`)
-- `ALLOWED_CLIENT_IDS`: Comma-separated list of allowed device client IDs
 
 **Optional**:
 - `PORT`: HTTP port (default: 8080)
@@ -156,6 +166,9 @@ All configuration via environment variables (see `internal/config/config.go`):
 - `DEVICE_CODE_EXPIRY`: Device code TTL in seconds (default: 600)
 - `DEVICE_POLL_INTERVAL`: Recommended polling interval in seconds (default: 5)
 - `REDIS_KEY_PREFIX`: Redis key namespace (default: "osm_device_adapter:")
+
+**Deprecated**:
+- `ALLOWED_CLIENT_IDS`: Comma-separated list of allowed device client IDs (deprecated - use database table instead)
 
 ### Observability
 
@@ -183,15 +196,62 @@ All configuration via environment variables (see `internal/config/config.go`):
 - See `docs/security.md` for comprehensive security documentation
 
 **Client ID Validation**:
-- `ALLOWED_CLIENT_IDS` whitelist controls which applications can use the service
+- Allowed client IDs are stored in the `allowed_client_ids` database table
+- Each client ID includes: comment, contact email, enabled flag, and creation timestamp
 - Device client IDs are public (extractable from device firmware)
-- Whitelist provides access control and DoS mitigation, not authentication
+- Validation provides access control and DoS mitigation, not authentication
+- Management is currently manual via direct database access (see Database Management below)
 
 **Rate Limiting**:
 - OSM API rate limits tracked via `X-RateLimit-*` headers
 - Per-user temporary blocks stored in Redis
 - Service-wide blocks detected via `X-Blocked` header
 - Cloudflare rate limiting on ingress (see `docs/CLOUDFLARE_SETUP.md`)
+
+### Database Management
+
+**Managing Allowed Client IDs** (manual process):
+
+To add a new allowed client ID, connect to the PostgreSQL database and insert a record:
+
+```sql
+INSERT INTO allowed_client_ids (client_id, comment, contact_email, enabled, created_at, updated_at)
+VALUES ('my-client-id', 'Production Scoreboard v1.0', 'admin@example.com', true, NOW(), NOW());
+```
+
+To disable a client ID without deleting it:
+
+```sql
+UPDATE allowed_client_ids SET enabled = false WHERE client_id = 'my-client-id';
+```
+
+To re-enable a client ID:
+
+```sql
+UPDATE allowed_client_ids SET enabled = true WHERE client_id = 'my-client-id';
+```
+
+To rotate a client ID (if compromised):
+
+```sql
+UPDATE allowed_client_ids SET client_id = 'new-client-id', updated_at = NOW() WHERE client_id = 'old-client-id';
+```
+
+**Note**: Client ID rotation preserves the foreign key relationship with existing device codes via the surrogate `id` field.
+
+To list all client IDs:
+
+```sql
+SELECT id, client_id, comment, contact_email, enabled, created_at FROM allowed_client_ids ORDER BY created_at DESC;
+```
+
+To delete a client ID permanently:
+
+```sql
+DELETE FROM allowed_client_ids WHERE client_id = 'my-client-id';
+```
+
+**Note**: An admin API for managing client IDs may be added in the future. For now, use direct database access with appropriate access controls.
 
 ## Development Guidelines
 

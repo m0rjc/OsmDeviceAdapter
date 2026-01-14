@@ -217,40 +217,6 @@ func TestDeviceAuthorizeHandler_MultipleAllowedClients(t *testing.T) {
 	}
 }
 
-func TestIsClientIDAllowed(t *testing.T) {
-	allowedClients := []string{"client-1", "client-2", "client-3"}
-
-	tests := []struct {
-		name     string
-		clientID string
-		expected bool
-	}{
-		{"Valid client 1", "client-1", true},
-		{"Valid client 2", "client-2", true},
-		{"Valid client 3", "client-3", true},
-		{"Invalid client", "unauthorized", false},
-		{"Empty client", "", false},
-		{"Similar but not exact", "client-", false},
-		{"Case sensitive", "Client-1", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isClientIDAllowed(tt.clientID, allowedClients)
-			if result != tt.expected {
-				t.Errorf("isClientIDAllowed(%q) = %v, expected %v", tt.clientID, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestIsClientIDAllowed_EmptyWhitelist(t *testing.T) {
-	result := isClientIDAllowed("any-client", []string{})
-	if result != false {
-		t.Error("Expected isClientIDAllowed to return false with empty whitelist")
-	}
-}
-
 func TestGenerateDeviceAccessToken(t *testing.T) {
 	token1, err := generateDeviceAccessToken()
 	if err != nil {
