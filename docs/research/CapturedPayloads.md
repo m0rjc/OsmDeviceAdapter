@@ -230,3 +230,47 @@ Each member object contains:
   }
 }
 ```
+
+## Update Patrol Scores
+
+This is a POST request to update a patrol's points score.
+
+https://www.onlinescoutmanager.co.uk/ext/members/patrols/?action=updatePatrolPoints&sectionid=10001
+
+### Request
+
+**Method:** POST
+
+**Content-Type:** application/x-www-form-urlencoded
+
+**Authentication:** Pass the access token using the `Authorization: Bearer` header
+
+**URL Parameters:**
+- `action=updatePatrolPoints`
+- `sectionid` - The section ID
+
+**Body Parameters:**
+- `points` - The new points value to set
+- `patrolid` - The patrol ID to update
+
+### Example Request
+
+```bash
+curl "https://www.onlinescoutmanager.co.uk/ext/members/patrols/?action=updatePatrolPoints&sectionid=10001" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-raw "points=35&patrolid=72700"
+```
+
+### Response
+
+```json
+[]
+```
+
+Returns an empty array on success.
+
+### Notes
+
+* The OSM web client performs an immediate refetch after updating to display the new value
+* To verify the update was successful, perform a GET request to the Patrol Information Endpoint after updating
