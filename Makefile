@@ -11,6 +11,8 @@ HELM_NAMESPACE?=osm-adapter
 MONITORING_NAMESPACE?=monitoring
 CHART_DIR=./charts/osm-device-adapter
 SECRETS_CHART_DIR=./charts/osm-secrets
+VALUES_FILE?=$(CHART_DIR)/values-dev.yaml
+SECRETS_VALUES_FILE?=$(SECRETS_CHART_DIR)/values-dev.yaml
 
 # Build the Go application
 build:
@@ -35,15 +37,31 @@ docker-push: docker-build
 # Deploy to Kubernetes
 # Helm: Install the main application chart
 helm-install:
-	helm install $(HELM_RELEASE) $(CHART_DIR) \
-		--namespace $(HELM_NAMESPACE) \
-		--create-namespace
+	@if [ -f "$(VALUES_FILE)" ]; then \
+		echo "Using values file: $(VALUES_FILE)"; \
+		helm install $(HELM_RELEASE) $(CHART_DIR) \
+			-f $(VALUES_FILE) \
+			--namespace $(HELM_NAMESPACE) \
+			--create-namespace; \
+	else \
+		echo "Error: Values file not found: $(VALUES_FILE)"; \
+		echo "Usage: make helm-install VALUES_FILE=path/to/values.yaml"; \
+		exit 1; \
+	fi
 
 # Helm: Upgrade the main application chart
 helm-upgrade:
-	helm upgrade $(HELM_RELEASE) $(CHART_DIR) \
-		--namespace $(HELM_NAMESPACE) \
-		--install
+	@if [ -f "$(VALUES_FILE)" ]; then \
+		echo "Using values file: $(VALUES_FILE)"; \
+		helm upgrade $(HELM_RELEASE) $(CHART_DIR) \
+			-f $(VALUES_FILE) \
+			--namespace $(HELM_NAMESPACE) \
+			--install; \
+	else \
+		echo "Error: Values file not found: $(VALUES_FILE)"; \
+		echo "Usage: make helm-upgrade VALUES_FILE=path/to/values.yaml"; \
+		exit 1; \
+	fi
 
 # Helm: Uninstall the main application chart
 helm-uninstall:
@@ -59,7 +77,16 @@ helm-package:
 
 # Helm: Template the main application chart (dry-run)
 helm-template:
-	helm template $(HELM_RELEASE) $(CHART_DIR) --namespace $(HELM_NAMESPACE)
+	@if [ -f "$(VALUES_FILE)" ]; then \
+		echo "Using values file: $(VALUES_FILE)"; \
+		helm template $(HELM_RELEASE) $(CHART_DIR) \
+			-f $(VALUES_FILE) \
+			--namespace $(HELM_NAMESPACE); \
+	else \
+		echo "Error: Values file not found: $(VALUES_FILE)"; \
+		echo "Usage: make helm-template VALUES_FILE=path/to/values.yaml"; \
+		exit 1; \
+	fi
 
 # Helm: Show main application chart values
 helm-values:
@@ -67,27 +94,32 @@ helm-values:
 
 # Helm Secrets: Install the secrets chart
 helm-secrets-install:
-	@echo "Note: Create a values file with your secrets first (e.g., values-production.yaml)"
-	@echo "Usage: make helm-secrets-install SECRETS_VALUES_FILE=path/to/values.yaml"
-	@if [ -z "$(SECRETS_VALUES_FILE)" ]; then \
-		echo "Error: SECRETS_VALUES_FILE is required"; \
+	@if [ -f "$(SECRETS_VALUES_FILE)" ]; then \
+		echo "Using secrets values file: $(SECRETS_VALUES_FILE)"; \
+		helm install $(HELM_SECRETS_RELEASE) $(SECRETS_CHART_DIR) \
+			-f $(SECRETS_VALUES_FILE) \
+			--namespace $(HELM_NAMESPACE) \
+			--create-namespace; \
+	else \
+		echo "Error: Secrets values file not found: $(SECRETS_VALUES_FILE)"; \
+		echo "Create a values file with your secrets first"; \
+		echo "Usage: make helm-secrets-install SECRETS_VALUES_FILE=path/to/values.yaml"; \
 		exit 1; \
 	fi
-	helm install $(HELM_SECRETS_RELEASE) $(SECRETS_CHART_DIR) \
-		-f $(SECRETS_VALUES_FILE) \
-		--namespace $(HELM_NAMESPACE) \
-		--create-namespace
 
 # Helm Secrets: Upgrade the secrets chart
 helm-secrets-upgrade:
-	@if [ -z "$(SECRETS_VALUES_FILE)" ]; then \
-		echo "Error: SECRETS_VALUES_FILE is required"; \
+	@if [ -f "$(SECRETS_VALUES_FILE)" ]; then \
+		echo "Using secrets values file: $(SECRETS_VALUES_FILE)"; \
+		helm upgrade $(HELM_SECRETS_RELEASE) $(SECRETS_CHART_DIR) \
+			-f $(SECRETS_VALUES_FILE) \
+			--namespace $(HELM_NAMESPACE) \
+			--install; \
+	else \
+		echo "Error: Secrets values file not found: $(SECRETS_VALUES_FILE)"; \
+		echo "Usage: make helm-secrets-upgrade SECRETS_VALUES_FILE=path/to/values.yaml"; \
 		exit 1; \
 	fi
-	helm upgrade $(HELM_SECRETS_RELEASE) $(SECRETS_CHART_DIR) \
-		-f $(SECRETS_VALUES_FILE) \
-		--namespace $(HELM_NAMESPACE) \
-		--install
 
 # Helm Secrets: Lint the secrets chart
 helm-secrets-lint:
