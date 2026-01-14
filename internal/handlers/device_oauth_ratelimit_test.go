@@ -27,6 +27,20 @@ func TestDeviceAuthorizeHandler_RateLimitExceeded(t *testing.T) {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// Create connections wrapper
+	conns := db.NewConnections(database, nil)
+
+	// Insert allowed client ID into database
+	allowedClient := &db.AllowedClientID{
+		ClientID:     "test-client",
+		Comment:      "Test client",
+		ContactEmail: "test@example.com",
+		Enabled:      true,
+	}
+	if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+		t.Fatalf("Failed to create allowed client ID: %v", err)
+	}
+
 	cfg := &config.Config{
 		ExternalDomains: config.ExternalDomainsConfig{
 			ExposedDomain: "https://example.com",
@@ -34,10 +48,12 @@ func TestDeviceAuthorizeHandler_RateLimitExceeded(t *testing.T) {
 		DeviceOAuth: config.DeviceOAuthConfig{
 			DeviceCodeExpiry:   300,
 			DevicePollInterval: 5,
-			AllowedClientIDs:   "test-client",
 		},
 		RateLimit: config.RateLimitConfig{
 			DeviceAuthorizeRateLimit: 6,
+		},
+		Paths: config.PathConfig{
+			DevicePrefix: "/device",
 		},
 	}
 
@@ -45,7 +61,6 @@ func TestDeviceAuthorizeHandler_RateLimitExceeded(t *testing.T) {
 	mockRateLimiter := db.NewMockRateLimiter()
 	mockRateLimiter.AlwaysAllow = false // Deny all requests
 
-	conns := db.NewConnections(database, nil)
 	conns.RateLimiter = mockRateLimiter
 
 	deps := &Dependencies{
@@ -98,6 +113,20 @@ func TestDeviceAuthorizeHandler_RateLimitCustomBehavior(t *testing.T) {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// Create connections wrapper
+	conns := db.NewConnections(database, nil)
+
+	// Insert allowed client ID into database
+	allowedClient := &db.AllowedClientID{
+		ClientID:     "test-client",
+		Comment:      "Test client",
+		ContactEmail: "test@example.com",
+		Enabled:      true,
+	}
+	if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+		t.Fatalf("Failed to create allowed client ID: %v", err)
+	}
+
 	cfg := &config.Config{
 		ExternalDomains: config.ExternalDomainsConfig{
 			ExposedDomain: "https://example.com",
@@ -105,10 +134,12 @@ func TestDeviceAuthorizeHandler_RateLimitCustomBehavior(t *testing.T) {
 		DeviceOAuth: config.DeviceOAuthConfig{
 			DeviceCodeExpiry:   300,
 			DevicePollInterval: 5,
-			AllowedClientIDs:   "test-client",
 		},
 		RateLimit: config.RateLimitConfig{
 			DeviceAuthorizeRateLimit: 3, // Allow 3 requests
+		},
+		Paths: config.PathConfig{
+			DevicePrefix: "/device",
 		},
 	}
 
@@ -135,7 +166,6 @@ func TestDeviceAuthorizeHandler_RateLimitCustomBehavior(t *testing.T) {
 		}, nil
 	}
 
-	conns := db.NewConnections(database, nil)
 	conns.RateLimiter = mockRateLimiter
 
 	deps := &Dependencies{
@@ -265,22 +295,37 @@ func TestMockRateLimiter_CallTracking(t *testing.T) {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// Create connections wrapper
+	conns := db.NewConnections(database, nil)
+
+	// Insert allowed client ID into database
+	allowedClient := &db.AllowedClientID{
+		ClientID:     "test-client",
+		Comment:      "Test client",
+		ContactEmail: "test@example.com",
+		Enabled:      true,
+	}
+	if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+		t.Fatalf("Failed to create allowed client ID: %v", err)
+	}
+
 	cfg := &config.Config{
 		ExternalDomains: config.ExternalDomainsConfig{
 			ExposedDomain: "https://example.com",
 		},
 		DeviceOAuth: config.DeviceOAuthConfig{
 			DeviceCodeExpiry: 300,
-			AllowedClientIDs: "test-client",
 		},
 		RateLimit: config.RateLimitConfig{
 			DeviceAuthorizeRateLimit: 6,
+		},
+		Paths: config.PathConfig{
+			DevicePrefix: "/device",
 		},
 	}
 
 	mockRateLimiter := db.NewMockRateLimiter()
 
-	conns := db.NewConnections(database, nil)
 	conns.RateLimiter = mockRateLimiter
 
 	deps := &Dependencies{

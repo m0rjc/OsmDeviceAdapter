@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
@@ -26,12 +27,20 @@ func setupTestDeps(t *testing.T, allowedClientIDs []string) *Dependencies {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
-	// Convert allowedClientIDs slice to comma-separated string
-	allowedClientIDsStr := ""
-	if len(allowedClientIDs) > 0 {
-		allowedClientIDsStr = allowedClientIDs[0]
-		for i := 1; i < len(allowedClientIDs); i++ {
-			allowedClientIDsStr += "," + allowedClientIDs[i]
+	// Create connections wrapper with mock rate limiter (no Redis required for tests)
+	conns := db.NewConnections(database, nil)
+	conns.RateLimiter = db.NewMockRateLimiter() // Use mock that allows all requests
+
+	// Insert allowed client IDs into the database
+	for _, clientID := range allowedClientIDs {
+		allowedClient := &db.AllowedClientID{
+			ClientID:     clientID,
+			Comment:      "Test client",
+			ContactEmail: "test@example.com",
+			Enabled:      true,
+		}
+		if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+			t.Fatalf("Failed to create allowed client ID %s: %v", clientID, err)
 		}
 	}
 
@@ -42,17 +51,17 @@ func setupTestDeps(t *testing.T, allowedClientIDs []string) *Dependencies {
 		DeviceOAuth: config.DeviceOAuthConfig{
 			DeviceCodeExpiry:   300,
 			DevicePollInterval: 5,
-			AllowedClientIDs:   allowedClientIDsStr,
 		},
 		RateLimit: config.RateLimitConfig{
 			DeviceAuthorizeRateLimit: 6,
 			DeviceEntryRateLimit:     5,
 		},
+		Paths: config.PathConfig{
+			DevicePrefix: "/device",
+			OAuthPrefix:  "/oauth",
+			APIPrefix:    "/api",
+		},
 	}
-
-	// Create connections wrapper with mock rate limiter (no Redis required for tests)
-	conns := db.NewConnections(database, nil)
-	conns.RateLimiter = db.NewMockRateLimiter() // Use mock that allows all requests
 
 	return &Dependencies{
 		Config: cfg,
@@ -265,6 +274,7 @@ func TestDeviceAccessTokenFlow(t *testing.T) {
 		DeviceAccessToken: &deviceAccessToken,
 		OSMAccessToken:    &osmToken,
 		OSMRefreshToken:   &osmRefreshToken,
+		ExpiresAt:         time.Now().Add(5 * time.Minute),
 	}
 	if err := db.CreateDeviceCode(deps.Conns, record); err != nil {
 		t.Fatalf("Failed to create device code: %v", err)
@@ -312,6 +322,7 @@ func TestDeviceAccessTokenUniqueness(t *testing.T) {
 		ClientID:          "test-client",
 		Status:            "authorized",
 		DeviceAccessToken: &token,
+		ExpiresAt:         time.Now().Add(5 * time.Minute),
 	}
 	if err := db.CreateDeviceCode(deps.Conns, record1); err != nil {
 		t.Fatalf("Failed to create first device code: %v", err)
@@ -324,6 +335,7 @@ func TestDeviceAccessTokenUniqueness(t *testing.T) {
 		ClientID:          "test-client",
 		Status:            "authorized",
 		DeviceAccessToken: &token,
+		ExpiresAt:         time.Now().Add(5 * time.Minute),
 	}
 	err := db.CreateDeviceCode(deps.Conns, record2)
 	if err == nil {

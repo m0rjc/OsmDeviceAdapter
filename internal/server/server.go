@@ -17,6 +17,9 @@ import (
 func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	mux := http.NewServeMux()
 
+	// Home page
+	mux.HandleFunc("/", handlers.HomeHandler(deps))
+
 	// Device OAuth Flow endpoints (configurable path prefix)
 	mux.HandleFunc(fmt.Sprintf("%s/authorize", cfg.Paths.DevicePrefix), handlers.DeviceAuthorizeHandler(deps))
 	mux.HandleFunc(fmt.Sprintf("%s/token", cfg.Paths.DevicePrefix), handlers.DeviceTokenHandler(deps))

@@ -1,0 +1,16 @@
+{{define "home"}}
+    <h1>OSM Device Adapter</h1>
+    <p>Welcome to the OSM Device Adapter service. This service allows your IoT scoreboard devices to securely access Online Scout Manager (OSM) data.</p>
+
+    <h2>Authorize Your Device</h2>
+    <p>If you have a device code displayed on your scoreboard, enter it below to begin the authorization process:</p>
+
+    <form method="GET" action="/device">
+        <input type="text" name="user_code" placeholder="XXXX-XXXX" required style="text-transform: uppercase;" />
+        <button type="submit" class="btn-primary">Authorize Device</button>
+    </form>
+
+    <p style="margin-top: 30px; font-size: 14px; color: #999;">
+        Need help? Learn more about <a href="https://www.onlinescoutmanager.co.uk" target="_blank">Online Scout Manager</a>.
+    </p>
+{{end}}

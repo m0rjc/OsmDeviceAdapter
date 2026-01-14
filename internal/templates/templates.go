@@ -74,6 +74,11 @@ type AuthSuccessData struct {
 	Title string
 }
 
+// HomeData is the data structure for the home page
+type HomeData struct {
+	Title string
+}
+
 // DeviceConfirmData is the data structure for the device confirmation page
 type DeviceConfirmData struct {
 	Title              string
@@ -165,4 +170,12 @@ func RenderSectionSelect(w io.Writer, sessionID string, sections []types.OSMSect
 		"sections_count", len(sections),
 	)
 	return Render(w, "section-select.html", data)
+}
+
+// RenderHome renders the home page
+func RenderHome(w io.Writer) error {
+	data := HomeData{
+		Title: "OSM Device Adapter",
+	}
+	return Render(w, "home.html", data)
 }

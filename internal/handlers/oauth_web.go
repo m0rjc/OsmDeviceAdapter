@@ -13,6 +13,17 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
+// HomeHandler renders the home page with a welcome message and device code entry form
+func HomeHandler(deps *Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := templates.RenderHome(w); err != nil {
+			slog.Error("template render failed", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}
+}
+
 func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// This endpoint is called when a user visits the verification URL
