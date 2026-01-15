@@ -114,9 +114,11 @@ func UpdateDeviceCodeTokensOnly(conns *Connections, deviceCode string, accessTok
 		Updates(updates).Error
 }
 
-// DeleteExpiredDeviceCodes deletes all expired device codes
+// DeleteExpiredDeviceCodes deletes expired device codes that were never fully authorized.
+// Authorized and revoked devices are not deleted here - they are handled by DeleteUnusedDeviceCodes
+// based on last_used_at timestamp instead.
 func DeleteExpiredDeviceCodes(conns *Connections) error {
-	return conns.DB.Where("expires_at < ?", time.Now()).Delete(&DeviceCode{}).Error
+	return conns.DB.Where("expires_at < ? AND status NOT IN (?, ?)", time.Now(), "authorized", "revoked").Delete(&DeviceCode{}).Error
 }
 
 // UpdateDeviceCodeTermInfo updates a device code with term information

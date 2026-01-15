@@ -18,6 +18,20 @@ type User interface {
 	AccessToken() string
 }
 
+// TokenHolder represents any entity that holds OSM OAuth tokens.
+// Both DeviceCode and WebSession implement this interface, allowing
+// shared token refresh logic.
+type TokenHolder interface {
+	// GetOSMAccessToken returns the current OSM access token
+	GetOSMAccessToken() string
+	// GetOSMRefreshToken returns the current OSM refresh token
+	GetOSMRefreshToken() string
+	// GetOSMTokenExpiry returns when the access token expires
+	GetOSMTokenExpiry() time.Time
+	// GetIdentifier returns a unique identifier for this token holder (for logging/updates)
+	GetIdentifier() string
+}
+
 type userImpl struct {
 	userId      *int
 	accessToken string

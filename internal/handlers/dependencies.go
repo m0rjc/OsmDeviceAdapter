@@ -6,6 +6,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/deviceauth"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/webauth"
 )
 
 type Dependencies struct {
@@ -14,4 +15,5 @@ type Dependencies struct {
 	OSM        *osm.Client
 	OSMAuth    *oauthclient.WebFlowClient
 	DeviceAuth *deviceauth.Service
+	WebAuth    *webauth.Service
 }

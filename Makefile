@@ -1,4 +1,4 @@
-.PHONY: build run test docker-build docker-push k8s-deploy helm-install helm-upgrade helm-uninstall helm-lint helm-template helm-values helm-package helm-secrets-install helm-secrets-upgrade helm-secrets-lint helm-secrets-template monitoring-deploy clean
+.PHONY: build build-server run test docker-build docker-push k8s-deploy helm-install helm-upgrade helm-uninstall helm-lint helm-template helm-values helm-package helm-secrets-install helm-secrets-upgrade helm-secrets-lint helm-secrets-template monitoring-deploy clean ui-build ui-dev ui-clean
 
 # Variables
 APP_NAME=osm-device-adapter
@@ -14,8 +14,12 @@ SECRETS_CHART_DIR=./charts/osm-secrets
 VALUES_FILE?=$(CHART_DIR)/values-dev.yaml
 SECRETS_VALUES_FILE?=$(SECRETS_CHART_DIR)/values-dev.yaml
 
-# Build the Go application
-build:
+# Build the full application (frontend + backend)
+build: ui-build
+	go build -o bin/server ./cmd/server
+
+# Build only the Go backend (faster for backend-only changes)
+build-server:
 	go build -o bin/server ./cmd/server
 
 # Run the application locally
@@ -162,3 +166,17 @@ fmt:
 # Lint code (requires golangci-lint)
 lint:
 	golangci-lint run
+
+# Frontend build targets
+
+# Build the admin SPA frontend
+ui-build:
+	cd web/admin && npm ci && npm run build
+
+# Run the frontend dev server (hot reload at localhost:5173)
+ui-dev:
+	cd web/admin && npm run dev
+
+# Clean frontend build artifacts
+ui-clean:
+	rm -rf web/admin/dist web/admin/node_modules

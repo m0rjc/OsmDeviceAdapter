@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/m0rjc/OsmDeviceAdapter/internal/admin"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/handlers"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
@@ -36,6 +37,27 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// API endpoints for scoreboard (requires authentication) (configurable path prefix)
 	deviceAuthMiddleware := middleware.DeviceAuthMiddleware(deps.DeviceAuth)
 	mux.Handle(fmt.Sprintf("%s/v1/patrols", cfg.Paths.APIPrefix), deviceAuthMiddleware(handlers.GetPatrolScoresHandler(deps)))
+
+	// Admin OAuth flow endpoints (server-handled, not SPA)
+	mux.HandleFunc("/admin/login", handlers.AdminLoginHandler(deps))
+	mux.HandleFunc("/admin/callback", handlers.AdminCallbackHandler(deps))
+	mux.HandleFunc("/admin/logout", handlers.AdminLogoutHandler(deps))
+
+	// Admin API endpoints (authenticated via session cookie)
+	adminSessionMw := middleware.SessionMiddleware(deps.Conns, handlers.AdminSessionCookieName)
+	adminTokenMw := middleware.TokenRefreshMiddleware(deps.Conns, deps.WebAuth)
+	adminMiddleware := func(h http.Handler) http.Handler {
+		return adminSessionMw(adminTokenMw(h))
+	}
+
+	mux.Handle("/api/admin/session", adminMiddleware(handlers.AdminSessionHandler(deps)))
+	mux.Handle("/api/admin/sections", adminMiddleware(handlers.AdminSectionsHandler(deps)))
+	mux.Handle("/api/admin/sections/", adminMiddleware(handlers.AdminScoresHandler(deps)))
+
+	// Admin SPA (serves static files for /admin/*)
+	// Note: More specific routes (/admin/login, /admin/callback, /admin/logout, /api/admin/*)
+	// are registered above and take precedence over this catch-all
+	mux.Handle("/admin/", admin.NewSPAHandler())
 
 	// Apply middleware chain:
 	// 1. Remote metadata (Cloudflare headers, HTTPS redirect, HSTS) - applied to all routes
