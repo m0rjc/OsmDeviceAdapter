@@ -17,6 +17,7 @@ func main() {
 
 	// Parse command line flags
 	unusedThreshold := flag.Int("unused-threshold", 30, "Days of inactivity before a device is considered unused")
+	auditRetention := flag.Int("audit-retention", 14, "Days to retain score audit logs")
 	flag.Parse()
 
 	slog.Info("starting database cleanup",
@@ -86,6 +87,26 @@ func main() {
 		exitCode = 1
 	} else {
 		slog.Info("unused device codes cleaned up successfully")
+	}
+
+	// Clean up expired web sessions
+	slog.Info("cleaning up expired web sessions")
+	if err := db.DeleteExpiredWebSessions(conns); err != nil {
+		slog.Error("failed to delete expired web sessions", "error", err)
+		exitCode = 1
+	} else {
+		slog.Info("expired web sessions cleaned up successfully")
+	}
+
+	// Clean up old score audit logs
+	slog.Info("cleaning up old score audit logs",
+		"retention_days", *auditRetention,
+	)
+	if err := db.DeleteExpiredScoreAuditLogs(conns, time.Duration(*auditRetention)*24*time.Hour); err != nil {
+		slog.Error("failed to delete old score audit logs", "error", err)
+		exitCode = 1
+	} else {
+		slog.Info("old score audit logs cleaned up successfully")
 	}
 
 	if exitCode == 0 {

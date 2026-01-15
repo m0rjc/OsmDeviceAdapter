@@ -70,7 +70,7 @@ This document outlines the implementation phases for the Score Entry UI feature 
 ### 3.4 Admin Logout Handler ✓
 - [x] `GET /admin/logout`: Clear session from DB and cookie
 - [x] Redirect to home page
-- [ ] Token revocation deferred (OSM may not support it)
+- [x] Token revocation not possible (OSM has no revocation endpoint)
 
 ### 3.5 Register Callback URL with OSM
 - Document that `/admin/callback` must be registered as additional callback URL in OSM OAuth app settings
@@ -162,42 +162,42 @@ This document outlines the implementation phases for the Score Entry UI feature 
 
 ---
 
-## Phase 7: React SPA Implementation
+## Phase 7: React SPA Implementation ✓
 
-### 7.1 Router Setup
-- React Router with routes:
+### 7.1 Router Setup ✓
+- [x] React Router with routes:
   - `/admin/` - redirect to scores or login
   - `/admin/scores` - main score entry page
 
-### 7.2 Auth Context
-- Call `/api/admin/session` on load
-- Store auth state, user info, CSRF token
-- Redirect to `/admin/login` if not authenticated
+### 7.2 Auth Context ✓
+- [x] Call `/api/admin/session` on load
+- [x] Store auth state, user info, CSRF token
+- [x] Redirect to `/admin/login` if not authenticated
 
-### 7.3 Section Selector Component
-- Dropdown for section selection (if multiple sections)
-- Fetch sections from `/api/admin/sections`
-- Store selected section in context
+### 7.3 Section Selector Component ✓
+- [x] Dropdown for section selection (if multiple sections)
+- [x] Fetch sections from `/api/admin/sections`
+- [x] Store selected section in context
 
-### 7.4 Score Entry Component
-- Display patrol list with current scores
-- Number input for each patrol (range -1000 to +1000)
-- Visual feedback for positive/negative values
+### 7.4 Score Entry Component ✓
+- [x] Display patrol list with current scores
+- [x] Number input for each patrol (range -1000 to +1000)
+- [x] Visual feedback for positive/negative values
 
-### 7.5 Action Buttons
-- Refresh: Reload scores from API
-- Clear: Reset all inputs to 0
-- Add Scores: Show confirmation dialog, submit changes
+### 7.5 Action Buttons ✓
+- [x] Refresh: Reload scores from API
+- [x] Clear: Reset all inputs to 0
+- [x] Add Scores: Show confirmation dialog, submit changes
 
-### 7.6 Confirmation Dialog
-- Show patrols with non-zero changes
-- Display patrol name and points delta
-- Cancel/Confirm buttons
+### 7.6 Confirmation Dialog ✓
+- [x] Show patrols with non-zero changes
+- [x] Display patrol name and points delta
+- [x] Cancel/Confirm buttons
 
-### 7.7 Error Handling & Loading States
-- Toast notifications for success/error
-- Loading spinners during API calls
-- Inline validation errors
+### 7.7 Error Handling & Loading States ✓
+- [x] Toast notifications for success/error
+- [x] Loading spinners during API calls
+- [x] Inline validation errors
 
 ---
 
@@ -359,7 +359,7 @@ Long TTL preferred to minimise OSM API calls. Section membership rarely changes,
 
 - [x] OSM API endpoint for writing patrol scores (verified: POST `/ext/members/patrols/?action=updatePatrolPoints`)
 - [x] OSM API endpoint for fetching user's sections (using existing `FetchOSMProfile`)
-- [ ] Test OSM token revocation endpoint availability
+- [x] OSM token revocation not available (tested /oauth/revoke, /oauth2/revoke, /oauth/token/revoke - all 404)
 - [x] Session cookie name: `osm_admin_session` (implemented)
 - [x] Session duration: 7 days (implemented in `AdminSessionDuration` constant)
-- [ ] Audit log retention period (14 days in spec)
+- [x] Audit log retention period (14 days default, configurable via --audit-retention flag in cleanup job)
