@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context';
 import { useAuth } from './hooks';
-import { ToastProvider, Header, SectionSelector, ScoreEntry, Loading } from './components';
+import { ToastProvider, Header, SectionSelector, ScoreEntry, Loading, LoginPage } from './components';
 import './styles.css';
 
 function ScoresPage() {
@@ -38,16 +38,25 @@ function ScoresPage() {
   );
 }
 
+function AuthenticatedRoutes() {
+  return (
+    <AuthProvider>
+      <Routes>
+        <Route path="/" element={<Navigate to="/scores" replace />} />
+        <Route path="/scores" element={<ScoresPage />} />
+      </Routes>
+    </AuthProvider>
+  );
+}
+
 function App() {
   return (
     <BrowserRouter basename="/admin">
       <ToastProvider>
-        <AuthProvider>
-          <Routes>
-            <Route path="/" element={<Navigate to="/scores" replace />} />
-            <Route path="/scores" element={<ScoresPage />} />
-          </Routes>
-        </AuthProvider>
+        <Routes>
+          <Route path="/signin" element={<LoginPage />} />
+          <Route path="/*" element={<AuthenticatedRoutes />} />
+        </Routes>
       </ToastProvider>
     </BrowserRouter>
   );

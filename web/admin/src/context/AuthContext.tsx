@@ -20,8 +20,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const sessionData = await fetchSession();
 
       if (!sessionData.authenticated) {
-        // Redirect to login
-        window.location.href = '/admin/login';
+        // Redirect to login page
+        window.location.href = '/admin/signin';
         return;
       }
 
@@ -44,9 +44,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error: null,
       });
     } catch (err) {
-      // Check if it's an unauthorized error - redirect to login
+      // Check if it's an unauthorized error - redirect to login page
       if (err instanceof ApiError && err.statusCode === 401) {
-        window.location.href = '/admin/login';
+        window.location.href = '/admin/signin';
         return;
       }
 

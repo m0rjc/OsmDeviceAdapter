@@ -4,3 +4,4 @@ export { ScoreEntry } from './ScoreEntry';
 export { ConfirmDialog } from './ConfirmDialog';
 export { Loading } from './Loading';
 export { ToastProvider } from './Toast';
+export { LoginPage } from './LoginPage';
