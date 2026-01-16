@@ -194,42 +194,39 @@ export function ScoreEntry() {
             <p>This section doesn't have any patrols configured.</p>
           </div>
         ) : (
-          <ul className="patrol-list">
+          <div className="patrol-cards">
             {patrols.map(patrol => (
-              <li key={patrol.id} className="patrol-item">
-                <div className="patrol-info">
+              <div key={patrol.id} className="patrol-card">
+                <div className="patrol-card-header">
                   <span className="patrol-name">{patrol.name}</span>
-                  <span className="patrol-score">
-                    Current: {patrol.score} points
-                    {patrol.pointsToAdd !== 0 && (
-                      <span>
-                        {' '}
-                        → {patrol.score + patrol.pointsToAdd} points
-                      </span>
-                    )}
-                  </span>
+                  <span className="patrol-current-score">{patrol.score}</span>
+                  {patrol.pointsToAdd !== 0 && (
+                      <span className="patrol-new-score">{patrol.score + patrol.pointsToAdd}</span>
+                  )}
                 </div>
-                <div className="patrol-input">
-                  <span className="patrol-input-label">Add:</span>
-                  <input
-                    type="number"
-                    min={-1000}
-                    max={1000}
-                    value={patrol.pointsToAdd === 0 ? '' : patrol.pointsToAdd}
-                    onChange={e => handlePointsChange(patrol.id, e.target.value)}
-                    placeholder="0"
-                    className={
-                      patrol.pointsToAdd > 0
-                        ? 'positive'
-                        : patrol.pointsToAdd < 0
-                        ? 'negative'
-                        : ''
-                    }
-                  />
+                <div className="patrol-card-body">
+                  <div className="patrol-input">
+                    <span className="patrol-input-label">Add points:</span>
+                    <input
+                      type="number"
+                      min={-1000}
+                      max={1000}
+                      value={patrol.pointsToAdd === 0 ? '' : patrol.pointsToAdd}
+                      onChange={e => handlePointsChange(patrol.id, e.target.value)}
+                      placeholder="0"
+                      className={
+                        patrol.pointsToAdd > 0
+                          ? 'positive'
+                          : patrol.pointsToAdd < 0
+                          ? 'negative'
+                          : ''
+                      }
+                    />
+                  </div>
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
 
         <div className="action-bar">
