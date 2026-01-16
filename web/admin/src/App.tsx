@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context';
 import { useAuth } from './hooks';
-import { ToastProvider, Header, SectionSelector, ScoreEntry, Loading, LoginPage } from './components';
+import { ToastProvider, Header, SectionSelector, ScoreEntry, Loading, LoginPage, UpdatePrompt, SyncAuthHandler } from './components';
 import './styles.css';
 
 function ScoresPage() {
@@ -53,6 +53,8 @@ function App() {
   return (
     <BrowserRouter basename="/admin">
       <ToastProvider>
+        <UpdatePrompt />
+        <SyncAuthHandler />
         <Routes>
           <Route path="/signin" element={<LoginPage />} />
           <Route path="/*" element={<AuthenticatedRoutes />} />

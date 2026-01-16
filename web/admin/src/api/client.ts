@@ -6,6 +6,7 @@ import type {
   UpdateResponse,
   ErrorResponse,
 } from './types';
+import { queueUpdate, isOnline, requestBackgroundSync } from './offlineQueue';
 
 class ApiError extends Error {
   statusCode: number;
@@ -20,6 +21,16 @@ class ApiError extends Error {
     this.name = 'ApiError';
     this.statusCode = statusCode;
     this.errorCode = errorCode;
+  }
+}
+
+/**
+ * Error thrown when a request is queued for offline sync
+ */
+export class OfflineQueuedError extends Error {
+  constructor() {
+    super('You are offline. Changes have been queued and will sync when back online.');
+    this.name = 'OfflineQueuedError';
   }
 }
 
@@ -62,16 +73,33 @@ export async function updateScores(
   updates: UpdateRequest,
   csrfToken: string
 ): Promise<UpdateResponse> {
-  const response = await fetch(`/api/admin/sections/${sectionId}/scores`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRF-Token': csrfToken,
-    },
-    body: JSON.stringify(updates),
-  });
-  return handleResponse<UpdateResponse>(response);
+  // If offline, queue the update for later sync
+  if (!isOnline()) {
+    await queueUpdate(sectionId, updates.updates);
+    await requestBackgroundSync();
+    throw new OfflineQueuedError();
+  }
+
+  try {
+    const response = await fetch(`/api/admin/sections/${sectionId}/scores`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify(updates),
+    });
+    return handleResponse<UpdateResponse>(response);
+  } catch (err) {
+    // Network error - queue for later
+    if (err instanceof TypeError && err.message.includes('fetch')) {
+      await queueUpdate(sectionId, updates.updates);
+      await requestBackgroundSync();
+      throw new OfflineQueuedError();
+    }
+    throw err;
+  }
 }
 
 export { ApiError };

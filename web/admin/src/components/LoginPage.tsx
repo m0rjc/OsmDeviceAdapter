@@ -1,4 +1,17 @@
+import { useState, useEffect } from 'react';
+import { getPendingSyncMessage } from './SyncAuthHandler';
+
 export function LoginPage() {
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Check for pending sync message (e.g., from expired session during background sync)
+    const message = getPendingSyncMessage();
+    if (message) {
+      setPendingMessage(message);
+    }
+  }, []);
+
   const handleLogin = () => {
     window.location.href = '/admin/login';
   };
@@ -8,6 +21,15 @@ export function LoginPage() {
       <main className="main">
         <div className="login-card">
           <h1 className="login-title">Patrol Scores Admin</h1>
+
+          {pendingMessage && (
+            <div className="login-warning">
+              <p>{pendingMessage}</p>
+              <p className="login-warning-detail">
+                Your pending changes are saved locally and will sync after you log in.
+              </p>
+            </div>
+          )}
 
           <p className="login-description">
             Sign in with your Online Scout Manager account to manage patrol scores for your section.
