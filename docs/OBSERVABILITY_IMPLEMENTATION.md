@@ -159,17 +159,20 @@ LOG_FORMAT=json         # json, text
 
 **Why Prometheus**: Industry standard, lightweight, excellent Grafana integration
 
+**Note**: Go runtime metrics (go_memstats_*, process_*, etc.) are **disabled** to reduce metric cardinality and stay within Grafana Cloud free tier limits. Only application-specific metrics are exported.
+
 **Files to Modify**:
 1. ✅ `cmd/server/main.go`
-   - Add Prometheus handler: `http.Handle("/metrics", promhttp.Handler())`
-   - Initialize metrics registry
+   - Add Prometheus handler with custom registry: `promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{})`
+   - Custom registry excludes automatic Go runtime collectors
 
 2. ✅ Create `internal/metrics/metrics.go`
-   - Define all Prometheus metrics:
+   - Create custom registry: `var Registry = prometheus.NewRegistry()`
+   - Define all Prometheus metrics (registered manually, not with promauto):
      ```go
      // Rate limiting metrics
      var (
-         OSMRateLimitRemaining = promauto.NewGaugeVec(prometheus.GaugeOpts{
+         OSMRateLimitRemaining = prometheus.NewGaugeVec(prometheus.GaugeOpts{
              Name: "osm_rate_limit_remaining",
              Help: "Remaining OSM API requests for user",
          }, []string{"user_id"})

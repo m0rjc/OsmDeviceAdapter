@@ -2,67 +2,84 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // Prometheus metrics for monitoring OSM Device Adapter
 
+// Registry is a custom Prometheus registry that excludes Go runtime metrics
+// to reduce the number of metrics sent to Grafana
+var Registry = prometheus.NewRegistry()
+
 var (
 	// Rate limiting metrics (per-user)
-	OSMRateLimitRemaining = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	OSMRateLimitRemaining = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "osm_rate_limit_remaining",
 		Help: "Remaining OSM API requests for user",
 	}, []string{"user_id"})
 
-	OSMRateLimitTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	OSMRateLimitTotal = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "osm_rate_limit_total",
 		Help: "Total OSM API requests allowed per period",
 	}, []string{"user_id"})
 
-	OSMRateLimitResetSeconds = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	OSMRateLimitResetSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "osm_rate_limit_reset_seconds",
 		Help: "Seconds until the OSM API rate limit resets for user",
 	}, []string{"user_id"})
 
 	// Blocking metrics (X-Blocked indicates complete service block, not per-user)
-	OSMServiceBlocked = promauto.NewGauge(prometheus.GaugeOpts{
+	OSMServiceBlocked = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "osm_service_blocked",
 		Help: "OSM service block status (0=unblocked, 1=blocked by X-Blocked header)",
 	})
 
-	OSMBlockCount = promauto.NewCounter(prometheus.CounterOpts{
+	OSMBlockCount = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "osm_block_events_total",
 		Help: "Total number of times OSM blocking was detected",
 	})
 
 	// OAuth metrics
-	DeviceAuthRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+	DeviceAuthRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "device_auth_requests_total",
 		Help: "Device authorization requests by client and status",
 	}, []string{"client_id", "status"})
 
 	// API latency metrics
-	OSMAPILatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	OSMAPILatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "osm_api_request_duration_seconds",
 		Help:    "OSM API request latency",
 		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
 	}, []string{"endpoint", "status_code"})
 
 	// Cache metrics
-	CacheOperations = promauto.NewCounterVec(prometheus.CounterOpts{
+	CacheOperations = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "cache_operations_total",
 		Help: "Cache operations by operation type and result",
 	}, []string{"operation", "result"}) // operation: get|set, result: hit|miss|error
 
 	// HTTP metrics
-	HTTPRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	HTTPRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "http_request_duration_seconds",
 		Help:    "HTTP request latency by method, path, and status",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path", "status"})
 
-	HTTPRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	HTTPRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "http_requests_total",
 		Help: "Total HTTP requests by method, path, and status",
 	}, []string{"method", "path", "status"})
 )
+
+func init() {
+	// Register all metrics with the custom registry
+	Registry.MustRegister(OSMRateLimitRemaining)
+	Registry.MustRegister(OSMRateLimitTotal)
+	Registry.MustRegister(OSMRateLimitResetSeconds)
+	Registry.MustRegister(OSMServiceBlocked)
+	Registry.MustRegister(OSMBlockCount)
+	Registry.MustRegister(DeviceAuthRequests)
+	Registry.MustRegister(OSMAPILatency)
+	Registry.MustRegister(CacheOperations)
+	Registry.MustRegister(HTTPRequestDuration)
+	Registry.MustRegister(HTTPRequestsTotal)
+}
