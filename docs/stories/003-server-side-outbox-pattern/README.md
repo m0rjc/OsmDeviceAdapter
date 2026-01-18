@@ -22,6 +22,70 @@ This creates data integrity issues where scores can be incorrectly incremented m
 - **Rollout**: Schema-first deployment (deploy schema + worker first, then switch handler in second deploy)
 - **Tables**: Separate outbox table (operational, temporary) from audit table (historical, immutable)
 
+### Distributed Coordination & Concurrency
+
+With multiple Kubernetes replicas (currently 2), we need distributed coordination for the read-calculate-write cycle that spans external OSM API calls. The design handles concurrent leaders coming online simultaneously.
+
+**Core principles:**
+1. **Always create new outbox records** - never merge at insert time, preserves audit trail
+2. **Batch on sync** - when syncing, greedily grab all pending entries for the patrol
+3. **Redis for distributed locking** - coordinates which replica handles sync for a patrol
+4. **SKIP LOCKED as safety layer** - database-level protection if Redis coordination fails
+
+**Interactive vs Background sync modes:**
+
+| Mode | Source | Debounce | Behavior |
+|------|--------|----------|----------|
+| Interactive | User clicks submit | None | Immediate sync attempt |
+| Background | Service worker comes online | 10-30 seconds | Waits to batch with other leaders |
+
+Interactive syncs remain fast regardless of debounce length. A longer debounce window allows more background syncs to accumulate, reducing OSM API calls.
+
+**Redis keys:**
+- `patrol:{sectionId}:{patrolId}:sync_lock` - Distributed lock during sync (TTL: 30s)
+- `patrol:{sectionId}:{patrolId}:debounce` - Signals debounce window is active (TTL: configurable, e.g., 15s)
+
+**Sync flow:**
+
+```
+Request arrives (interactive or background):
+  1. Write outbox entry → commit immediately (visible to all replicas)
+  2. Respond 202 Accepted to client (entry is persisted)
+  3. If interactive:
+       - Immediately attempt sync (skip debounce)
+  4. If background:
+       - SETNX patrol:{id}:debounce → if SET succeeded, schedule sync after TTL
+       - If already set, our entry will be picked up by scheduled sync
+
+Sync execution (immediate for interactive, after debounce for background):
+  1. Try SETNX patrol:{id}:sync_lock {replica-id} EX 30
+  2. If lock NOT acquired:
+       - Another replica is handling it, done (our entries will be picked up)
+  3. If lock acquired:
+       - SELECT all pending outbox entries for patrol FOR UPDATE SKIP LOCKED
+       - Sum all deltas (e.g., Leader A: +5, Leader B: +3 = +8)
+       - Read current score from OSM
+       - Write new score to OSM (single API call)
+       - On success: mark all selected entries as completed, create audit entries
+       - Delete sync_lock
+```
+
+**Why this works for concurrent leaders:**
+- Leader A and Leader B both come online and submit updates
+- Both create separate outbox entries (preserving attribution)
+- Whichever sync executes first grabs ALL pending entries for that patrol
+- Single OSM API call applies the combined delta
+- Each original entry gets its own audit record
+
+**Safety properties:**
+- **Greedy grab**: Interactive sync picks up waiting background entries
+- **SKIP LOCKED**: If Redis lock expires mid-sync, another replica won't grab already-processing rows
+- **Idempotency preserved**: Each entry has its own key, unaffected by batching
+- **Audit trail intact**: One audit record per original outbox entry
+
+**Acknowledged risk:**
+If database write-back fails after OSM succeeds (connection drops between OSM response and our commit), retrying would re-apply the delta. This window is small and requires a specific failure mode. Mitigation: structured logging of OSM success before DB commit allows manual reconciliation if needed.
+
 ## Solution Overview
 
 Implement a server-side outbox pattern for reliable, exactly-once delivery of score updates.
@@ -85,30 +149,91 @@ type ScoreUpdateOutbox struct {
 ```
 
 **Store functions:**
-- `CreateOutboxEntries(entries []ScoreUpdateOutbox) error`
+- `CreateOutboxEntry(entry ScoreUpdateOutbox) error` - single entry insert, commits immediately
+- `CreateOutboxEntries(entries []ScoreUpdateOutbox) error` - batch insert
 - `FindOutboxByIdempotencyKey(key string) (*ScoreUpdateOutbox, error)`
-- `FindPendingOutboxEntries(limit int) ([]ScoreUpdateOutbox, error)` - with `SELECT FOR UPDATE SKIP LOCKED`
-- `ClaimOutboxEntry(id int64) (*ScoreUpdateOutbox, error)` - atomic claim
-- `MarkOutboxCompleted(id int64) error`
-- `MarkOutboxFailed(id int64, err string, nextRetry *time.Time) error`
+- `ClaimPendingEntriesForPatrol(sectionID int, patrolID string) ([]ScoreUpdateOutbox, error)` - `SELECT FOR UPDATE SKIP LOCKED` all pending entries for a patrol, marks as `processing`
+- `MarkEntriesCompleted(ids []int64, processedAt time.Time) error` - batch mark completed
+- `MarkEntriesFailed(ids []int64, err string, nextRetry *time.Time) error` - batch mark failed
 - `MarkOutboxAuthRevoked(osmUserID int) error`
 - `RecoverAuthRevokedEntries(osmUserID int) error` - reset auth_revoked → pending on re-auth
 - `CountPendingOutboxByUser(osmUserID int) (int64, error)`
 - `GetPendingOutboxBySection(sessionID string, sectionID int) ([]ScoreUpdateOutbox, error)`
+- `FindPatrolsWithPendingEntries(sectionID int) ([]string, error)` - returns patrol IDs that have pending entries (for worker to iterate)
 - `DeleteExpiredOutboxEntries() error` - respects different retention per status
 
-### Phase 2: Background Worker
+**Key query for claiming entries:**
+```sql
+UPDATE score_update_outbox
+SET status = 'processing', attempt_count = attempt_count + 1
+WHERE section_id = $1 AND patrol_id = $2 AND status = 'pending'
+RETURNING *
+-- Note: Use FOR UPDATE SKIP LOCKED in SELECT variant if needed
+```
 
-**File:** `internal/worker/outbox_processor.go` - New file
+### Phase 2: Background Worker & Sync Service
+
+**Files:**
+- `internal/worker/outbox_processor.go` - Background worker for scheduled syncs
+- `internal/worker/patrol_sync.go` - Shared sync logic (used by worker and handler)
+- `internal/worker/redis_lock.go` - Redis distributed locking utilities
 
 ```go
-type OutboxProcessor struct {
+// Shared sync service - used by both handler (interactive) and worker (background)
+type PatrolSyncService struct {
     conns     *db.Connections
     osmClient *osm.Client
+    replicaID string  // Unique identifier for this replica (e.g., pod name)
+}
+
+// SyncPatrol attempts to sync all pending entries for a patrol
+// Returns: synced count, error
+func (s *PatrolSyncService) SyncPatrol(ctx context.Context, sectionID int, patrolID string) (int, error)
+
+// Redis lock helpers
+func (s *PatrolSyncService) AcquireSyncLock(ctx context.Context, sectionID int, patrolID string) (bool, error)
+func (s *PatrolSyncService) ReleaseSyncLock(ctx context.Context, sectionID int, patrolID string) error
+func (s *PatrolSyncService) SetDebounce(ctx context.Context, sectionID int, patrolID string, ttl time.Duration) (bool, error)
+```
+
+```go
+// Background worker - polls for patrols needing sync
+type OutboxProcessor struct {
+    syncService *PatrolSyncService
+    conns       *db.Connections
 }
 
 func (p *OutboxProcessor) Start(ctx context.Context)
-func (p *OutboxProcessor) processEntry(ctx context.Context, entry db.ScoreUpdateOutbox)
+func (p *OutboxProcessor) processPatrol(ctx context.Context, sectionID int, patrolID string)
+```
+
+**SyncPatrol implementation:**
+```go
+func (s *PatrolSyncService) SyncPatrol(ctx context.Context, sectionID int, patrolID string) (int, error) {
+    // 1. Try to acquire Redis lock
+    acquired, err := s.AcquireSyncLock(ctx, sectionID, patrolID)
+    if err != nil || !acquired {
+        return 0, err // Another replica is handling it
+    }
+    defer s.ReleaseSyncLock(ctx, sectionID, patrolID)
+
+    // 2. Claim all pending entries for this patrol (SKIP LOCKED)
+    entries, err := s.conns.DB.ClaimPendingEntriesForPatrol(sectionID, patrolID)
+    if err != nil || len(entries) == 0 {
+        return 0, err
+    }
+
+    // 3. Sum deltas and get user context (use first entry's session for OSM auth)
+    totalDelta := 0
+    for _, e := range entries {
+        totalDelta += e.PointsDelta
+    }
+
+    // 4. Read current score from OSM
+    // 5. Write new score to OSM
+    // 6. On success: mark all entries completed, create audit records
+    // 7. On failure: mark entries failed with appropriate retry time
+}
 ```
 
 **Retry strategy:**
@@ -123,7 +248,26 @@ func (p *OutboxProcessor) processEntry(ctx context.Context, entry db.ScoreUpdate
 - Reset status to `pending` so worker will retry them
 - User's pending changes are preserved across re-authentication
 
-**Startup:** Add to `cmd/server/main.go` - start worker goroutine with graceful shutdown
+**Worker loop:**
+```go
+func (p *OutboxProcessor) Start(ctx context.Context) {
+    ticker := time.NewTicker(5 * time.Second)
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            // Find all section/patrol pairs with pending or failed (ready to retry) entries
+            patrols, _ := p.conns.DB.FindPatrolsWithPendingEntries()
+            for _, patrol := range patrols {
+                p.syncService.SyncPatrol(ctx, patrol.SectionID, patrol.PatrolID)
+            }
+        }
+    }
+}
+```
+
+**Startup:** Add to `cmd/server/main.go` - start worker goroutine with graceful shutdown. Pass replica ID from `HOSTNAME` env var (set by Kubernetes).
 
 ### Phase 3: Handler Changes
 
@@ -132,12 +276,36 @@ func (p *OutboxProcessor) processEntry(ctx context.Context, entry db.ScoreUpdate
 **Modified `handleUpdateScores`:**
 1. Require `X-Idempotency-Key` header - return 400 if missing
 2. Check for existing entry with same key → return cached result
-3. Fetch current scores from OSM
-4. Create outbox entries (batch insert, transactional)
-5. Attempt synchronous processing for each entry
-6. Return response:
-   - 200 OK if all succeeded (with results)
-   - 202 Accepted if any pending (with partial results + pending count)
+3. Create outbox entries and commit immediately (makes entries visible to all replicas)
+4. Respond 202 Accepted (entry is persisted, safe from client perspective)
+5. Determine sync mode and attempt sync:
+   - **Interactive**: Immediately call `SyncPatrol()` for each affected patrol
+   - **Background**: Set debounce key, let worker handle after delay
+6. Return final response based on sync result
+
+**Sync mode detection:**
+- Header: `X-Sync-Mode: interactive` (default) or `X-Sync-Mode: background`
+- Service worker requests use `background` mode
+- User-initiated submits use `interactive` mode (or omit header)
+
+**Interactive flow (no debounce):**
+```
+1. Create outbox entries → commit
+2. For each patrol in request:
+     - Call syncService.SyncPatrol(sectionID, patrolID)
+     - This greedily grabs ALL pending entries (including from other leaders)
+3. Return 200 if all synced, 202 if any pending (lock contention or failure)
+```
+
+**Background flow (with debounce):**
+```
+1. Create outbox entries → commit
+2. For each patrol in request:
+     - SETNX debounce key with TTL (e.g., 15 seconds)
+     - If SET succeeded: we're first, worker will pick up after TTL
+     - If SET failed: debounce already active, our entry joins the batch
+3. Return 202 Accepted immediately
+```
 
 **Idempotency key handling:**
 - Required header: `X-Idempotency-Key: <uuid>`
@@ -155,6 +323,16 @@ func (p *OutboxProcessor) processEntry(ctx context.Context, entry db.ScoreUpdate
     "count": 2,
     "message": "Some updates are pending due to rate limiting. They will be applied automatically."
   }
+}
+```
+
+**Response for 200 OK (all synced):**
+```json
+{
+  "success": true,
+  "patrols": [
+    {"id": "123", "name": "Eagles", "score": 105}
+  ]
 }
 ```
 
@@ -260,16 +438,18 @@ IndexedDB Schema:
 | File | Action | Phase |
 |------|--------|-------|
 | `internal/db/models.go` | Add ScoreUpdateOutbox, update AutoMigrate | 1 |
-| `internal/db/score_outbox_store.go` | New file - store functions | 1 |
+| `internal/db/score_outbox_store.go` | New file - store functions with SKIP LOCKED support | 1 |
+| `internal/worker/patrol_sync.go` | New file - shared sync service with Redis locking | 2 |
+| `internal/worker/redis_lock.go` | New file - Redis distributed lock utilities | 2 |
 | `internal/worker/outbox_processor.go` | New file - background worker | 2 |
-| `cmd/server/main.go` | Start worker goroutine | 2 |
-| `internal/handlers/admin_api.go` | Modify handler, extend session | 3 |
+| `cmd/server/main.go` | Start worker goroutine, pass replica ID | 2 |
+| `internal/handlers/admin_api.go` | Modify handler with interactive/background modes | 3 |
 | `web/admin/src/api/offlineQueue.ts` | Replace event queue with outbox pattern | 4 |
-| `web/admin/src/api/client.ts` | Idempotency key, handle 202 | 4 |
+| `web/admin/src/api/client.ts` | Idempotency key, X-Sync-Mode header, handle 202 | 4 |
 | `web/admin/src/api/types.ts` | Update response types | 4 |
 | `web/admin/src/context/AuthContext.tsx` | Track pendingWrites | 4 |
 | `web/admin/src/components/Header.tsx` | Pending indicator | 4 |
-| `web/admin/src/sw.ts` | Update to use client outbox | 4 |
+| `web/admin/src/sw.ts` | Update to use client outbox, send X-Sync-Mode: background | 4 |
 | `internal/handlers/api.go` | Add pending deltas to patrol response | 5 |
 | `client-python/` | Parse pending fields, show indicator | 5 |
 
@@ -284,32 +464,58 @@ IndexedDB Schema:
 5. **Auth recovery**: If user re-authenticates after auth revocation, their pending changes are recovered and retried
 6. **Admin UI visibility**: Users see a "pending" indicator showing combined client-outbox + server-pending count
 7. **Device visibility**: Scoreboard devices show adjusted scores (current + pending) with a visual indicator (red dot) for pending changes
-8. **Audit trail**: Audit records are only created when updates are successfully applied to OSM
+8. **Audit trail**: Audit records are only created when updates are successfully applied to OSM (one per original outbox entry, preserving attribution)
+9. **Concurrent leader handling**: When two leaders come online simultaneously with updates for the same patrol, both updates are captured separately and batched into a single OSM API call
+10. **Interactive mode fast**: Interactive updates (user-initiated) sync immediately without debounce delay
+11. **Background mode batches**: Background updates (service worker) are debounced and batched together
+12. **Distributed safety**: With multiple replicas, only one replica processes a given patrol at a time (Redis lock + SKIP LOCKED)
 
 ## Verification Plan
 
 1. **Unit tests:**
-   - Store functions (CRUD, locking, idempotency)
+   - Store functions (CRUD, locking with SKIP LOCKED, idempotency)
    - Worker retry logic
    - Handler idempotency check
+   - Redis lock acquire/release
+   - Debounce key handling
 
-2. **Integration test:**
+2. **Integration tests:**
    - Submit update → verify outbox entry created
    - Simulate OSM 429 → verify retry scheduled at correct time
    - Verify audit created only on completion
+   - Interactive mode → immediate sync attempted
+   - Background mode → debounce key set, no immediate sync
 
-3. **Manual testing:**
+3. **Concurrency tests:**
+   - Two simultaneous requests for same patrol → both entries created, single OSM call, both audited
+   - Lock contention → second request gets 202, entry picked up by first sync
+   - SKIP LOCKED behavior → locked rows not grabbed by concurrent query
+
+4. **Manual testing:**
    - Normal submit → 200 response, audit created
    - Rate limited → 202 response, pending indicator shows
    - Wait for retry → pending clears, audit created
    - Session endpoint shows correct pending count
+   - Two browser tabs submitting simultaneously → both updates applied correctly
 
 ---
 
 ## Future Considerations
 
-- **Scoreboard device API**: Could expose pending deltas so devices display "pending: +5" alongside current scores. This would require a new endpoint or extending the existing patrols API.
-- **Conflict detection**: If other leaders modify scores in OSM directly, we could detect this by comparing base_score with current score before applying delta.
+- **Conflict detection**: If other leaders modify scores in OSM directly, we could detect this by comparing expected score (before our delta) with actual current score before applying delta. Log warning if mismatch detected.
+- **Configurable debounce**: Allow debounce duration to be configured via environment variable (default 15 seconds).
+- **Metrics dashboard**: Grafana dashboard showing outbox queue depth, sync latency, retry rates.
+
+### Rejected Alternative: This Tool as Source of Truth
+
+**Idea**: Store authoritative scores in our database rather than treating OSM as the source of truth. This would eliminate the read-calculate-write cycle, distributed coordination complexity, and OSM rate limit concerns.
+
+**Why rejected**:
+1. Other leaders want to maintain scores directly in OSM (not everyone uses this tool)
+2. OSM is used for start-of-term score resets - we don't want to duplicate this functionality
+3. Would require migrating existing score data and changing leader workflows
+
+The current design accepts the complexity of syncing to OSM in exchange for preserving the existing OSM-centric workflow that leaders are familiar with.
 
 ---
 
