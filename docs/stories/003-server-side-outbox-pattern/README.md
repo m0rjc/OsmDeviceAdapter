@@ -60,7 +60,12 @@ Request arrives (interactive or background):
 Sync execution (immediate for interactive, after debounce for background):
   1. Try SETNX patrol:{id}:sync_lock {replica-id} EX 30
   2. If lock NOT acquired:
-       - Another replica is handling it, done (our entries will be picked up)
+       - Another replica is handling it
+       - Our entries will be picked up by that sync OR by next worker poll (≤5s)
+       - Note: If we just committed rows and the lock holder already queried before
+         our commit was visible, the worker poll provides the safety net. This is
+         an acceptable trade-off vs. adding re-query complexity to the lock holder.
+       - Return early (respond 202 to client if interactive)
   3. If lock acquired:
        - SELECT all pending outbox entries for patrol FOR UPDATE SKIP LOCKED
        - Sum all deltas (e.g., Leader A: +5, Leader B: +3 = +8)
