@@ -39,5 +39,5 @@ charts/secrets/values-*.yaml
 !charts/secrets/values-example.yaml
 
 # Built server (often built here by Claude)
-server
+/server
 values-dev.yaml

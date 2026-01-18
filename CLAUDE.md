@@ -83,6 +83,13 @@ The service implements a security boundary between untrusted IoT devices and the
    - Service acts as a proxy, making OSM API calls on behalf of devices
    - See `docs/security.md` for detailed architecture
 
+4. **Admin Web Flow**: Cookie-based authentication for score entry UI
+   - Endpoints: `/admin/login`, `/admin/callback`, `/admin/logout`
+   - Uses separate callback URL from device flow (same OAuth client, different redirect)
+   - Creates `WebSession` records with secure HTTP-only cookies
+   - Requests `section:member:write` scope for score modification
+   - React SPA served at `/admin/*` with PWA support
+
 ### Key Components
 
 **`cmd/server/main.go`** - Application entry point
@@ -117,9 +124,29 @@ The service implements a security boundary between untrusted IoT devices and the
 **`internal/handlers/`** - HTTP handlers
 - `device_oauth.go`: Device flow endpoints (`/device/authorize`, `/device/token`)
 - `oauth_web.go`: Web OAuth flow (`/oauth/authorize`, `/oauth/callback`)
+- `admin_oauth.go`: Admin OAuth flow (`/admin/login`, `/admin/callback`, `/admin/logout`)
+- `admin_api.go`: Admin API endpoints (`/api/admin/session`, `/api/admin/sections`, `/api/admin/sections/{id}/scores`)
 - `api.go`: Scoreboard API (`/api/v1/patrols`)
 - `health.go`: Health and readiness checks
 - `dependencies.go`: Shared handler dependencies struct
+
+**`internal/middleware/`** - HTTP middleware
+- `session.go`: Session cookie extraction and validation for admin routes
+- `security.go`: Security headers (CSP, X-Frame-Options, etc.) for admin routes
+- `auth.go`: Device authentication middleware
+- `remote.go`: Cloudflare headers extraction and HTTPS enforcement
+
+**`internal/webauth/`** - Web session authentication
+- `service.go`: Token refresh service for web sessions (analogous to `deviceauth` for devices)
+
+**`internal/admin/`** - Admin SPA handler
+- `handler.go`: Serves React SPA static files for `/admin/*` routes
+
+**`web/admin/`** - React SPA for score entry
+- Vite + React + TypeScript
+- PWA with service worker for offline support
+- Background sync for pending score updates
+- Build output: `web/admin/dist/` (embedded in Go binary)
 
 **`internal/server/server.go`** - HTTP server setup
 - `NewServer()`: Main application server with logging middleware
@@ -151,6 +178,22 @@ The service implements a security boundary between untrusted IoT devices and the
 - Referenced by `device_codes.created_by_id` for audit trail
 
 **Note**: Uses surrogate primary key to allow client ID rotation without breaking foreign key relationships.
+
+**`web_sessions` table** - Admin UI session management
+- `id`: UUID primary key (used in session cookie)
+- `osm_user_id`: OSM user identifier
+- `osm_access_token`, `osm_refresh_token`, `osm_token_expiry`: OSM credentials (server-side only)
+- `csrf_token`: Per-session CSRF protection token
+- `selected_section_id`: Currently selected section for score entry
+- `created_at`, `last_activity`, `expires_at`: Session lifecycle timestamps
+- Default session duration: 7 days with sliding expiration
+
+**`score_audit_logs` table** - Audit trail for score changes via admin UI
+- `id`: Auto-increment primary key
+- `osm_user_id`, `section_id`, `patrol_id`, `patrol_name`: Context
+- `previous_score`, `new_score`, `points_added`: Score change details
+- `created_at`: Timestamp
+- Entries expire after 14 days (configurable via cleanup job)
 
 ### Configuration
 
@@ -341,6 +384,7 @@ See `charts/osm-secrets/README.md` for complete documentation.
 - `docs/CLOUDFLARE_SETUP.md`: Cloudflare Tunnel integration
 - `docs/OBSERVABILITY_IMPLEMENTATION.md`: Monitoring setup details
 - `docs/research/OSM-OAuth-Doc.md`: OSM API documentation research
+- `docs/stories/002-score-entry-ui/`: Score entry UI specification and implementation plan
 - `charts/osm-secrets/README.md`: Secrets chart documentation
 
 ## Deployment
@@ -369,3 +413,4 @@ make run
 - Device client IDs are public once deployed (designed for public clients)
 - HTTPS is required in production (enforced by Cloudflare Tunnel in current setup)
 - Database schema evolves automatically via GORM AutoMigrate
+- **Admin UI requires registering `/admin/callback` as an additional OAuth callback URL** in OSM OAuth app settings (same client ID, separate callback from device flow)

@@ -46,8 +46,9 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// Admin API endpoints (authenticated via session cookie)
 	adminSessionMw := middleware.SessionMiddleware(deps.Conns, handlers.AdminSessionCookieName)
 	adminTokenMw := middleware.TokenRefreshMiddleware(deps.Conns, deps.WebAuth)
+	adminSecurityMw := middleware.SecurityHeadersMiddleware
 	adminMiddleware := func(h http.Handler) http.Handler {
-		return adminSessionMw(adminTokenMw(h))
+		return adminSecurityMw(adminSessionMw(adminTokenMw(h)))
 	}
 
 	mux.Handle("/api/admin/session", adminMiddleware(handlers.AdminSessionHandler(deps)))
@@ -57,7 +58,7 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// Admin SPA (serves static files for /admin/*)
 	// Note: More specific routes (/admin/login, /admin/callback, /admin/logout, /api/admin/*)
 	// are registered above and take precedence over this catch-all
-	mux.Handle("/admin/", admin.NewSPAHandler())
+	mux.Handle("/admin/", adminSecurityMw(admin.NewSPAHandler()))
 
 	// Apply middleware chain:
 	// 1. Remote metadata (Cloudflare headers, HTTPS redirect, HSTS) - applied to all routes
