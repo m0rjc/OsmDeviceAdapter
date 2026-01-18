@@ -82,8 +82,8 @@ func NewMetricsServer(deps *handlers.Dependencies) *http.Server {
 	mux.HandleFunc("/health", handlers.HealthHandler)
 	mux.HandleFunc("/ready", handlers.ReadyHandler(deps))
 
-	// Prometheus metrics endpoint
-	mux.Handle("/metrics", promhttp.Handler())
+	// Prometheus metrics endpoint (using custom registry without Go runtime metrics)
+	mux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 
 	return &http.Server{
 		Addr:    ":9090",
