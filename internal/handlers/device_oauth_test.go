@@ -10,6 +10,8 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/allowedclient"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -39,7 +41,7 @@ func setupTestDeps(t *testing.T, allowedClientIDs []string) *Dependencies {
 			ContactEmail: "test@example.com",
 			Enabled:      true,
 		}
-		if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+		if err := allowedclient.Create(conns, allowedClient); err != nil {
 			t.Fatalf("Failed to create allowed client ID %s: %v", clientID, err)
 		}
 	}
@@ -276,12 +278,12 @@ func TestDeviceAccessTokenFlow(t *testing.T) {
 		OSMRefreshToken:   &osmRefreshToken,
 		ExpiresAt:         time.Now().Add(5 * time.Minute),
 	}
-	if err := db.CreateDeviceCode(deps.Conns, record); err != nil {
+	if err := devicecode.Create(deps.Conns, record); err != nil {
 		t.Fatalf("Failed to create device code: %v", err)
 	}
 
 	// 2. Test finding by device access token
-	found, err := db.FindDeviceCodeByDeviceAccessToken(deps.Conns, deviceAccessToken)
+	found, err := devicecode.FindByDeviceAccessToken(deps.Conns, deviceAccessToken)
 	if err != nil {
 		t.Fatalf("Failed to find device code by device access token: %v", err)
 	}
@@ -301,7 +303,7 @@ func TestDeviceAccessTokenFlow(t *testing.T) {
 	}
 
 	// 4. Test that invalid token returns nil
-	invalidFound, err := db.FindDeviceCodeByDeviceAccessToken(deps.Conns, "invalid-token")
+	invalidFound, err := devicecode.FindByDeviceAccessToken(deps.Conns, "invalid-token")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -324,7 +326,7 @@ func TestDeviceAccessTokenUniqueness(t *testing.T) {
 		DeviceAccessToken: &token,
 		ExpiresAt:         time.Now().Add(5 * time.Minute),
 	}
-	if err := db.CreateDeviceCode(deps.Conns, record1); err != nil {
+	if err := devicecode.Create(deps.Conns, record1); err != nil {
 		t.Fatalf("Failed to create first device code: %v", err)
 	}
 
@@ -337,7 +339,7 @@ func TestDeviceAccessTokenUniqueness(t *testing.T) {
 		DeviceAccessToken: &token,
 		ExpiresAt:         time.Now().Add(5 * time.Minute),
 	}
-	err := db.CreateDeviceCode(deps.Conns, record2)
+	err := devicecode.Create(deps.Conns, record2)
 	if err == nil {
 		t.Error("Expected error when creating device code with duplicate device access token")
 	}

@@ -1,62 +1,46 @@
-package db
+package devicecode
 
 import (
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 )
 
-// setupTestDB creates an in-memory SQLite database for testing
-func setupTestDB(t *testing.T) *Connections {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("Failed to connect to test database: %v", err)
-	}
-
-	// Auto-migrate tables
-	if err := AutoMigrate(db); err != nil {
-		t.Fatalf("Failed to migrate database: %v", err)
-	}
-
-	return NewConnections(db, nil)
-}
-
-func TestDeleteExpiredDeviceCodes(t *testing.T) {
-	conns := setupTestDB(t)
+func TestDeleteExpired(t *testing.T) {
+	conns := db.SetupTestDB(t)
 
 	// Create test data: mix of expired and non-expired device codes
 	now := time.Now()
-	expiredPending := &DeviceCode{
+	expiredPending := &db.DeviceCode{
 		DeviceCode: "expired-pending",
 		UserCode:   "EXP1",
 		ClientID:   "test-client",
 		Status:     "pending",
 		ExpiresAt:  now.Add(-1 * time.Hour), // Expired 1 hour ago
 	}
-	expiredAwaitingSection := &DeviceCode{
+	expiredAwaitingSection := &db.DeviceCode{
 		DeviceCode: "expired-awaiting",
 		UserCode:   "EXP2",
 		ClientID:   "test-client",
 		Status:     "awaiting_section",
 		ExpiresAt:  now.Add(-1 * time.Hour), // Expired 1 hour ago
 	}
-	expiredAuthorized := &DeviceCode{
+	expiredAuthorized := &db.DeviceCode{
 		DeviceCode: "expired-authorized",
 		UserCode:   "EXP3",
 		ClientID:   "test-client",
 		Status:     "authorized",
 		ExpiresAt:  now.Add(-24 * time.Hour), // Expired 1 day ago - should NOT be deleted
 	}
-	expiredRevoked := &DeviceCode{
+	expiredRevoked := &db.DeviceCode{
 		DeviceCode: "expired-revoked",
 		UserCode:   "EXP4",
 		ClientID:   "test-client",
 		Status:     "revoked",
 		ExpiresAt:  now.Add(-24 * time.Hour), // Expired 1 day ago - should NOT be deleted
 	}
-	validCode := &DeviceCode{
+	validCode := &db.DeviceCode{
 		DeviceCode: "valid-1",
 		UserCode:   "VAL1",
 		ClientID:   "test-client",
@@ -65,20 +49,20 @@ func TestDeleteExpiredDeviceCodes(t *testing.T) {
 	}
 
 	// Insert test data
-	for _, code := range []*DeviceCode{expiredPending, expiredAwaitingSection, expiredAuthorized, expiredRevoked, validCode} {
-		if err := CreateDeviceCode(conns, code); err != nil {
+	for _, code := range []*db.DeviceCode{expiredPending, expiredAwaitingSection, expiredAuthorized, expiredRevoked, validCode} {
+		if err := Create(conns, code); err != nil {
 			t.Fatalf("Failed to create code %s: %v", code.DeviceCode, err)
 		}
 	}
 
 	// Run cleanup
-	if err := DeleteExpiredDeviceCodes(conns); err != nil {
-		t.Fatalf("DeleteExpiredDeviceCodes failed: %v", err)
+	if err := DeleteExpired(conns); err != nil {
+		t.Fatalf("DeleteExpired failed: %v", err)
 	}
 
 	// Verify expired pending/awaiting_section codes are deleted
 	for _, deviceCode := range []string{"expired-pending", "expired-awaiting"} {
-		found, err := FindDeviceCodeByCode(conns, deviceCode)
+		found, err := FindByCode(conns, deviceCode)
 		if err != nil {
 			t.Fatalf("Error checking %s: %v", deviceCode, err)
 		}
@@ -87,9 +71,9 @@ func TestDeleteExpiredDeviceCodes(t *testing.T) {
 		}
 	}
 
-	// Verify authorized and revoked devices are NOT deleted (handled by DeleteUnusedDeviceCodes instead)
+	// Verify authorized and revoked devices are NOT deleted (handled by DeleteUnused instead)
 	for _, deviceCode := range []string{"expired-authorized", "expired-revoked"} {
-		found, err := FindDeviceCodeByCode(conns, deviceCode)
+		found, err := FindByCode(conns, deviceCode)
 		if err != nil {
 			t.Fatalf("Error checking %s: %v", deviceCode, err)
 		}
@@ -99,7 +83,7 @@ func TestDeleteExpiredDeviceCodes(t *testing.T) {
 	}
 
 	// Verify valid code still exists
-	found, err := FindDeviceCodeByCode(conns, "valid-1")
+	found, err := FindByCode(conns, "valid-1")
 	if err != nil {
 		t.Fatalf("Error checking valid-1: %v", err)
 	}
@@ -108,13 +92,13 @@ func TestDeleteExpiredDeviceCodes(t *testing.T) {
 	}
 }
 
-func TestDeleteUnusedDeviceCodes(t *testing.T) {
-	conns := setupTestDB(t)
+func TestDeleteUnused(t *testing.T) {
+	conns := db.SetupTestDB(t)
 	now := time.Now()
 
 	t.Run("deletes authorized devices not used for threshold period", func(t *testing.T) {
 		// Create an authorized device that hasn't been used in 60 days
-		oldDevice := &DeviceCode{
+		oldDevice := &db.DeviceCode{
 			DeviceCode: "old-device",
 			UserCode:   "OLD1",
 			ClientID:   "test-client",
@@ -122,18 +106,18 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 			ExpiresAt:  now.Add(24 * time.Hour),
 			LastUsedAt: ptrTime(now.Add(-60 * 24 * time.Hour)), // 60 days ago
 		}
-		if err := CreateDeviceCode(conns, oldDevice); err != nil {
+		if err := Create(conns, oldDevice); err != nil {
 			t.Fatalf("Failed to create old device: %v", err)
 		}
 
 		// Run cleanup with 30-day threshold
 		threshold := 30 * 24 * time.Hour
-		if err := DeleteUnusedDeviceCodes(conns, threshold); err != nil {
-			t.Fatalf("DeleteUnusedDeviceCodes failed: %v", err)
+		if err := DeleteUnused(conns, threshold); err != nil {
+			t.Fatalf("DeleteUnused failed: %v", err)
 		}
 
 		// Verify device was deleted
-		found, err := FindDeviceCodeByCode(conns, "old-device")
+		found, err := FindByCode(conns, "old-device")
 		if err != nil {
 			t.Fatalf("Error checking old-device: %v", err)
 		}
@@ -144,7 +128,7 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 
 	t.Run("keeps recently used devices", func(t *testing.T) {
 		// Create a recently used device
-		recentDevice := &DeviceCode{
+		recentDevice := &db.DeviceCode{
 			DeviceCode: "recent-device",
 			UserCode:   "REC1",
 			ClientID:   "test-client",
@@ -152,18 +136,18 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 			ExpiresAt:  now.Add(24 * time.Hour),
 			LastUsedAt: ptrTime(now.Add(-10 * 24 * time.Hour)), // 10 days ago
 		}
-		if err := CreateDeviceCode(conns, recentDevice); err != nil {
+		if err := Create(conns, recentDevice); err != nil {
 			t.Fatalf("Failed to create recent device: %v", err)
 		}
 
 		// Run cleanup with 30-day threshold
 		threshold := 30 * 24 * time.Hour
-		if err := DeleteUnusedDeviceCodes(conns, threshold); err != nil {
-			t.Fatalf("DeleteUnusedDeviceCodes failed: %v", err)
+		if err := DeleteUnused(conns, threshold); err != nil {
+			t.Fatalf("DeleteUnused failed: %v", err)
 		}
 
 		// Verify device still exists
-		found, err := FindDeviceCodeByCode(conns, "recent-device")
+		found, err := FindByCode(conns, "recent-device")
 		if err != nil {
 			t.Fatalf("Error checking recent-device: %v", err)
 		}
@@ -174,28 +158,27 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 
 	t.Run("deletes devices with null last_used_at older than threshold", func(t *testing.T) {
 		// Create a device that was authorized long ago but never used
-		// In practice, last_used_at would be set on first use, but this tests the edge case
-		neverUsedDevice := &DeviceCode{
+		neverUsedDevice := &db.DeviceCode{
 			DeviceCode: "never-used",
 			UserCode:   "NEV1",
 			ClientID:   "test-client",
 			Status:     "authorized",
 			ExpiresAt:  now.Add(24 * time.Hour),
-			LastUsedAt: nil, // Never used
+			LastUsedAt: nil,                             // Never used
 			CreatedAt:  now.Add(-60 * 24 * time.Hour), // Created 60 days ago
 		}
-		if err := CreateDeviceCode(conns, neverUsedDevice); err != nil {
+		if err := Create(conns, neverUsedDevice); err != nil {
 			t.Fatalf("Failed to create never-used device: %v", err)
 		}
 
 		// Run cleanup with 30-day threshold
 		threshold := 30 * 24 * time.Hour
-		if err := DeleteUnusedDeviceCodes(conns, threshold); err != nil {
-			t.Fatalf("DeleteUnusedDeviceCodes failed: %v", err)
+		if err := DeleteUnused(conns, threshold); err != nil {
+			t.Fatalf("DeleteUnused failed: %v", err)
 		}
 
 		// Verify device was deleted (last_used_at IS NULL counts as unused)
-		found, err := FindDeviceCodeByCode(conns, "never-used")
+		found, err := FindByCode(conns, "never-used")
 		if err != nil {
 			t.Fatalf("Error checking never-used: %v", err)
 		}
@@ -206,7 +189,7 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 
 	t.Run("keeps pending devices even if old", func(t *testing.T) {
 		// Create a pending device (user hasn't completed authorization yet)
-		pendingDevice := &DeviceCode{
+		pendingDevice := &db.DeviceCode{
 			DeviceCode: "pending-device",
 			UserCode:   "PEN1",
 			ClientID:   "test-client",
@@ -214,18 +197,18 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 			ExpiresAt:  now.Add(1 * time.Hour),
 			LastUsedAt: ptrTime(now.Add(-60 * 24 * time.Hour)), // Old but pending
 		}
-		if err := CreateDeviceCode(conns, pendingDevice); err != nil {
+		if err := Create(conns, pendingDevice); err != nil {
 			t.Fatalf("Failed to create pending device: %v", err)
 		}
 
 		// Run cleanup
 		threshold := 30 * 24 * time.Hour
-		if err := DeleteUnusedDeviceCodes(conns, threshold); err != nil {
-			t.Fatalf("DeleteUnusedDeviceCodes failed: %v", err)
+		if err := DeleteUnused(conns, threshold); err != nil {
+			t.Fatalf("DeleteUnused failed: %v", err)
 		}
 
 		// Verify pending device still exists (only deletes authorized/revoked)
-		found, err := FindDeviceCodeByCode(conns, "pending-device")
+		found, err := FindByCode(conns, "pending-device")
 		if err != nil {
 			t.Fatalf("Error checking pending-device: %v", err)
 		}
@@ -236,7 +219,7 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 
 	t.Run("deletes revoked devices older than threshold", func(t *testing.T) {
 		// Create a revoked device (user revoked access)
-		revokedDevice := &DeviceCode{
+		revokedDevice := &db.DeviceCode{
 			DeviceCode: "revoked-device",
 			UserCode:   "REV1",
 			ClientID:   "test-client",
@@ -244,18 +227,18 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 			ExpiresAt:  now.Add(24 * time.Hour),
 			LastUsedAt: ptrTime(now.Add(-60 * 24 * time.Hour)), // 60 days ago
 		}
-		if err := CreateDeviceCode(conns, revokedDevice); err != nil {
+		if err := Create(conns, revokedDevice); err != nil {
 			t.Fatalf("Failed to create revoked device: %v", err)
 		}
 
 		// Run cleanup
 		threshold := 30 * 24 * time.Hour
-		if err := DeleteUnusedDeviceCodes(conns, threshold); err != nil {
-			t.Fatalf("DeleteUnusedDeviceCodes failed: %v", err)
+		if err := DeleteUnused(conns, threshold); err != nil {
+			t.Fatalf("DeleteUnused failed: %v", err)
 		}
 
 		// Verify revoked device was deleted
-		found, err := FindDeviceCodeByCode(conns, "revoked-device")
+		found, err := FindByCode(conns, "revoked-device")
 		if err != nil {
 			t.Fatalf("Error checking revoked-device: %v", err)
 		}
@@ -265,15 +248,15 @@ func TestDeleteUnusedDeviceCodes(t *testing.T) {
 	})
 }
 
-func TestRevokeDeviceCode(t *testing.T) {
-	conns := setupTestDB(t)
+func TestRevoke(t *testing.T) {
+	conns := db.SetupTestDB(t)
 	now := time.Now()
 
 	// Create an authorized device with tokens
 	deviceCode := "test-device"
 	osmToken := "osm-access-token"
 	osmRefresh := "osm-refresh-token"
-	device := &DeviceCode{
+	device := &db.DeviceCode{
 		DeviceCode:      deviceCode,
 		UserCode:        "TEST",
 		ClientID:        "test-client",
@@ -283,17 +266,17 @@ func TestRevokeDeviceCode(t *testing.T) {
 		OSMRefreshToken: &osmRefresh,
 		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
 	}
-	if err := CreateDeviceCode(conns, device); err != nil {
+	if err := Create(conns, device); err != nil {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
 	// Revoke the device
-	if err := RevokeDeviceCode(conns, deviceCode); err != nil {
-		t.Fatalf("RevokeDeviceCode failed: %v", err)
+	if err := Revoke(conns, deviceCode); err != nil {
+		t.Fatalf("Revoke failed: %v", err)
 	}
 
 	// Verify device status is revoked and tokens are cleared
-	found, err := FindDeviceCodeByCode(conns, deviceCode)
+	found, err := FindByCode(conns, deviceCode)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -314,13 +297,13 @@ func TestRevokeDeviceCode(t *testing.T) {
 	}
 }
 
-func TestUpdateDeviceCodeLastUsed(t *testing.T) {
-	conns := setupTestDB(t)
+func TestUpdateLastUsed(t *testing.T) {
+	conns := db.SetupTestDB(t)
 	now := time.Now()
 
 	// Create a device without last_used_at
 	deviceCode := "test-device"
-	device := &DeviceCode{
+	device := &db.DeviceCode{
 		DeviceCode: deviceCode,
 		UserCode:   "TEST",
 		ClientID:   "test-client",
@@ -328,19 +311,19 @@ func TestUpdateDeviceCodeLastUsed(t *testing.T) {
 		ExpiresAt:  now.Add(24 * time.Hour),
 		LastUsedAt: nil,
 	}
-	if err := CreateDeviceCode(conns, device); err != nil {
+	if err := Create(conns, device); err != nil {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
 	// Update last_used_at
 	beforeUpdate := time.Now()
-	if err := UpdateDeviceCodeLastUsed(conns, deviceCode); err != nil {
-		t.Fatalf("UpdateDeviceCodeLastUsed failed: %v", err)
+	if err := UpdateLastUsed(conns, deviceCode); err != nil {
+		t.Fatalf("UpdateLastUsed failed: %v", err)
 	}
 	afterUpdate := time.Now()
 
 	// Verify last_used_at was set
-	found, err := FindDeviceCodeByCode(conns, deviceCode)
+	found, err := FindByCode(conns, deviceCode)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -358,11 +341,11 @@ func TestUpdateDeviceCodeLastUsed(t *testing.T) {
 	// Update again and verify it changes
 	time.Sleep(10 * time.Millisecond)
 	firstUpdate := *found.LastUsedAt
-	if err := UpdateDeviceCodeLastUsed(conns, deviceCode); err != nil {
-		t.Fatalf("Second UpdateDeviceCodeLastUsed failed: %v", err)
+	if err := UpdateLastUsed(conns, deviceCode); err != nil {
+		t.Fatalf("Second UpdateLastUsed failed: %v", err)
 	}
 
-	found, err = FindDeviceCodeByCode(conns, deviceCode)
+	found, err = FindByCode(conns, deviceCode)
 	if err != nil {
 		t.Fatalf("Error finding device after second update: %v", err)
 	}

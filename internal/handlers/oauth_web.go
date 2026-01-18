@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicesession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/templates"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
@@ -116,7 +118,7 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up the device code from user code
-		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, userCode)
+		deviceCodeRecord, err := devicecode.FindByUserCode(deps.Conns, userCode)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
@@ -153,7 +155,7 @@ func OAuthAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			ExpiresAt:  sessionExpiry,
 			CreatedAt:  time.Now(),
 		}
-		if err := db.CreateDeviceSession(deps.Conns, session); err != nil {
+		if err := devicesession.Create(deps.Conns, session); err != nil {
 			http.Error(w, "Failed to create session", http.StatusInternalServerError)
 			return
 		}
@@ -207,7 +209,7 @@ func OAuthConfirmHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Validate session exists and matches device code (CSRF protection)
-		session, err := db.FindDeviceSessionByID(deps.Conns, sessionID)
+		session, err := devicesession.FindByID(deps.Conns, sessionID)
 		if err != nil || session == nil {
 			slog.Warn("device.confirmation.invalid_session",
 				"component", "oauth_web",
@@ -226,7 +228,7 @@ func OAuthConfirmHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Lookup device code
-		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, userCode)
+		deviceCodeRecord, err := devicecode.FindByUserCode(deps.Conns, userCode)
 		if err != nil || deviceCodeRecord == nil {
 			slog.Warn("device.confirmation.invalid_code",
 				"component", "oauth_web",
@@ -300,7 +302,7 @@ func OAuthCancelHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up device code
-		deviceCodeRecord, err := db.FindDeviceCodeByUserCode(deps.Conns, userCode)
+		deviceCodeRecord, err := devicecode.FindByUserCode(deps.Conns, userCode)
 		if err != nil || deviceCodeRecord == nil {
 			slog.Warn("device.cancel.invalid_code",
 				"component", "oauth_web",
@@ -312,7 +314,7 @@ func OAuthCancelHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Mark as denied
-		if err := db.UpdateDeviceCodeStatus(deps.Conns, deviceCodeRecord.DeviceCode, "denied"); err != nil {
+		if err := devicecode.UpdateStatus(deps.Conns, deviceCodeRecord.DeviceCode, "denied"); err != nil {
 			slog.Error("device.cancel.update_failed",
 				"component", "oauth_web",
 				"event", "cancel.update_failed",
@@ -367,7 +369,7 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up session to get device code
-		session, err := db.FindDeviceSessionByID(deps.Conns, state)
+		session, err := devicesession.FindByID(deps.Conns, state)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
@@ -398,7 +400,7 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Store tokens (but not mark as authorized yet - waiting for section selection)
 		tokenExpiry := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-		if err := db.UpdateDeviceCodeWithTokens(deps.Conns, session.DeviceCode, "awaiting_section", tokenResp.AccessToken, tokenResp.RefreshToken, tokenExpiry, profile.Data.UserID); err != nil {
+		if err := devicecode.UpdateWithTokens(deps.Conns, session.DeviceCode, "awaiting_section", tokenResp.AccessToken, tokenResp.RefreshToken, tokenExpiry, profile.Data.UserID); err != nil {
 			http.Error(w, "Failed to store tokens", http.StatusInternalServerError)
 			return
 		}
@@ -431,7 +433,7 @@ func OAuthSelectSectionHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up session to get device code
-		session, err := db.FindDeviceSessionByID(deps.Conns, sessionID)
+		session, err := devicesession.FindByID(deps.Conns, sessionID)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
@@ -449,7 +451,7 @@ func OAuthSelectSectionHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Update device code with section ID, device access token, and mark as authorized
-		if err := db.UpdateDeviceCodeWithSection(deps.Conns, session.DeviceCode, "authorized", sectionID, deviceAccessToken); err != nil {
+		if err := devicecode.UpdateWithSection(deps.Conns, session.DeviceCode, "authorized", sectionID, deviceAccessToken); err != nil {
 			http.Error(w, "Failed to update device code", http.StatusInternalServerError)
 			return
 		}
@@ -464,11 +466,11 @@ func OAuthSelectSectionHandler(deps *Dependencies) http.HandlerFunc {
 }
 
 func markDeviceCodeStatus(conns *db.Connections, sessionID, status string) {
-	session, err := db.FindDeviceSessionByID(conns, sessionID)
+	session, err := devicesession.FindByID(conns, sessionID)
 	if err != nil || session == nil {
 		return
 	}
-	err = db.UpdateDeviceCodeStatus(conns, session.DeviceCode, status)
+	err = devicecode.UpdateStatus(conns, session.DeviceCode, status)
 	if err != nil {
 		// FIXME: Log this
 		return

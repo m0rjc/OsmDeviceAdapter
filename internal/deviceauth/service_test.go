@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -268,7 +269,7 @@ func TestRefreshUserTokenFromRecord_Revocation(t *testing.T) {
 		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
 		OsmUserID:       &userId,
 	}
-	if err := db.CreateDeviceCode(conns, device); err != nil {
+	if err := devicecode.Create(conns, device); err != nil {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
@@ -289,7 +290,7 @@ func TestRefreshUserTokenFromRecord_Revocation(t *testing.T) {
 	}
 
 	// Verify device was marked as revoked in database
-	found, err := db.FindDeviceCodeByCode(conns, deviceCode)
+	found, err := devicecode.FindByCode(conns, deviceCode)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -328,7 +329,7 @@ func TestRefreshUserTokenFromRecord_Success(t *testing.T) {
 		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
 		OsmUserID:       &userId,
 	}
-	if err := db.CreateDeviceCode(conns, device); err != nil {
+	if err := devicecode.Create(conns, device); err != nil {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
@@ -359,7 +360,7 @@ func TestRefreshUserTokenFromRecord_Success(t *testing.T) {
 	}
 
 	// Verify database was updated with new tokens
-	found, err := db.FindDeviceCodeByCode(conns, deviceCode)
+	found, err := devicecode.FindByCode(conns, deviceCode)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -397,7 +398,7 @@ func TestRefreshUserTokenFromRecord_NetworkError(t *testing.T) {
 		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
 		OsmUserID:       &userId,
 	}
-	if err := db.CreateDeviceCode(conns, device); err != nil {
+	if err := devicecode.Create(conns, device); err != nil {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
@@ -417,7 +418,7 @@ func TestRefreshUserTokenFromRecord_NetworkError(t *testing.T) {
 	}
 
 	// Verify device status is still authorized (not revoked for network errors)
-	found, err := db.FindDeviceCodeByCode(conns, deviceCode)
+	found, err := devicecode.FindByCode(conns, deviceCode)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -464,7 +465,7 @@ func TestRefreshUserTokenFromRecord_NoRefreshToken(t *testing.T) {
 		OSMTokenExpiry:  ptrTime(now.Add(1 * time.Hour)),
 		OsmUserID:       &userId,
 	}
-	if err := db.CreateDeviceCode(conns, device); err != nil {
+	if err := devicecode.Create(conns, device); err != nil {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
@@ -500,7 +501,7 @@ func TestAuthenticate_LastUsedTracking(t *testing.T) {
 		OsmUserID:         &userId,
 		LastUsedAt:        nil, // Never used before
 	}
-	if err := db.CreateDeviceCode(conns, device); err != nil {
+	if err := devicecode.Create(conns, device); err != nil {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
@@ -520,7 +521,7 @@ func TestAuthenticate_LastUsedTracking(t *testing.T) {
 	}
 
 	// Verify last_used_at was updated
-	found, err := db.FindDeviceCodeByCode(conns, "test-device")
+	found, err := devicecode.FindByCode(conns, "test-device")
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}

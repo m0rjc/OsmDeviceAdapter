@@ -10,6 +10,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 	"github.com/redis/go-redis/v9"
@@ -176,7 +177,7 @@ func (s *PatrolScoreService) ensureTermInfo(ctx context.Context, user types.User
 
 	// Update device with new term information
 	now = time.Now()
-	if err := db.UpdateDeviceCodeTermInfo(s.conns, device.DeviceCode, termInfo.UserID, termInfo.TermID, now, termInfo.EndDate); err != nil {
+	if err := devicecode.UpdateTermInfo(s.conns, device.DeviceCode, termInfo.UserID, termInfo.TermID, now, termInfo.EndDate); err != nil {
 		slog.Error("patrol_score_service.term_update_failed",
 			"component", "patrol_score_service",
 			"event", "term.update.error",

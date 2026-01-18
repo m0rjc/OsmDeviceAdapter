@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -61,7 +62,7 @@ func (s *Service) RefreshWebSessionToken(ctx context.Context, session *db.WebSes
 				"error", err,
 			)
 			// Delete the session since access was revoked
-			if delErr := db.DeleteWebSession(s.conns, session.ID); delErr != nil {
+			if delErr := websession.Delete(s.conns, session.ID); delErr != nil {
 				slog.Error("webauth.refresh_token.session_delete_failed",
 					"component", "webauth",
 					"event", "token.revoke_error",
@@ -84,7 +85,7 @@ func (s *Service) RefreshWebSessionToken(ctx context.Context, session *db.WebSes
 
 	// Update tokens in database
 	newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
-	if err := db.UpdateWebSessionTokens(s.conns, session.ID, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
+	if err := websession.UpdateTokens(s.conns, session.ID, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
 		slog.Error("webauth.refresh_token.update_failed",
 			"component", "webauth",
 			"event", "token.update_error",

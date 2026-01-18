@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -53,7 +54,7 @@ func SessionMiddleware(conns *db.Connections, cookieName string) func(http.Handl
 			sessionID := cookie.Value
 
 			// Load session from database
-			session, err := db.FindWebSessionByID(conns, sessionID)
+			session, err := websession.FindByID(conns, sessionID)
 			if err != nil {
 				slog.Error("session.middleware.db_error",
 					"component", "session_middleware",
@@ -78,7 +79,7 @@ func SessionMiddleware(conns *db.Connections, cookieName string) func(http.Handl
 
 			// Update last_activity for sliding expiration (async, don't block request)
 			go func() {
-				if err := db.UpdateWebSessionActivity(conns, sessionID); err != nil {
+				if err := websession.UpdateActivity(conns, sessionID); err != nil {
 					slog.Warn("session.middleware.activity_update_failed",
 						"component", "session_middleware",
 						"event", "session.activity_error",

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/allowedclient"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 )
@@ -104,7 +106,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Validate client ID against database
-		allowed, allowedClientID, err := db.IsClientIDAllowed(deps.Conns, req.ClientID)
+		allowed, allowedClientID, err := allowedclient.IsAllowed(deps.Conns, req.ClientID)
 		if err != nil {
 			slog.Error("device.authorize.db_error",
 				"component", "device_oauth",
@@ -168,7 +170,7 @@ func DeviceAuthorizeHandler(deps *Dependencies) http.HandlerFunc {
 			DeviceRequestCountry: &remoteMetadata.Country,
 			DeviceRequestTime:    &now,
 		}
-		if err := db.CreateDeviceCode(deps.Conns, deviceCodeRecord); err != nil {
+		if err := devicecode.Create(deps.Conns, deviceCodeRecord); err != nil {
 			slog.Error("device.authorize.db_store_failed",
 				"component", "device_oauth",
 				"event", "authorize.error",
@@ -269,7 +271,7 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Look up device code
-		deviceCodeRecord, err := db.FindDeviceCodeByCode(deps.Conns, req.DeviceCode)
+		deviceCodeRecord, err := devicecode.FindByCode(deps.Conns, req.DeviceCode)
 		if err != nil {
 			slog.Error("device.token.db_error",
 				"component", "device_oauth",

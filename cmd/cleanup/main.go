@@ -8,6 +8,10 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicesession"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/logging"
 )
 
@@ -62,7 +66,7 @@ func main() {
 
 	// Clean up expired device codes
 	slog.Info("cleaning up expired device codes")
-	if err := db.DeleteExpiredDeviceCodes(conns); err != nil {
+	if err := devicecode.DeleteExpired(conns); err != nil {
 		slog.Error("failed to delete expired device codes", "error", err)
 		exitCode = 1
 	} else {
@@ -71,7 +75,7 @@ func main() {
 
 	// Clean up expired sessions
 	slog.Info("cleaning up expired device sessions")
-	if err := db.DeleteExpiredDeviceSessions(conns); err != nil {
+	if err := devicesession.DeleteExpired(conns); err != nil {
 		slog.Error("failed to delete expired device sessions", "error", err)
 		exitCode = 1
 	} else {
@@ -82,7 +86,7 @@ func main() {
 	slog.Info("cleaning up unused devices",
 		"threshold_days", *unusedThreshold,
 	)
-	if err := db.DeleteUnusedDeviceCodes(conns, time.Duration(*unusedThreshold)*24*time.Hour); err != nil {
+	if err := devicecode.DeleteUnused(conns, time.Duration(*unusedThreshold)*24*time.Hour); err != nil {
 		slog.Error("failed to delete unused device codes", "error", err)
 		exitCode = 1
 	} else {
@@ -91,7 +95,7 @@ func main() {
 
 	// Clean up expired web sessions
 	slog.Info("cleaning up expired web sessions")
-	if err := db.DeleteExpiredWebSessions(conns); err != nil {
+	if err := websession.DeleteExpired(conns); err != nil {
 		slog.Error("failed to delete expired web sessions", "error", err)
 		exitCode = 1
 	} else {
@@ -102,7 +106,7 @@ func main() {
 	slog.Info("cleaning up old score audit logs",
 		"retention_days", *auditRetention,
 	)
-	if err := db.DeleteExpiredScoreAuditLogs(conns, time.Duration(*auditRetention)*24*time.Hour); err != nil {
+	if err := scoreaudit.DeleteExpired(conns, time.Duration(*auditRetention)*24*time.Hour); err != nil {
 		slog.Error("failed to delete old score audit logs", "error", err)
 		exitCode = 1
 	} else {

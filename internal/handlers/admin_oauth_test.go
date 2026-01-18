@@ -12,6 +12,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 	"gorm.io/driver/sqlite"
@@ -300,7 +301,7 @@ func TestAdminCallbackHandler_SuccessfulLogin(t *testing.T) {
 	}
 
 	// Verify session was created in database
-	session, err := db.FindWebSessionByID(deps.Conns, sessionCookie.Value)
+	session, err := websession.FindByID(deps.Conns, sessionCookie.Value)
 	if err != nil {
 		t.Fatalf("Failed to get session from database: %v", err)
 	}
@@ -341,7 +342,7 @@ func TestAdminLogoutHandler_WithSession(t *testing.T) {
 		LastActivity:    time.Now(),
 		ExpiresAt:       time.Now().Add(7 * 24 * time.Hour),
 	}
-	if err := db.CreateWebSession(deps.Conns, session); err != nil {
+	if err := websession.Create(deps.Conns, session); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
@@ -383,7 +384,7 @@ func TestAdminLogoutHandler_WithSession(t *testing.T) {
 	}
 
 	// Verify session was deleted from database
-	deletedSession, err := db.FindWebSessionByID(deps.Conns, sessionID)
+	deletedSession, err := websession.FindByID(deps.Conns, sessionID)
 	if err != nil {
 		t.Fatalf("Error checking for deleted session: %v", err)
 	}

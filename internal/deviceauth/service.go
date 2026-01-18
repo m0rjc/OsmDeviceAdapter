@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -70,7 +71,7 @@ func (s *Service) Authenticate(ctx context.Context, authHeader string) (types.Us
 	}
 
 	// Verify the device access token belongs to a valid device
-	deviceCodeRecord, err := db.FindDeviceCodeByDeviceAccessToken(s.conns, accessToken)
+	deviceCodeRecord, err := devicecode.FindByDeviceAccessToken(s.conns, accessToken)
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
@@ -96,7 +97,7 @@ func (s *Service) Authenticate(ctx context.Context, authHeader string) (types.Us
 	}
 
 	// Update last_used_at timestamp for this device
-	if err := db.UpdateDeviceCodeLastUsed(s.conns, deviceCodeRecord.DeviceCode); err != nil {
+	if err := devicecode.UpdateLastUsed(s.conns, deviceCodeRecord.DeviceCode); err != nil {
 		// Log the error but don't fail the authentication
 		slog.Error("deviceauth.last_used_update_failed",
 			"component", "deviceauth",
@@ -152,7 +153,7 @@ func (s *Service) RefreshUserTokenFromRecord(ctx context.Context, deviceCodeReco
 				"error", err,
 			)
 			// Mark device as revoked in database
-			if revokeErr := db.RevokeDeviceCode(s.conns, deviceCode); revokeErr != nil {
+			if revokeErr := devicecode.Revoke(s.conns, deviceCode); revokeErr != nil {
 				slog.Error("deviceauth.refresh_user_token.revoke_failed",
 					"component", "deviceauth",
 					"event", "token.revoke_error",
@@ -175,7 +176,7 @@ func (s *Service) RefreshUserTokenFromRecord(ctx context.Context, deviceCodeReco
 
 	// Update tokens in database
 	newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
-	if err := db.UpdateDeviceCodeTokensOnly(s.conns, deviceCode, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
+	if err := devicecode.UpdateTokensOnly(s.conns, deviceCode, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
 		slog.Error("deviceauth.refresh_user_token.update_failed",
 			"component", "deviceauth",
 			"event", "token.update_error",
