@@ -28,19 +28,33 @@ func TestDeleteExpiredDeviceCodes(t *testing.T) {
 
 	// Create test data: mix of expired and non-expired device codes
 	now := time.Now()
-	expiredCode1 := &DeviceCode{
-		DeviceCode: "expired-1",
+	expiredPending := &DeviceCode{
+		DeviceCode: "expired-pending",
 		UserCode:   "EXP1",
 		ClientID:   "test-client",
 		Status:     "pending",
 		ExpiresAt:  now.Add(-1 * time.Hour), // Expired 1 hour ago
 	}
-	expiredCode2 := &DeviceCode{
-		DeviceCode: "expired-2",
+	expiredAwaitingSection := &DeviceCode{
+		DeviceCode: "expired-awaiting",
 		UserCode:   "EXP2",
 		ClientID:   "test-client",
+		Status:     "awaiting_section",
+		ExpiresAt:  now.Add(-1 * time.Hour), // Expired 1 hour ago
+	}
+	expiredAuthorized := &DeviceCode{
+		DeviceCode: "expired-authorized",
+		UserCode:   "EXP3",
+		ClientID:   "test-client",
 		Status:     "authorized",
-		ExpiresAt:  now.Add(-24 * time.Hour), // Expired 1 day ago
+		ExpiresAt:  now.Add(-24 * time.Hour), // Expired 1 day ago - should NOT be deleted
+	}
+	expiredRevoked := &DeviceCode{
+		DeviceCode: "expired-revoked",
+		UserCode:   "EXP4",
+		ClientID:   "test-client",
+		Status:     "revoked",
+		ExpiresAt:  now.Add(-24 * time.Hour), // Expired 1 day ago - should NOT be deleted
 	}
 	validCode := &DeviceCode{
 		DeviceCode: "valid-1",
@@ -51,14 +65,10 @@ func TestDeleteExpiredDeviceCodes(t *testing.T) {
 	}
 
 	// Insert test data
-	if err := CreateDeviceCode(conns, expiredCode1); err != nil {
-		t.Fatalf("Failed to create expired code 1: %v", err)
-	}
-	if err := CreateDeviceCode(conns, expiredCode2); err != nil {
-		t.Fatalf("Failed to create expired code 2: %v", err)
-	}
-	if err := CreateDeviceCode(conns, validCode); err != nil {
-		t.Fatalf("Failed to create valid code: %v", err)
+	for _, code := range []*DeviceCode{expiredPending, expiredAwaitingSection, expiredAuthorized, expiredRevoked, validCode} {
+		if err := CreateDeviceCode(conns, code); err != nil {
+			t.Fatalf("Failed to create code %s: %v", code.DeviceCode, err)
+		}
 	}
 
 	// Run cleanup
@@ -66,29 +76,34 @@ func TestDeleteExpiredDeviceCodes(t *testing.T) {
 		t.Fatalf("DeleteExpiredDeviceCodes failed: %v", err)
 	}
 
-	// Verify expired codes are deleted
-	found1, err := FindDeviceCodeByCode(conns, "expired-1")
-	if err != nil {
-		t.Fatalf("Error checking expired-1: %v", err)
-	}
-	if found1 != nil {
-		t.Error("Expected expired-1 to be deleted")
+	// Verify expired pending/awaiting_section codes are deleted
+	for _, deviceCode := range []string{"expired-pending", "expired-awaiting"} {
+		found, err := FindDeviceCodeByCode(conns, deviceCode)
+		if err != nil {
+			t.Fatalf("Error checking %s: %v", deviceCode, err)
+		}
+		if found != nil {
+			t.Errorf("Expected %s to be deleted", deviceCode)
+		}
 	}
 
-	found2, err := FindDeviceCodeByCode(conns, "expired-2")
-	if err != nil {
-		t.Fatalf("Error checking expired-2: %v", err)
-	}
-	if found2 != nil {
-		t.Error("Expected expired-2 to be deleted")
+	// Verify authorized and revoked devices are NOT deleted (handled by DeleteUnusedDeviceCodes instead)
+	for _, deviceCode := range []string{"expired-authorized", "expired-revoked"} {
+		found, err := FindDeviceCodeByCode(conns, deviceCode)
+		if err != nil {
+			t.Fatalf("Error checking %s: %v", deviceCode, err)
+		}
+		if found == nil {
+			t.Errorf("Expected %s to still exist (authorized/revoked devices not deleted by expires_at)", deviceCode)
+		}
 	}
 
 	// Verify valid code still exists
-	found3, err := FindDeviceCodeByCode(conns, "valid-1")
+	found, err := FindDeviceCodeByCode(conns, "valid-1")
 	if err != nil {
 		t.Fatalf("Error checking valid-1: %v", err)
 	}
-	if found3 == nil {
+	if found == nil {
 		t.Error("Expected valid-1 to still exist")
 	}
 }

@@ -162,8 +162,82 @@ func (AllowedClientID) TableName() string {
 	return "allowed_client_ids"
 }
 
+// WebSession represents an authenticated admin web session.
+// Created when a user completes the OAuth web flow for the admin UI.
+// Session data is stored server-side; only the session ID is in the cookie.
+type WebSession struct {
+	// ID is a UUID identifying this session (stored in cookie)
+	ID string `gorm:"primaryKey;column:id;type:varchar(36)"`
+
+	// OSMUserID is the OSM user ID of the authenticated user
+	OSMUserID int `gorm:"column:osm_user_id;not null;index:idx_web_sessions_user"`
+
+	// OSMAccessToken is the OAuth access token from OSM API
+	OSMAccessToken string `gorm:"column:osm_access_token;type:text;not null"`
+
+	// OSMRefreshToken is the OAuth refresh token from OSM API
+	OSMRefreshToken string `gorm:"column:osm_refresh_token;type:text;not null"`
+
+	// OSMTokenExpiry is when the OSM access token expires
+	OSMTokenExpiry time.Time `gorm:"column:osm_token_expiry;not null"`
+
+	// CSRFToken is used to protect against CSRF attacks
+	CSRFToken string `gorm:"column:csrf_token;type:varchar(64);not null"`
+
+	// SelectedSectionID is the currently selected section (nullable)
+	SelectedSectionID *int `gorm:"column:selected_section_id"`
+
+	// CreatedAt is when this session was created
+	CreatedAt time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+
+	// LastActivity is updated on each request for sliding expiration
+	LastActivity time.Time `gorm:"column:last_activity;default:CURRENT_TIMESTAMP"`
+
+	// ExpiresAt is the absolute session expiry time
+	ExpiresAt time.Time `gorm:"column:expires_at;not null;index:idx_web_sessions_expiry"`
+}
+
+func (WebSession) TableName() string {
+	return "web_sessions"
+}
+
+// ScoreAuditLog records score changes made via the admin UI.
+// Used for accountability and debugging score discrepancies.
+type ScoreAuditLog struct {
+	// ID is an auto-incrementing primary key
+	ID int64 `gorm:"primaryKey;autoIncrement;column:id"`
+
+	// OSMUserID is the user who made the change
+	OSMUserID int `gorm:"column:osm_user_id;not null;index:idx_score_audit_user"`
+
+	// SectionID is the section containing the patrol
+	SectionID int `gorm:"column:section_id;not null;index:idx_score_audit_section"`
+
+	// PatrolID is the patrol whose score was changed
+	PatrolID string `gorm:"column:patrol_id;type:varchar(255);not null"`
+
+	// PatrolName is the patrol name at the time of the change
+	PatrolName string `gorm:"column:patrol_name;type:varchar(255);not null"`
+
+	// PreviousScore is the score before the change
+	PreviousScore int `gorm:"column:previous_score;not null"`
+
+	// NewScore is the score after the change
+	NewScore int `gorm:"column:new_score;not null"`
+
+	// PointsAdded is the delta (can be negative)
+	PointsAdded int `gorm:"column:points_added;not null"`
+
+	// CreatedAt is when the change was made
+	CreatedAt time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP;index:idx_score_audit_created"`
+}
+
+func (ScoreAuditLog) TableName() string {
+	return "score_audit_log"
+}
+
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{})
+	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{}, &WebSession{}, &ScoreAuditLog{})
 }
 
 // User returns the OSM user associated with this Device, or nil if this
@@ -173,4 +247,62 @@ func (c DeviceCode) User() types.User {
 		return types.NewUser(c.OsmUserID, *c.OSMAccessToken)
 	}
 	return nil
+}
+
+// TokenHolder interface implementation for DeviceCode
+
+// GetOSMAccessToken returns the current OSM access token
+func (c *DeviceCode) GetOSMAccessToken() string {
+	if c.OSMAccessToken == nil {
+		return ""
+	}
+	return *c.OSMAccessToken
+}
+
+// GetOSMRefreshToken returns the current OSM refresh token
+func (c *DeviceCode) GetOSMRefreshToken() string {
+	if c.OSMRefreshToken == nil {
+		return ""
+	}
+	return *c.OSMRefreshToken
+}
+
+// GetOSMTokenExpiry returns when the access token expires
+func (c *DeviceCode) GetOSMTokenExpiry() time.Time {
+	if c.OSMTokenExpiry == nil {
+		return time.Time{}
+	}
+	return *c.OSMTokenExpiry
+}
+
+// GetIdentifier returns the device code as a unique identifier
+func (c *DeviceCode) GetIdentifier() string {
+	return c.DeviceCode
+}
+
+// TokenHolder interface implementation for WebSession
+
+// GetOSMAccessToken returns the current OSM access token
+func (s *WebSession) GetOSMAccessToken() string {
+	return s.OSMAccessToken
+}
+
+// GetOSMRefreshToken returns the current OSM refresh token
+func (s *WebSession) GetOSMRefreshToken() string {
+	return s.OSMRefreshToken
+}
+
+// GetOSMTokenExpiry returns when the access token expires
+func (s *WebSession) GetOSMTokenExpiry() time.Time {
+	return s.OSMTokenExpiry
+}
+
+// GetIdentifier returns the session ID as a unique identifier
+func (s *WebSession) GetIdentifier() string {
+	return s.ID
+}
+
+// User returns the OSM user associated with this web session
+func (s *WebSession) User() types.User {
+	return types.NewUser(&s.OSMUserID, s.OSMAccessToken)
 }

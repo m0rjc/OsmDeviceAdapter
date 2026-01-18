@@ -75,7 +75,14 @@ OSM Device Adapter implements a **two-tier OAuth security architecture** that cr
 ### OAuth Flows
 - **Device Authorization (RFC 8628)**: For IoT devices without browser/keyboard
 - **Web Authorization (RFC 6749)**: Secure OSM OAuth integration
+- **Admin Web Flow**: Cookie-based authentication for score entry UI
 - **Automatic Token Refresh**: Transparent OSM token renewal before expiry
+
+### Admin UI (Score Entry)
+- **Mobile-First Design**: Optimized for phone usage at scout events
+- **Progressive Web App (PWA)**: Installable on mobile devices
+- **Offline Support**: Queue score updates when offline, sync when connected
+- **Audit Trail**: All score changes logged with user, timestamp, and values
 
 ### Observability
 - **Structured Logging**: JSON logs with `log/slog`
@@ -174,6 +181,33 @@ OSM Device Adapter implements a **two-tier OAuth security architecture** that cr
   - Returns patrol names and scores for authorized section
   - Response: `[{"patrol":"Lions","score":100}, ...]`
   - Updates device last-used timestamp
+
+### Admin UI (Score Entry)
+
+The admin UI provides a mobile-friendly interface for entering patrol scores. It uses a separate OAuth flow from devices, with cookie-based session authentication.
+
+**OAuth Endpoints**:
+- `GET /admin/login` - Initiates OAuth flow with `section:member:write` scope
+- `GET /admin/callback` - OAuth callback (must be registered with OSM)
+- `GET /admin/logout` - Clears session and redirects to home
+
+**API Endpoints** (cookie-authenticated):
+- `GET /api/admin/session` - Returns auth status, user info, CSRF token
+- `GET /api/admin/sections` - List sections user has write access to
+- `GET /api/admin/sections/{id}/scores` - Get patrol scores for a section
+- `POST /api/admin/sections/{id}/scores` - Update patrol scores (requires CSRF token)
+
+**SPA Routes**:
+- `GET /admin/` - React SPA entry point
+- `GET /admin/scores` - Score entry page (client-side route)
+
+**Features**:
+- Progressive Web App (PWA) - installable on mobile devices
+- Offline support with background sync for pending score updates
+- CSRF protection on all state-changing operations
+- Audit logging of all score changes
+
+**Setup Requirement**: Register `/admin/callback` as an additional OAuth callback URL in your OSM OAuth application settings (same client ID as device flow).
 
 ### Health & Monitoring
 
@@ -329,6 +363,51 @@ CREATE TABLE allowed_client_ids (
 Device codes reference this table via `created_by_id` foreign key, allowing client ID rotation while preserving audit trail.
 
 See **Database Management** section below for SQL commands to manage client IDs.
+
+#### `web_sessions` Table
+
+Admin UI session management with cookie-based authentication.
+
+```sql
+CREATE TABLE web_sessions (
+    id UUID PRIMARY KEY,                      -- Session ID (used in cookie)
+    osm_user_id VARCHAR(255) NOT NULL,
+    osm_access_token TEXT NOT NULL,           -- OSM token (server-side only)
+    osm_refresh_token TEXT NOT NULL,          -- OSM refresh token
+    osm_token_expiry TIMESTAMP NOT NULL,
+    csrf_token VARCHAR(64) NOT NULL,          -- Per-session CSRF token
+    selected_section_id VARCHAR(255),         -- Currently selected section
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,            -- 7 days from creation (sliding)
+
+    INDEX idx_web_sessions_expiry (expires_at),
+    INDEX idx_web_sessions_user (osm_user_id)
+);
+```
+
+#### `score_audit_logs` Table
+
+Audit trail for score changes made via the admin UI.
+
+```sql
+CREATE TABLE score_audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    osm_user_id VARCHAR(255) NOT NULL,
+    section_id VARCHAR(255) NOT NULL,
+    patrol_id VARCHAR(255) NOT NULL,
+    patrol_name VARCHAR(255) NOT NULL,
+    previous_score INTEGER NOT NULL,
+    new_score INTEGER NOT NULL,
+    points_added INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_score_audit_section (section_id, created_at),
+    INDEX idx_score_audit_user (osm_user_id, created_at)
+);
+```
+
+Entries are automatically cleaned up after 14 days by the cleanup CronJob.
 
 ### Redis Data
 

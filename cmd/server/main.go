@@ -19,6 +19,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/server"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/webauth"
 )
 
 func main() {
@@ -71,6 +72,9 @@ func main() {
 	// Create device auth service (implements TokenRefresher interface)
 	deviceAuthService := deviceauth.NewService(conns, oauthClient)
 
+	// Create web auth service for admin session management
+	webAuthService := webauth.NewService(conns, oauthClient)
+
 	// Create OSM client with token refresher
 	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder, deviceAuthService)
 
@@ -81,6 +85,7 @@ func main() {
 		OSM:        osmClient,
 		OSMAuth:    oauthClient,
 		DeviceAuth: deviceAuthService,
+		WebAuth:    webAuthService,
 	}
 
 	// Create and configure HTTP server
