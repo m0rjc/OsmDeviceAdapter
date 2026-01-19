@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -192,7 +193,7 @@ func AdminCallbackHandler(deps *Dependencies) http.HandlerFunc {
 			ExpiresAt:       sessionExpiry,
 		}
 
-		if err := db.CreateWebSession(deps.Conns, session); err != nil {
+		if err := websession.Create(deps.Conns, session); err != nil {
 			slog.Error("admin.callback.session_create_failed",
 				"component", "admin_oauth",
 				"event", "callback.error",
@@ -224,7 +225,7 @@ func AdminLogoutHandler(deps *Dependencies) http.HandlerFunc {
 		cookie, err := r.Cookie(AdminSessionCookieName)
 		if err == nil && cookie.Value != "" {
 			// Delete session from database
-			if err := db.DeleteWebSession(deps.Conns, cookie.Value); err != nil {
+			if err := websession.Delete(deps.Conns, cookie.Value); err != nil {
 				slog.Error("admin.logout.session_delete_failed",
 					"component", "admin_oauth",
 					"event", "logout.error",

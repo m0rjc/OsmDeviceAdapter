@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -38,7 +39,7 @@ func createTestSession(t *testing.T, conns *db.Connections, id string) *db.WebSe
 		ExpiresAt:       time.Now().Add(7 * 24 * time.Hour),
 	}
 
-	if err := db.CreateWebSession(conns, session); err != nil {
+	if err := websession.Create(conns, session); err != nil {
 		t.Fatalf("Failed to create test session: %v", err)
 	}
 

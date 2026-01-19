@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
@@ -460,7 +461,7 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 
 	// Create audit log entries
 	if len(auditLogs) > 0 {
-		if err := db.CreateScoreAuditLogs(deps.Conns, auditLogs); err != nil {
+		if err := scoreaudit.CreateBatch(deps.Conns, auditLogs); err != nil {
 			slog.Error("admin.api.scores.audit_log_failed",
 				"component", "admin_api",
 				"event", "scores.audit_error",

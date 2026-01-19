@@ -11,6 +11,8 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/allowedclient"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -37,7 +39,7 @@ func TestDeviceAuthorizeHandler_RateLimitExceeded(t *testing.T) {
 		ContactEmail: "test@example.com",
 		Enabled:      true,
 	}
-	if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+	if err := allowedclient.Create(conns, allowedClient); err != nil {
 		t.Fatalf("Failed to create allowed client ID: %v", err)
 	}
 
@@ -123,7 +125,7 @@ func TestDeviceAuthorizeHandler_RateLimitCustomBehavior(t *testing.T) {
 		ContactEmail: "test@example.com",
 		Enabled:      true,
 	}
-	if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+	if err := allowedclient.Create(conns, allowedClient); err != nil {
 		t.Fatalf("Failed to create allowed client ID: %v", err)
 	}
 
@@ -231,7 +233,7 @@ func TestDeviceTokenHandler_SlowDown(t *testing.T) {
 		Status:     "pending",
 		ExpiresAt:  time.Now().Add(5 * time.Minute),
 	}
-	if err := db.CreateDeviceCode(&db.Connections{DB: database}, record); err != nil {
+	if err := devicecode.Create(&db.Connections{DB: database}, record); err != nil {
 		t.Fatalf("Failed to create device code: %v", err)
 	}
 
@@ -305,7 +307,7 @@ func TestMockRateLimiter_CallTracking(t *testing.T) {
 		ContactEmail: "test@example.com",
 		Enabled:      true,
 	}
-	if err := db.CreateAllowedClientID(conns, allowedClient); err != nil {
+	if err := allowedclient.Create(conns, allowedClient); err != nil {
 		t.Fatalf("Failed to create allowed client ID: %v", err)
 	}
 
