@@ -129,7 +129,7 @@ Outbox entry deleted (after 24h idempotency window)
 
 **Files:**
 - `internal/db/models.go` - Add ScoreUpdateOutbox model
-- `internal/db/score_outbox_store.go` - New file
+- `internal/db/scoreoutbox/store.go` - New file
 
 **ScoreUpdateOutbox table:**
 
@@ -153,19 +153,19 @@ type ScoreUpdateOutbox struct {
 }
 ```
 
-**Store functions:**
-- `CreateOutboxEntry(entry ScoreUpdateOutbox) error` - single entry insert, commits immediately
-- `CreateOutboxEntries(entries []ScoreUpdateOutbox) error` - batch insert
-- `FindOutboxByIdempotencyKey(key string) (*ScoreUpdateOutbox, error)`
-- `ClaimPendingEntriesForPatrol(sectionID int, patrolID string) ([]ScoreUpdateOutbox, error)` - `SELECT FOR UPDATE SKIP LOCKED` all pending entries for a patrol, marks as `processing`
-- `MarkEntriesCompleted(ids []int64, processedAt time.Time) error` - batch mark completed
-- `MarkEntriesFailed(ids []int64, err string, nextRetry *time.Time) error` - batch mark failed
-- `MarkOutboxAuthRevoked(osmUserID int) error`
-- `RecoverAuthRevokedEntries(osmUserID int) error` - reset auth_revoked → pending on re-auth
-- `CountPendingOutboxByUser(osmUserID int) (int64, error)`
-- `GetPendingOutboxBySection(sessionID string, sectionID int) ([]ScoreUpdateOutbox, error)`
-- `FindPatrolsWithPendingEntries(sectionID int) ([]string, error)` - returns patrol IDs that have pending entries (for worker to iterate)
-- `DeleteExpiredOutboxEntries() error` - respects different retention per status
+**Store functions (in `internal/db/scoreoutbox/` package):**
+- `scoreoutbox.Create(conns, entry) error` - single entry insert, commits immediately
+- `scoreoutbox.CreateBatch(conns, entries) error` - batch insert
+- `scoreoutbox.FindByIdempotencyKey(conns, key) (*ScoreUpdateOutbox, error)`
+- `scoreoutbox.ClaimPendingForPatrol(conns, sectionID, patrolID) ([]ScoreUpdateOutbox, error)` - `SELECT FOR UPDATE SKIP LOCKED` all pending entries for a patrol, marks as `processing`
+- `scoreoutbox.MarkCompleted(conns, ids, processedAt) error` - batch mark completed
+- `scoreoutbox.MarkFailed(conns, ids, err, nextRetry) error` - batch mark failed
+- `scoreoutbox.MarkAuthRevoked(conns, osmUserID) error`
+- `scoreoutbox.RecoverAuthRevoked(conns, osmUserID) error` - reset auth_revoked → pending on re-auth
+- `scoreoutbox.CountPendingByUser(conns, osmUserID) (int64, error)`
+- `scoreoutbox.GetPendingBySection(conns, sessionID, sectionID) ([]ScoreUpdateOutbox, error)`
+- `scoreoutbox.FindPatrolsWithPending(conns, sectionID) ([]string, error)` - returns patrol IDs that have pending entries (for worker to iterate)
+- `scoreoutbox.DeleteExpired(conns) error` - respects different retention per status
 
 **Key query for claiming entries:**
 ```sql
@@ -223,7 +223,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, sectionID int, patro
     defer s.ReleaseSyncLock(ctx, sectionID, patrolID)
 
     // 2. Claim all pending entries for this patrol (SKIP LOCKED)
-    entries, err := s.conns.DB.ClaimPendingEntriesForPatrol(sectionID, patrolID)
+    entries, err := scoreoutbox.ClaimPendingForPatrol(s.conns, sectionID, patrolID)
     if err != nil || len(entries) == 0 {
         return 0, err
     }
@@ -263,7 +263,7 @@ func (p *OutboxProcessor) Start(ctx context.Context) {
             return
         case <-ticker.C:
             // Find all section/patrol pairs with pending or failed (ready to retry) entries
-            patrols, _ := p.conns.DB.FindPatrolsWithPendingEntries()
+            patrols, _ := scoreoutbox.FindPatrolsWithPending(p.conns)
             for _, patrol := range patrols {
                 p.syncService.SyncPatrol(ctx, patrol.SectionID, patrol.PatrolID)
             }
@@ -343,7 +343,7 @@ func (p *OutboxProcessor) Start(ctx context.Context) {
 
 **Session endpoint changes:**
 - Add `pendingWrites` count to `AdminSessionResponse`
-- Query `CountPendingOutboxByUser()` for the logged-in user
+- Query `scoreoutbox.CountPendingByUser()` for the logged-in user
 
 ### Phase 4: Client Changes
 
@@ -389,7 +389,7 @@ IndexedDB Schema:
 
 **Files:**
 - `internal/handlers/api.go` - Modify patrols endpoint to include pending deltas
-- `internal/db/score_outbox_store.go` - Add function to get pending by section (all users)
+- `internal/db/scoreoutbox/store.go` - Add function to get pending by section (all users)
 
 **Extended patrol response:**
 ```json
@@ -413,7 +413,7 @@ IndexedDB Schema:
 - Indicator clears when pending changes are applied
 
 **Implementation:**
-1. Add `GetPendingDeltasBySection(sectionID int) (map[string]int, error)` to store
+1. Add `scoreoutbox.GetPendingDeltasBySection(conns, sectionID) (map[string]int, error)` to store
    - Aggregates `points_delta` by `patrol_id` for all pending entries in section
    - Includes `pending` and `processing` status entries
 2. Modify `handleGetPatrols` in `api.go`:
@@ -443,7 +443,7 @@ IndexedDB Schema:
 | File | Action | Phase |
 |------|--------|-------|
 | `internal/db/models.go` | Add ScoreUpdateOutbox, update AutoMigrate | 1 |
-| `internal/db/score_outbox_store.go` | New file - store functions with SKIP LOCKED support | 1 |
+| `internal/db/scoreoutbox/store.go` | New file - store functions with SKIP LOCKED support | 1 |
 | `internal/worker/patrol_sync.go` | New file - shared sync service with Redis locking | 2 |
 | `internal/worker/redis_lock.go` | New file - Redis distributed lock utilities | 2 |
 | `internal/worker/outbox_processor.go` | New file - background worker | 2 |
