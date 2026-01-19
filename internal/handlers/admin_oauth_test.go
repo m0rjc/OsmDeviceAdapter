@@ -21,7 +21,7 @@ import (
 
 // newMockOSMClient creates an OSM client for testing that uses the provided base URL
 func newMockOSMClient(baseURL string) *osm.Client {
-	return osm.NewClient(baseURL, nil, nil, nil)
+	return osm.NewClient(baseURL, nil, nil)
 }
 
 // setupAdminTestDeps creates test dependencies with miniredis for admin OAuth tests

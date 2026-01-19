@@ -19,6 +19,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/server"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/tokenrefresh"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/webauth"
 )
 
@@ -66,17 +67,20 @@ func main() {
 	rlStore := osm.NewPrometheusRateLimitDecorator(redisClient)
 	recorder := osm.NewPrometheusLatencyRecorder()
 
-	// Create OAuth client (no longer depends on osmClient)
+	// Create OAuth client for token operations
 	oauthClient := oauthclient.New(cfg.OAuth.OSMClientID, cfg.OAuth.OSMClientSecret, cfg.OAuth.OSMRedirectURI, cfg.ExternalDomains.OSMDomain)
 
-	// Create device auth service (implements TokenRefresher interface)
-	deviceAuthService := deviceauth.NewService(conns, oauthClient)
+	// Create central token refresh service
+	tokenRefreshService := tokenrefresh.NewService(oauthClient)
+
+	// Create device auth service
+	deviceAuthService := deviceauth.NewService(conns, tokenRefreshService)
 
 	// Create web auth service for admin session management
-	webAuthService := webauth.NewService(conns, oauthClient)
+	webAuthService := webauth.NewService(conns, tokenRefreshService)
 
-	// Create OSM client with token refresher
-	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder, deviceAuthService)
+	// Create OSM client (token refresh is handled via context-bound functions)
+	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder)
 
 	// Create handler dependencies
 	deps := &handlers.Dependencies{

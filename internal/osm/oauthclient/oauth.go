@@ -3,6 +3,7 @@ package oauthclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
+
+// ErrAccessRevoked indicates the user has revoked OAuth access.
+// This is returned when a token refresh attempt receives a 401 Unauthorized response.
+var ErrAccessRevoked = errors.New("OSM access revoked by user")
 
 func New(clientId, clientSecret, redirectUri, osmDomain string) *WebFlowClient {
 	return &WebFlowClient{
@@ -53,7 +58,7 @@ func (c *WebFlowClient) RefreshToken(ctx context.Context, refreshToken string) (
 
 	// Check for 401 (user revoked access)
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("OSM access unauthorized (revoked)")
+		return nil, ErrAccessRevoked
 	}
 
 	// Check for other non-2xx status codes

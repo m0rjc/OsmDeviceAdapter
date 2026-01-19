@@ -3,103 +3,60 @@ package webauth
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/tokenrefresh"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
 // Authentication errors
 var (
 	ErrSessionExpired     = errors.New("session expired")
-	ErrTokenRevoked       = errors.New("OSM access revoked by user")
-	ErrTokenRefreshFailed = errors.New("temporary failure refreshing token")
+	ErrTokenRevoked       = tokenrefresh.ErrTokenRevoked
+	ErrTokenRefreshFailed = tokenrefresh.ErrTokenRefreshFailed
 )
-
-// OAuthClient defines the interface for OAuth operations needed by the service
-type OAuthClient interface {
-	RefreshToken(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error)
-}
 
 // Service handles web session authentication and token refresh
 type Service struct {
-	conns   *db.Connections
-	osmAuth OAuthClient
+	conns          *db.Connections
+	tokenRefresher osm.TokenRefresher
 }
 
 // NewService creates a new web auth service
-func NewService(conns *db.Connections, osmAuth OAuthClient) *Service {
+func NewService(conns *db.Connections, tokenRefresher osm.TokenRefresher) *Service {
 	return &Service{
-		conns:   conns,
-		osmAuth: osmAuth,
+		conns:          conns,
+		tokenRefresher: tokenRefresher,
 	}
 }
 
 // RefreshWebSessionToken refreshes the OSM token for a web session.
 // It updates the database with the new tokens and returns the new access token.
 func (s *Service) RefreshWebSessionToken(ctx context.Context, session *db.WebSession) (string, error) {
-	if session.OSMRefreshToken == "" {
-		slog.Error("webauth.refresh_token.no_refresh_token",
-			"component", "webauth",
-			"event", "token.refresh_error",
-			"session_id", session.ID[:8],
-		)
-		return "", ErrTokenRefreshFailed
-	}
+	identifier := session.ID[:8]
 
-	// Attempt to refresh the token
-	newTokens, err := s.osmAuth.RefreshToken(ctx, session.OSMRefreshToken)
-	if err != nil {
-		// Check if this is an authorization error (user revoked access)
-		if strings.Contains(err.Error(), "unauthorized (revoked)") {
-			slog.Warn("webauth.refresh_token.revoked",
-				"component", "webauth",
-				"event", "token.revoked",
-				"session_id", session.ID[:8],
-				"error", err,
-			)
-			// Delete the session since access was revoked
-			if delErr := websession.Delete(s.conns, session.ID); delErr != nil {
-				slog.Error("webauth.refresh_token.session_delete_failed",
-					"component", "webauth",
-					"event", "token.revoke_error",
-					"session_id", session.ID[:8],
-					"error", delErr,
-				)
-			}
-			return "", ErrTokenRevoked
-		}
-
-		// Temporary error (network, OSM server issue, etc.)
-		slog.Error("webauth.refresh_token.failed",
-			"component", "webauth",
-			"event", "token.refresh_error",
-			"session_id", session.ID[:8],
-			"error", err,
-		)
-		return "", ErrTokenRefreshFailed
-	}
-
-	// Update tokens in database
-	newExpiry := time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second)
-	if err := websession.UpdateTokens(s.conns, session.ID, newTokens.AccessToken, newTokens.RefreshToken, newExpiry); err != nil {
-		slog.Error("webauth.refresh_token.update_failed",
-			"component", "webauth",
-			"event", "token.update_error",
-			"session_id", session.ID[:8],
-			"error", err,
-		)
-		return "", ErrTokenRefreshFailed
-	}
-
-	slog.Info("webauth.refresh_token.success",
-		"component", "webauth",
-		"event", "token.refreshed",
-		"session_id", session.ID[:8],
+	return s.tokenRefresher.RefreshToken(
+		ctx,
+		session.OSMRefreshToken,
+		identifier,
+		// onSuccess: update tokens in database
+		func(accessToken, refreshToken string, expiry time.Time) error {
+			return websession.UpdateTokens(s.conns, session.ID, accessToken, refreshToken, expiry)
+		},
+		// onRevoked: delete the session
+		func() error {
+			return websession.Delete(s.conns, session.ID)
+		},
 	)
+}
 
-	return newTokens.AccessToken, nil
+// CreateRefreshFunc creates a bound refresh function for a web session.
+// This function can be stored in context for automatic token refresh on 401.
+func (s *Service) CreateRefreshFunc(session *db.WebSession) types.TokenRefreshFunc {
+	return func(ctx context.Context) (string, error) {
+		return s.RefreshWebSessionToken(ctx, session)
+	}
 }
