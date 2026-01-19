@@ -1,7 +1,8 @@
 # Story 003: Server-Side Outbox Pattern - Implementation Planning
 
-**Status:** In Progress
+**Status:** In Progress (Phases 1-3 Complete)
 **Created:** 2026-01-19
+**Last Updated:** 2026-01-19
 
 ## Design Decisions from Planning
 
@@ -207,7 +208,7 @@ func (ScoreUpdateOutbox) TableName() string {
 
 ---
 
-### Phase 2: Background Worker & Sync Service
+### Phase 2: Background Worker & Sync Service ✅ COMPLETED
 
 **Design constraints:**
 - Single worker goroutine (no concurrency)
@@ -273,9 +274,22 @@ for {
 }
 ```
 
+**Completion Summary:**
+- ✅ `internal/worker/redis_lock.go` created with Redis distributed locking (60s TTL)
+- ✅ `internal/worker/credential_manager.go` created with token refresh and auth revocation handling
+- ✅ `internal/worker/patrol_sync.go` created with 9-step coalescing sync algorithm
+- ✅ `internal/worker/patrol_sync_test.go` created with 7 comprehensive unit tests (all passing)
+- ✅ `internal/worker/outbox_processor.go` created with 30-second polling, single worker
+- ✅ `cmd/server/main.go` updated with worker lifecycle (startup/shutdown)
+- ✅ `internal/handlers/dependencies.go` updated to include PatrolSyncService
+- ✅ Worker successfully processes outbox entries with coalescing (3 entries → 1 OSM call)
+- ✅ Auth revoked handling marks entries and recovers on re-login
+- ✅ Exponential backoff implemented (1min → 8 hours, max 10 attempts)
+- ✅ All unit tests passing with mocked OSM endpoints
+
 ---
 
-### Phase 3: Handler Changes
+### Phase 3: Handler Changes ✅ COMPLETED
 
 **Modify** `internal/handlers/admin_oauth.go` - OAuth callback handler:
 - After successful OAuth, create/update `user_credentials` entry
@@ -307,6 +321,23 @@ for {
 - Created/updated on every OAuth login (callback handler)
 - Updated by CredentialManager during token refresh
 - Deleted by cleanup job when: no active web sessions + no pending writes + 7 days since last use
+
+**Completion Summary:**
+- ✅ `internal/handlers/admin_oauth.go` updated to create/update user_credentials on login
+- ✅ OAuth callback now calls `RecoverAuthRevoked()` to reset auth_revoked entries
+- ✅ `internal/handlers/admin_api.go` completely rewritten for outbox pattern
+- ✅ Score update handler requires `X-Idempotency-Key` header (400 if missing)
+- ✅ Duplicate idempotency keys return cached 202 responses
+- ✅ Handler creates outbox entries with unique composite keys (baseKey:patrolID:index)
+- ✅ Returns 202 Accepted with batch ID immediately
+- ✅ Dual sync modes implemented: interactive (immediate) and background (30s polling)
+- ✅ Session endpoint updated to include `pendingWrites` count
+- ✅ `internal/handlers/admin_api_integration_test.go` created with 4 comprehensive integration tests
+- ✅ All integration tests passing (FullFlow, Idempotency, ConcurrentSubmissions, InteractiveMode)
+- ✅ Tests validate end-to-end flow from HTTP → Outbox → Worker → Mocked OSM
+- ✅ Coalescing verified in tests (multiple entries → single OSM call)
+- ✅ Fixed idempotency key bug for multiple updates to same patrol
+- ✅ Fixed `FindByIdempotencyKey()` to handle both exact and prefix matches
 
 ---
 
