@@ -1,14 +1,23 @@
 package types
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // ContextKey is a type for context keys to avoid collisions
 type ContextKey string
 
 // Context keys used across the application
 const (
-	UserContextKey ContextKey = "user"
+	UserContextKey         ContextKey = "user"
+	TokenRefreshFuncKey    ContextKey = "token_refresh_func"
 )
+
+// TokenRefreshFunc is a function that refreshes the current user's token.
+// It's bound with the appropriate callbacks at authentication time and stored in context.
+// Returns the new access token on success, or an error if refresh fails.
+type TokenRefreshFunc func(ctx context.Context) (newAccessToken string, err error)
 
 // User represents a user for the OSM API client.
 type User interface {

@@ -9,7 +9,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/tokenrefresh"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -37,16 +37,28 @@ type mockConnections struct {
 	updateDeviceTokensFunc func(deviceCode, accessToken, refreshToken string, expiry time.Time) error
 }
 
-// Mock OAuth client for testing
-type mockWebFlowClient struct {
-	refreshTokenFunc func(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error)
+// Mock token refresher for testing - implements osm.TokenRefresher
+type mockTokenRefresher struct {
+	refreshFunc func(
+		ctx context.Context,
+		refreshToken string,
+		identifier string,
+		onSuccess func(accessToken, refreshToken string, expiry time.Time) error,
+		onRevoked func() error,
+	) (string, error)
 }
 
-func (m *mockWebFlowClient) RefreshToken(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
-	if m.refreshTokenFunc != nil {
-		return m.refreshTokenFunc(ctx, refreshToken)
+func (m *mockTokenRefresher) RefreshToken(
+	ctx context.Context,
+	refreshToken string,
+	identifier string,
+	onSuccess func(accessToken, refreshToken string, expiry time.Time) error,
+	onRevoked func() error,
+) (string, error) {
+	if m.refreshFunc != nil {
+		return m.refreshFunc(ctx, refreshToken, identifier, onSuccess, onRevoked)
 	}
-	return nil, errors.New("not implemented")
+	return "", errors.New("not implemented")
 }
 
 func TestAuthenticate_Success_NoRefreshNeeded(t *testing.T) {
@@ -247,19 +259,19 @@ func TestErrorsAreDistinct(t *testing.T) {
 	}
 }
 
-// Test RefreshUserTokenFromRecord with token revocation
-func TestRefreshUserTokenFromRecord_Revocation(t *testing.T) {
+// Test token refresh with revocation
+func TestRefreshDeviceToken_Revocation(t *testing.T) {
 	// Setup test database
 	conns := setupTestDB(t)
 	now := time.Now()
 
 	// Create a device with tokens
-	deviceCode := "test-device"
+	deviceCodeStr := "test-device"
 	osmToken := "osm-access-token"
 	osmRefresh := "osm-refresh-token"
 	userId := 123
 	device := &db.DeviceCode{
-		DeviceCode:      deviceCode,
+		DeviceCode:      deviceCodeStr,
 		UserCode:        "TEST",
 		ClientID:        "test-client",
 		Status:          "authorized",
@@ -273,24 +285,31 @@ func TestRefreshUserTokenFromRecord_Revocation(t *testing.T) {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
-	// Create mock OAuth client that returns revocation error
-	mockClient := &mockWebFlowClient{
-		refreshTokenFunc: func(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
-			return nil, errors.New("token refresh failed: unauthorized (revoked)")
+	// Create mock token refresher that simulates revocation
+	mockRefresher := &mockTokenRefresher{
+		refreshFunc: func(ctx context.Context, refreshToken, identifier string,
+			onSuccess func(string, string, time.Time) error,
+			onRevoked func() error) (string, error) {
+			// Simulate revocation by calling onRevoked callback
+			if onRevoked != nil {
+				onRevoked()
+			}
+			return "", tokenrefresh.ErrTokenRevoked
 		},
 	}
 
 	// Create service
-	service := NewService(conns, mockClient)
+	service := NewService(conns, mockRefresher)
 
-	// Attempt to refresh token - should detect revocation
-	_, err := service.RefreshUserTokenFromRecord(context.Background(), device)
-	if err != ErrTokenRevoked {
+	// Create refresh func and call it
+	refreshFunc := service.CreateRefreshFunc(device)
+	_, err := refreshFunc(context.Background())
+	if !errors.Is(err, ErrTokenRevoked) {
 		t.Errorf("Expected ErrTokenRevoked, got %v", err)
 	}
 
 	// Verify device was marked as revoked in database
-	found, err := devicecode.FindByCode(conns, deviceCode)
+	found, err := devicecode.FindByCode(conns, deviceCodeStr)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -308,18 +327,18 @@ func TestRefreshUserTokenFromRecord_Revocation(t *testing.T) {
 	}
 }
 
-// Test RefreshUserTokenFromRecord with successful token refresh
-func TestRefreshUserTokenFromRecord_Success(t *testing.T) {
+// Test token refresh with success
+func TestRefreshDeviceToken_Success(t *testing.T) {
 	conns := setupTestDB(t)
 	now := time.Now()
 
 	// Create a device with tokens
-	deviceCode := "test-device"
+	deviceCodeStr := "test-device"
 	osmToken := "old-osm-token"
 	osmRefresh := "osm-refresh-token"
 	userId := 123
 	device := &db.DeviceCode{
-		DeviceCode:      deviceCode,
+		DeviceCode:      deviceCodeStr,
 		UserCode:        "TEST",
 		ClientID:        "test-client",
 		Status:          "authorized",
@@ -333,34 +352,37 @@ func TestRefreshUserTokenFromRecord_Success(t *testing.T) {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
-	// Create mock OAuth client that returns new tokens
+	// Create mock token refresher that returns new tokens
 	newAccessToken := "new-osm-access-token"
 	newRefreshToken := "new-osm-refresh-token"
-	mockClient := &mockWebFlowClient{
-		refreshTokenFunc: func(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
-			return &types.OSMTokenResponse{
-				AccessToken:  newAccessToken,
-				RefreshToken: newRefreshToken,
-				ExpiresIn:    3600,
-				TokenType:    "Bearer",
-			}, nil
+	mockRefresher := &mockTokenRefresher{
+		refreshFunc: func(ctx context.Context, refreshToken, identifier string,
+			onSuccess func(string, string, time.Time) error,
+			onRevoked func() error) (string, error) {
+			// Call the success callback to update the database
+			newExpiry := time.Now().Add(3600 * time.Second)
+			if err := onSuccess(newAccessToken, newRefreshToken, newExpiry); err != nil {
+				return "", err
+			}
+			return newAccessToken, nil
 		},
 	}
 
 	// Create service
-	service := NewService(conns, mockClient)
+	service := NewService(conns, mockRefresher)
 
-	// Refresh token
-	returnedToken, err := service.RefreshUserTokenFromRecord(context.Background(), device)
+	// Create refresh func and call it
+	refreshFunc := service.CreateRefreshFunc(device)
+	returnedToken, err := refreshFunc(context.Background())
 	if err != nil {
-		t.Fatalf("RefreshUserTokenFromRecord failed: %v", err)
+		t.Fatalf("Refresh failed: %v", err)
 	}
 	if returnedToken != newAccessToken {
 		t.Errorf("Expected token '%s', got '%s'", newAccessToken, returnedToken)
 	}
 
 	// Verify database was updated with new tokens
-	found, err := devicecode.FindByCode(conns, deviceCode)
+	found, err := devicecode.FindByCode(conns, deviceCodeStr)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -378,17 +400,17 @@ func TestRefreshUserTokenFromRecord_Success(t *testing.T) {
 	}
 }
 
-// Test RefreshUserTokenFromRecord with network error
-func TestRefreshUserTokenFromRecord_NetworkError(t *testing.T) {
+// Test token refresh with network error
+func TestRefreshDeviceToken_NetworkError(t *testing.T) {
 	conns := setupTestDB(t)
 	now := time.Now()
 
-	deviceCode := "test-device"
+	deviceCodeStr := "test-device"
 	osmToken := "osm-access-token"
 	osmRefresh := "osm-refresh-token"
 	userId := 123
 	device := &db.DeviceCode{
-		DeviceCode:      deviceCode,
+		DeviceCode:      deviceCodeStr,
 		UserCode:        "TEST",
 		ClientID:        "test-client",
 		Status:          "authorized",
@@ -402,23 +424,26 @@ func TestRefreshUserTokenFromRecord_NetworkError(t *testing.T) {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
-	// Create mock OAuth client that returns network error
-	mockClient := &mockWebFlowClient{
-		refreshTokenFunc: func(ctx context.Context, refreshToken string) (*types.OSMTokenResponse, error) {
-			return nil, errors.New("network error: connection timeout")
+	// Create mock token refresher that returns network error
+	mockRefresher := &mockTokenRefresher{
+		refreshFunc: func(ctx context.Context, refreshToken, identifier string,
+			onSuccess func(string, string, time.Time) error,
+			onRevoked func() error) (string, error) {
+			return "", tokenrefresh.ErrTokenRefreshFailed
 		},
 	}
 
-	service := NewService(conns, mockClient)
+	service := NewService(conns, mockRefresher)
 
-	// Attempt to refresh - should return temporary error
-	_, err := service.RefreshUserTokenFromRecord(context.Background(), device)
-	if err != ErrTokenRefreshFailed {
+	// Create refresh func and call it
+	refreshFunc := service.CreateRefreshFunc(device)
+	_, err := refreshFunc(context.Background())
+	if !errors.Is(err, ErrTokenRefreshFailed) {
 		t.Errorf("Expected ErrTokenRefreshFailed, got %v", err)
 	}
 
 	// Verify device status is still authorized (not revoked for network errors)
-	found, err := devicecode.FindByCode(conns, deviceCode)
+	found, err := devicecode.FindByCode(conns, deviceCodeStr)
 	if err != nil {
 		t.Fatalf("Error finding device: %v", err)
 	}
@@ -433,29 +458,16 @@ func TestRefreshUserTokenFromRecord_NetworkError(t *testing.T) {
 	}
 }
 
-// Test RefreshUserTokenFromRecord with invalid device code type
-func TestRefreshUserTokenFromRecord_InvalidType(t *testing.T) {
-	conns := setupTestDB(t)
-	mockClient := &mockWebFlowClient{}
-	service := NewService(conns, mockClient)
-
-	// Pass wrong type (string instead of *db.DeviceCode)
-	_, err := service.RefreshUserTokenFromRecord(context.Background(), "invalid-type")
-	if err != ErrInvalidToken {
-		t.Errorf("Expected ErrInvalidToken for invalid type, got %v", err)
-	}
-}
-
-// Test RefreshUserTokenFromRecord with missing refresh token
-func TestRefreshUserTokenFromRecord_NoRefreshToken(t *testing.T) {
+// Test token refresh with missing refresh token
+func TestRefreshDeviceToken_NoRefreshToken(t *testing.T) {
 	conns := setupTestDB(t)
 	now := time.Now()
 
-	deviceCode := "test-device"
+	deviceCodeStr := "test-device"
 	osmToken := "osm-access-token"
 	userId := 123
 	device := &db.DeviceCode{
-		DeviceCode:      deviceCode,
+		DeviceCode:      deviceCodeStr,
 		UserCode:        "TEST",
 		ClientID:        "test-client",
 		Status:          "authorized",
@@ -469,11 +481,23 @@ func TestRefreshUserTokenFromRecord_NoRefreshToken(t *testing.T) {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
-	mockClient := &mockWebFlowClient{}
-	service := NewService(conns, mockClient)
+	// Mock refresher that checks for empty refresh token
+	mockRefresher := &mockTokenRefresher{
+		refreshFunc: func(ctx context.Context, refreshToken, identifier string,
+			onSuccess func(string, string, time.Time) error,
+			onRevoked func() error) (string, error) {
+			if refreshToken == "" {
+				return "", tokenrefresh.ErrTokenRefreshFailed
+			}
+			return "new-token", nil
+		},
+	}
 
-	_, err := service.RefreshUserTokenFromRecord(context.Background(), device)
-	if err != ErrTokenRefreshFailed {
+	service := NewService(conns, mockRefresher)
+
+	refreshFunc := service.CreateRefreshFunc(device)
+	_, err := refreshFunc(context.Background())
+	if !errors.Is(err, ErrTokenRefreshFailed) {
 		t.Errorf("Expected ErrTokenRefreshFailed for missing refresh token, got %v", err)
 	}
 }
@@ -505,8 +529,8 @@ func TestAuthenticate_LastUsedTracking(t *testing.T) {
 		t.Fatalf("Failed to create device: %v", err)
 	}
 
-	mockClient := &mockWebFlowClient{}
-	service := NewService(conns, mockClient)
+	mockRefresher := &mockTokenRefresher{}
+	service := NewService(conns, mockRefresher)
 
 	// Authenticate
 	beforeAuth := time.Now()

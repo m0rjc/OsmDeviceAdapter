@@ -87,7 +87,7 @@ func TestClient_Request(t *testing.T) {
 		defer server.Close()
 
 		store := &mockStore{}
-		client := NewClient(server.URL, store, store, nil)
+		client := NewClient(server.URL, store, store)
 
 		var target map[string]string
 		resp, err := client.Request(context.Background(), http.MethodGet, &target, WithPath("/test"), WithUser(newMockUser(1, "test-token")))
@@ -108,7 +108,7 @@ func TestClient_Request(t *testing.T) {
 
 	t.Run("service blocked in store", func(t *testing.T) {
 		store := &mockStore{serviceBlocked: true}
-		client := NewClient("http://osm.local", store, store, nil)
+		client := NewClient("http://osm.local", store, store)
 
 		_, err := client.Request(context.Background(), http.MethodGet, nil, WithPath("/test"))
 		if err != ErrServiceBlocked {
@@ -122,7 +122,7 @@ func TestClient_Request(t *testing.T) {
 			userBlocked:      map[int]bool{1: true},
 			userBlockedUntil: map[int]time.Time{1: blockTime},
 		}
-		client := NewClient("http://osm.local", store, store, nil)
+		client := NewClient("http://osm.local", store, store)
 
 		_, err := client.Request(context.Background(), http.MethodGet, nil, WithPath("/test"), WithUser(newMockUser(1, "utoken")))
 		var blockedErr *ErrUserBlocked
@@ -139,7 +139,7 @@ func TestClient_Request(t *testing.T) {
 		defer server.Close()
 
 		store := &mockStore{}
-		client := NewClient(server.URL, store, store, nil)
+		client := NewClient(server.URL, store, store)
 
 		_, err := client.Request(context.Background(), http.MethodGet, nil, WithPath("/test"))
 		if err == nil || !strings.Contains(err.Error(), "OSM service blocked") {
@@ -158,7 +158,7 @@ func TestClient_Request(t *testing.T) {
 		defer server.Close()
 
 		store := &mockStore{}
-		client := NewClient(server.URL, store, store, nil)
+		client := NewClient(server.URL, store, store)
 
 		_, err := client.Request(context.Background(), http.MethodGet, nil, WithPath("/test"), WithUser(newMockUser(1, "utoken")))
 		var blockedErr *ErrUserBlocked
@@ -179,7 +179,7 @@ func TestClient_Request(t *testing.T) {
 		defer server.Close()
 
 		store := &mockStore{}
-		client := NewClient(server.URL, store, store, nil)
+		client := NewClient(server.URL, store, store)
 
 		_, err := client.Request(context.Background(), http.MethodPost, nil, WithPath("/oauth/token"))
 		if err == nil {
@@ -204,7 +204,7 @@ func TestClient_Request(t *testing.T) {
 		defer server.Close()
 
 		store := &mockStore{}
-		client := NewClient(server.URL, store, store, nil)
+		client := NewClient(server.URL, store, store)
 
 		_, err := client.Request(context.Background(), http.MethodGet, nil, WithPath("/test"), WithUser(newMockUser(1, "user-token")))
 		if err != nil {
