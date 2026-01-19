@@ -320,7 +320,7 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 
 	// Parse and store rate limit headers (per-user rate limits)
 	remaining, limit, resetSeconds := parseRateLimitHeaders(resp.Header)
-	if config.userId != nil {
+	if config.userId != nil && c.recorder != nil {
 		c.recorder.RecordRateLimit(config.userId, remaining, limit, resetSeconds)
 	}
 	osmResponse.Limits = UserRateLimitInfo{

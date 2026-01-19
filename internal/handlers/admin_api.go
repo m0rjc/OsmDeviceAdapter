@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -9,7 +11,8 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
@@ -22,6 +25,7 @@ type AdminSessionResponse struct {
 	User              *AdminUserInfo `json:"user,omitempty"`
 	SelectedSectionID *int           `json:"selectedSectionId,omitempty"`
 	CSRFToken         string         `json:"csrfToken,omitempty"`
+	PendingWrites     int            `json:"pendingWrites"` // Count of pending/processing outbox entries
 }
 
 // AdminUserInfo contains user information for the session response
@@ -68,6 +72,7 @@ type AdminScoreUpdate struct {
 }
 
 // AdminUpdateResponse is returned by POST /api/admin/sections/{sectionId}/scores
+// DEPRECATED: Will be replaced by AdminOutboxResponse after outbox pattern rollout
 type AdminUpdateResponse struct {
 	Success bool                `json:"success"`
 	Patrols []AdminPatrolResult `json:"patrols"`
@@ -79,6 +84,14 @@ type AdminPatrolResult struct {
 	Name          string `json:"name"`
 	PreviousScore int    `json:"previousScore"`
 	NewScore      int    `json:"newScore"`
+}
+
+// AdminOutboxResponse is returned by POST /api/admin/sections/{sectionId}/scores (outbox pattern)
+type AdminOutboxResponse struct {
+	Status          string `json:"status"`           // "accepted"
+	BatchID         string `json:"batchId"`          // UUID for this batch of updates
+	EntriesCreated  int    `json:"entriesCreated"`   // Number of outbox entries created
+	IdempotencyKey  string `json:"idempotencyKey"`   // Echo back the idempotency key
 }
 
 // AdminErrorResponse is used for error responses
@@ -124,6 +137,18 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
+		// Count pending writes for this user
+		pendingCount, err := scoreoutbox.CountPendingByUser(deps.Conns, session.OSMUserID)
+		if err != nil {
+			slog.Error("admin.api.session.pending_count_failed",
+				"component", "admin_api",
+				"event", "session.warning",
+				"error", err,
+			)
+			// Continue with 0 - non-critical error
+			pendingCount = 0
+		}
+
 		// Fetch user profile from OSM to get the name
 		user := session.User()
 		profile, err := deps.OSM.FetchOSMProfile(user)
@@ -139,6 +164,7 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 				User:              &AdminUserInfo{OSMUserID: session.OSMUserID},
 				SelectedSectionID: session.SelectedSectionID,
 				CSRFToken:         session.CSRFToken,
+				PendingWrites:     int(pendingCount),
 			})
 			return
 		}
@@ -152,6 +178,7 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 			"component", "admin_api",
 			"event", "session.fetched",
 			"user_id", session.OSMUserID,
+			"pending_writes", pendingCount,
 		)
 
 		writeJSON(w, AdminSessionResponse{
@@ -159,6 +186,7 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 			User:              &AdminUserInfo{OSMUserID: session.OSMUserID, Name: userName},
 			SelectedSectionID: session.SelectedSectionID,
 			CSRFToken:         session.CSRFToken,
+			PendingWrites:     int(pendingCount),
 		})
 	}
 }
@@ -339,6 +367,7 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 }
 
 // handleUpdateScores handles POST /api/admin/sections/{sectionId}/scores
+// Uses the outbox pattern: creates pending entries for background processing
 func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, user types.User, sectionID int, _ *types.OSMSection) {
 	ctx := r.Context()
 
@@ -355,6 +384,43 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 			"user_id", session.OSMUserID,
 		)
 		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return
+	}
+
+	// Require idempotency key for outbox pattern
+	idempotencyKey := r.Header.Get("X-Idempotency-Key")
+	if idempotencyKey == "" {
+		writeJSONError(w, http.StatusBadRequest, "idempotency_key_required", "X-Idempotency-Key header is required")
+		return
+	}
+
+	// Check for duplicate idempotency key (return cached result)
+	existing, err := scoreoutbox.FindByIdempotencyKey(deps.Conns, idempotencyKey)
+	if err != nil {
+		slog.Error("admin.api.scores.idempotency_check_failed",
+			"component", "admin_api",
+			"event", "scores.update_error",
+			"idempotency_key", idempotencyKey,
+			"error", err,
+		)
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to check idempotency")
+		return
+	}
+	if existing != nil {
+		// Request already processed - return cached response
+		slog.Info("admin.api.scores.duplicate_request",
+			"component", "admin_api",
+			"event", "scores.duplicate",
+			"idempotency_key", idempotencyKey,
+			"status", existing.Status,
+		)
+		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, AdminOutboxResponse{
+			Status:         "accepted",
+			BatchID:        existing.BatchID,
+			EntriesCreated: 1, // We only return one existing entry
+			IdempotencyKey: idempotencyKey,
+		})
 		return
 	}
 
@@ -378,7 +444,31 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		}
 	}
 
-	// Get the current term for the section
+	// Defensive check: ensure user credentials exist
+	// (Should already exist from login, but check anyway)
+	credentials, err := usercredentials.Get(deps.Conns, session.OSMUserID)
+	if err != nil {
+		slog.Error("admin.api.scores.credentials_check_failed",
+			"component", "admin_api",
+			"event", "scores.update_error",
+			"user_id", session.OSMUserID,
+			"error", err,
+		)
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to verify credentials")
+		return
+	}
+	if credentials == nil {
+		slog.Error("admin.api.scores.no_credentials",
+			"component", "admin_api",
+			"event", "scores.update_error",
+			"user_id", session.OSMUserID,
+		)
+		writeJSONError(w, http.StatusInternalServerError, "no_credentials", "User credentials not found - please re-login")
+		return
+	}
+
+	// Fetch current patrol scores to get patrol names
+	// We need names for the outbox entries and audit trail
 	termInfo, err := deps.OSM.FetchActiveTermForSection(ctx, user, sectionID)
 	if err != nil {
 		slog.Error("admin.api.scores.term_fetch_failed",
@@ -391,7 +481,6 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		return
 	}
 
-	// Fetch current patrol scores
 	currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termInfo.TermID)
 	if err != nil {
 		slog.Error("admin.api.scores.fetch_failed",
@@ -404,18 +493,28 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		return
 	}
 
-	// Build a map of current scores for quick lookup
-	scoreMap := make(map[string]types.PatrolScore)
+	// Build a map of patrol names for quick lookup
+	patrolNames := make(map[string]string)
 	for _, p := range currentScores {
-		scoreMap[p.ID] = p
+		patrolNames[p.ID] = p.Name
 	}
 
-	// Process updates
-	results := make([]AdminPatrolResult, 0, len(req.Updates))
-	auditLogs := make([]db.ScoreAuditLog, 0, len(req.Updates))
+	// Generate batch ID for this submission
+	batchID, err := generateUUID()
+	if err != nil {
+		slog.Error("admin.api.scores.batch_id_generation_failed",
+			"component", "admin_api",
+			"event", "scores.update_error",
+			"error", err,
+		)
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to generate batch ID")
+		return
+	}
 
-	for _, update := range req.Updates {
-		patrol, exists := scoreMap[update.PatrolID]
+	// Create outbox entries
+	outboxEntries := make([]db.ScoreUpdateOutbox, 0, len(req.Updates))
+	for i, update := range req.Updates {
+		patrolName, exists := patrolNames[update.PatrolID]
 		if !exists {
 			slog.Warn("admin.api.scores.patrol_not_found",
 				"component", "admin_api",
@@ -425,62 +524,81 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 			continue // Skip unknown patrols
 		}
 
-		previousScore := patrol.Score
-		newScore := previousScore + update.Points
+		// Generate a unique idempotency key per entry (based on main key + patrol ID + index)
+		// Index ensures uniqueness even if same patrol appears multiple times in request
+		entryIdempotencyKey := fmt.Sprintf("%s:%s:%d", idempotencyKey, update.PatrolID, i)
 
-		// Update the score in OSM
-		if err := deps.OSM.UpdatePatrolScore(ctx, user, sectionID, update.PatrolID, newScore); err != nil {
-			slog.Error("admin.api.scores.update_failed",
-				"component", "admin_api",
-				"event", "scores.update_error",
-				"patrol_id", update.PatrolID,
-				"error", err,
-			)
-			writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to update patrol score")
-			return
-		}
-
-		results = append(results, AdminPatrolResult{
-			ID:            patrol.ID,
-			Name:          patrol.Name,
-			PreviousScore: previousScore,
-			NewScore:      newScore,
-		})
-
-		// Prepare audit log entry
-		auditLogs = append(auditLogs, db.ScoreAuditLog{
-			OSMUserID:     session.OSMUserID,
-			SectionID:     sectionID,
-			PatrolID:      update.PatrolID,
-			PatrolName:    patrol.Name,
-			PreviousScore: previousScore,
-			NewScore:      newScore,
-			PointsAdded:   update.Points,
+		outboxEntries = append(outboxEntries, db.ScoreUpdateOutbox{
+			IdempotencyKey: entryIdempotencyKey,
+			OSMUserID:      session.OSMUserID,
+			SectionID:      sectionID,
+			PatrolID:       update.PatrolID,
+			PatrolName:     patrolName,
+			PointsDelta:    update.Points,
+			Status:         "pending",
+			BatchID:        batchID,
 		})
 	}
 
-	// Create audit log entries
-	if len(auditLogs) > 0 {
-		if err := scoreaudit.CreateBatch(deps.Conns, auditLogs); err != nil {
-			slog.Error("admin.api.scores.audit_log_failed",
-				"component", "admin_api",
-				"event", "scores.audit_error",
-				"error", err,
-			)
-			// Don't fail the request, just log the error
-		}
+	if len(outboxEntries) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "no_valid_patrols", "No valid patrols to update")
+		return
 	}
 
-	slog.Info("admin.api.scores.updated",
+	// Create outbox entries in database
+	if err := scoreoutbox.CreateBatch(deps.Conns, outboxEntries); err != nil {
+		slog.Error("admin.api.scores.outbox_create_failed",
+			"component", "admin_api",
+			"event", "scores.update_error",
+			"batch_id", batchID,
+			"error", err,
+		)
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to create outbox entries")
+		return
+	}
+
+	slog.Info("admin.api.scores.outbox_created",
 		"component", "admin_api",
-		"event", "scores.update_success",
+		"event", "scores.outbox_created",
 		"user_id", session.OSMUserID,
 		"section_id", sectionID,
-		"update_count", len(results),
+		"batch_id", batchID,
+		"entry_count", len(outboxEntries),
 	)
 
-	writeJSON(w, AdminUpdateResponse{
-		Success: true,
-		Patrols: results,
+	// Check sync mode header (default: interactive)
+	syncMode := r.Header.Get("X-Sync-Mode")
+	if syncMode == "" {
+		syncMode = "interactive"
+	}
+
+	// If interactive mode, trigger immediate sync for each patrol
+	if syncMode == "interactive" {
+		for _, entry := range outboxEntries {
+			go func(osmUserID, sectionID int, patrolID string) {
+				// Use background context with timeout
+				syncCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+
+				if err := deps.PatrolSync.SyncPatrol(syncCtx, osmUserID, sectionID, patrolID); err != nil {
+					slog.Error("admin.api.scores.interactive_sync_failed",
+						"component", "admin_api",
+						"event", "scores.sync_error",
+						"patrol_id", patrolID,
+						"error", err,
+					)
+					// Don't fail the request - worker will retry
+				}
+			}(entry.OSMUserID, entry.SectionID, entry.PatrolID)
+		}
+	}
+
+	// Return 202 Accepted with outbox response
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, AdminOutboxResponse{
+		Status:         "accepted",
+		BatchID:        batchID,
+		EntriesCreated: len(outboxEntries),
+		IdempotencyKey: idempotencyKey,
 	})
 }

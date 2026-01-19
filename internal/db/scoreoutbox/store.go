@@ -21,11 +21,23 @@ func CreateBatch(conns *db.Connections, entries []db.ScoreUpdateOutbox) error {
 	return conns.DB.Create(&entries).Error
 }
 
-// FindByIdempotencyKey finds an outbox entry by its idempotency key
+// FindByIdempotencyKey finds an outbox entry by its base idempotency key
+// Searches for any entry whose idempotency_key starts with the provided key
+// (handles both exact matches and prefix matches for composite keys like "key:patrol:index")
 // Returns nil if not found
 func FindByIdempotencyKey(conns *db.Connections, idempotencyKey string) (*db.ScoreUpdateOutbox, error) {
 	var entry db.ScoreUpdateOutbox
+	// Try exact match first (for backwards compatibility)
 	err := conns.DB.Where("idempotency_key = ?", idempotencyKey).First(&entry).Error
+	if err == nil {
+		return &entry, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	// Try prefix match (for composite keys like "basekey:patrol:index")
+	err = conns.DB.Where("idempotency_key LIKE ?", idempotencyKey+":%").First(&entry).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
