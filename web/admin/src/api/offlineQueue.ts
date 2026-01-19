@@ -1,19 +1,40 @@
 /**
- * Offline queue for score updates using IndexedDB.
- * When offline, score changes are stored locally and synced when back online.
+ * Client-side outbox pattern for score updates using IndexedDB.
+ *
+ * Two-tier architecture:
+ * 1. working-scores: Mutable store for user's current edits (running total per patrol)
+ * 2. client-outbox: Immutable store for pending submissions with stable idempotency keys
+ *
+ * Flow:
+ * - User changes score → update working-scores
+ * - User submits → snapshot working-scores to client-outbox with idempotency keys
+ * - Clear working-scores for submitted patrols
+ * - On 200/202: delete from client-outbox (server owns it)
+ * - On network error: keep in client-outbox, retry with same keys
  */
 
-import type { ScoreUpdate } from './types';
-
 const DB_NAME = 'penguin-patrol-scores';
-const DB_VERSION = 1;
-const STORE_NAME = 'pending-updates';
+const DB_VERSION = 2; // Incremented for schema change
+const WORKING_SCORES_STORE = 'working-scores';
+const CLIENT_OUTBOX_STORE = 'client-outbox';
 
-export interface PendingUpdate {
-  id?: number; // Auto-incremented by IndexedDB
+export interface WorkingScore {
   sectionId: number;
-  updates: ScoreUpdate[];
-  createdAt: number;
+  patrolId: string;
+  points: number; // Running total delta from user's edits
+  updatedAt: number; // Timestamp of last change
+}
+
+export interface ClientOutboxEntry {
+  id?: number; // Auto-incremented by IndexedDB
+  idempotencyKey: string; // UUID generated when entry created
+  sectionId: number;
+  patrolId: string;
+  points: number; // Delta to apply (frozen at submission time)
+  status: 'pending' | 'syncing' | 'server-pending'; // server-pending means server accepted (202)
+  createdAt: number; // When entry was created
+  lastAttemptAt?: number; // Last sync attempt timestamp
+  error?: string; // Last error message if sync failed
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -29,12 +50,32 @@ function openDB(): Promise<IDBDatabase> {
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, {
+      const oldVersion = event.oldVersion;
+
+      // Create working-scores store
+      if (!db.objectStoreNames.contains(WORKING_SCORES_STORE)) {
+        const workingStore = db.createObjectStore(WORKING_SCORES_STORE, {
+          keyPath: ['sectionId', 'patrolId'],
+        });
+        workingStore.createIndex('sectionId', 'sectionId', { unique: false });
+      }
+
+      // Create client-outbox store
+      if (!db.objectStoreNames.contains(CLIENT_OUTBOX_STORE)) {
+        const outboxStore = db.createObjectStore(CLIENT_OUTBOX_STORE, {
           keyPath: 'id',
           autoIncrement: true,
         });
-        store.createIndex('sectionId', 'sectionId', { unique: false });
+        outboxStore.createIndex('idempotencyKey', 'idempotencyKey', { unique: true });
+        outboxStore.createIndex('sectionId', 'sectionId', { unique: false });
+        outboxStore.createIndex('status', 'status', { unique: false });
+      }
+
+      // Migrate old pending-updates store if upgrading from v1
+      if (oldVersion < 2 && db.objectStoreNames.contains('pending-updates')) {
+        // Delete old store - users will need to re-enter any pending changes
+        // This is acceptable for the upgrade as it's a cleaner migration path
+        db.deleteObjectStore('pending-updates');
       }
     };
   });
@@ -42,35 +83,172 @@ function openDB(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
+// ==================== Working Scores API ====================
+
 /**
- * Queue a score update for later sync
+ * Update a patrol's working score (mutable running total)
  */
-export async function queueUpdate(sectionId: number, updates: ScoreUpdate[]): Promise<void> {
+export async function updateWorkingScore(
+  sectionId: number,
+  patrolId: string,
+  pointsDelta: number
+): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
+    const tx = db.transaction(WORKING_SCORES_STORE, 'readwrite');
+    const store = tx.objectStore(WORKING_SCORES_STORE);
 
-    const pendingUpdate: PendingUpdate = {
-      sectionId,
-      updates,
-      createdAt: Date.now(),
+    // Get current value
+    const getRequest = store.get([sectionId, patrolId]);
+
+    getRequest.onsuccess = () => {
+      const current = getRequest.result as WorkingScore | undefined;
+      const newPoints = (current?.points || 0) + pointsDelta;
+
+      if (newPoints === 0) {
+        // Zero out - remove entry
+        store.delete([sectionId, patrolId]);
+      } else {
+        // Update or create entry
+        const workingScore: WorkingScore = {
+          sectionId,
+          patrolId,
+          points: newPoints,
+          updatedAt: Date.now(),
+        };
+        store.put(workingScore);
+      }
     };
 
-    const request = store.add(pendingUpdate);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve();
+    getRequest.onerror = () => reject(getRequest.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 
 /**
- * Get all pending updates
+ * Get all working scores for a section
  */
-export async function getPendingUpdates(): Promise<PendingUpdate[]> {
+export async function getWorkingScores(sectionId: number): Promise<Map<string, number>> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
+    const tx = db.transaction(WORKING_SCORES_STORE, 'readonly');
+    const store = tx.objectStore(WORKING_SCORES_STORE);
+    const index = store.index('sectionId');
+    const request = index.getAll(sectionId);
+
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const scores = request.result as WorkingScore[];
+      const map = new Map<string, number>();
+      for (const score of scores) {
+        map.set(score.patrolId, score.points);
+      }
+      resolve(map);
+    };
+  });
+}
+
+/**
+ * Clear working scores for specific patrols (after submission)
+ */
+export async function clearWorkingScores(sectionId: number, patrolIds: string[]): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(WORKING_SCORES_STORE, 'readwrite');
+    const store = tx.objectStore(WORKING_SCORES_STORE);
+
+    for (const patrolId of patrolIds) {
+      store.delete([sectionId, patrolId]);
+    }
+
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Clear all working scores for a section
+ */
+export async function clearAllWorkingScores(sectionId: number): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(WORKING_SCORES_STORE, 'readwrite');
+    const store = tx.objectStore(WORKING_SCORES_STORE);
+    const index = store.index('sectionId');
+    const request = index.openCursor(sectionId);
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      }
+    };
+
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ==================== Client Outbox API ====================
+
+/**
+ * Generate a UUID v4 idempotency key
+ */
+function generateIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * Snapshot working scores into client outbox for submission
+ * Returns the idempotency key and outbox entries created
+ * Note: patrolName is NOT stored - server will fetch authoritative name from OSM
+ */
+export async function snapshotToOutbox(
+  sectionId: number,
+  patrolScores: Array<{ patrolId: string; points: number }>
+): Promise<{ baseKey: string; entries: ClientOutboxEntry[] }> {
+  const db = await openDB();
+  const baseKey = generateIdempotencyKey();
+  const entries: ClientOutboxEntry[] = [];
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([CLIENT_OUTBOX_STORE, WORKING_SCORES_STORE], 'readwrite');
+    const outboxStore = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const workingStore = tx.objectStore(WORKING_SCORES_STORE);
+
+    // Create outbox entries
+    for (const patrol of patrolScores) {
+      const entry: ClientOutboxEntry = {
+        idempotencyKey: baseKey,
+        sectionId,
+        patrolId: patrol.patrolId,
+        points: patrol.points,
+        status: 'pending',
+        createdAt: Date.now(),
+      };
+      outboxStore.add(entry);
+      entries.push(entry);
+
+      // Clear working score for this patrol
+      workingStore.delete([sectionId, patrol.patrolId]);
+    }
+
+    tx.oncomplete = () => resolve({ baseKey, entries });
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Get all client outbox entries
+ */
+export async function getOutboxEntries(): Promise<ClientOutboxEntry[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readonly');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
     const request = store.getAll();
 
     request.onerror = () => reject(request.error);
@@ -79,15 +257,15 @@ export async function getPendingUpdates(): Promise<PendingUpdate[]> {
 }
 
 /**
- * Get pending updates for a specific section
+ * Get outbox entries by idempotency key (all entries in a batch)
  */
-export async function getPendingUpdatesForSection(sectionId: number): Promise<PendingUpdate[]> {
+export async function getOutboxEntriesByKey(idempotencyKey: string): Promise<ClientOutboxEntry[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const index = store.index('sectionId');
-    const request = index.getAll(sectionId);
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readonly');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const index = store.index('idempotencyKey');
+    const request = index.getAll(idempotencyKey);
 
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
@@ -95,52 +273,219 @@ export async function getPendingUpdatesForSection(sectionId: number): Promise<Pe
 }
 
 /**
- * Remove a pending update after successful sync
+ * Get pending outbox entries (status = 'pending')
  */
-export async function removePendingUpdate(id: number): Promise<void> {
+export async function getPendingOutboxEntries(): Promise<ClientOutboxEntry[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.delete(id);
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readonly');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const index = store.index('status');
+    const request = index.getAll('pending');
 
     request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve();
+    request.onsuccess = () => resolve(request.result);
   });
 }
 
 /**
- * Clear all pending updates (e.g., after successful bulk sync)
+ * Mark outbox entry as syncing
  */
-export async function clearAllPendingUpdates(): Promise<void> {
+export async function markOutboxEntrySyncing(id: number): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.clear();
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const getRequest = store.get(id);
 
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve();
+    getRequest.onsuccess = () => {
+      const entry = getRequest.result as ClientOutboxEntry;
+      if (entry) {
+        entry.status = 'syncing';
+        entry.lastAttemptAt = Date.now();
+        store.put(entry);
+      }
+    };
+
+    getRequest.onerror = () => reject(getRequest.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 
 /**
- * Get total pending points per patrol for a section
- * Aggregates all queued updates
+ * Mark outbox entries by idempotency key as server-pending or delete them
+ * Call this on 202 Accepted or 200 OK response
+ */
+export async function handleServerResponse(
+  idempotencyKey: string,
+  status: 'accepted' | 'completed'
+): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const index = store.index('idempotencyKey');
+    const request = index.getAll(idempotencyKey);
+
+    request.onsuccess = () => {
+      const entries = request.result as ClientOutboxEntry[];
+      for (const entry of entries) {
+        if (status === 'accepted') {
+          // Server accepted (202) - mark as server-pending and delete from client
+          // We'll rely on server-side pending count from session endpoint
+          if (entry.id !== undefined) {
+            store.delete(entry.id);
+          }
+        } else {
+          // Server completed (200) - delete from client
+          if (entry.id !== undefined) {
+            store.delete(entry.id);
+          }
+        }
+      }
+    };
+
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Mark outbox entries by idempotency key as failed with error
+ */
+export async function markOutboxEntriesFailed(
+  idempotencyKey: string,
+  error: string
+): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const index = store.index('idempotencyKey');
+    const request = index.getAll(idempotencyKey);
+
+    request.onsuccess = () => {
+      const entries = request.result as ClientOutboxEntry[];
+      for (const entry of entries) {
+        entry.status = 'pending'; // Reset to pending for retry
+        entry.error = error;
+        entry.lastAttemptAt = Date.now();
+        store.put(entry);
+      }
+    };
+
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Delete outbox entries by idempotency key (on 4xx errors - don't retry)
+ */
+export async function deleteOutboxEntries(idempotencyKey: string): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const index = store.index('idempotencyKey');
+    const request = index.getAll(idempotencyKey);
+
+    request.onsuccess = () => {
+      const entries = request.result as ClientOutboxEntry[];
+      for (const entry of entries) {
+        if (entry.id !== undefined) {
+          store.delete(entry.id);
+        }
+      }
+    };
+
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Get pending points by patrol (for UI badges)
+ * Aggregates client outbox entries by patrol
  */
 export async function getPendingPointsByPatrol(sectionId: number): Promise<Map<string, number>> {
-  const pending = await getPendingUpdatesForSection(sectionId);
-  const pointsByPatrol = new Map<string, number>();
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readonly');
+    const outboxStore = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const outboxIndex = outboxStore.index('sectionId');
+    const request = outboxIndex.getAll(sectionId);
 
-  for (const update of pending) {
-    for (const scoreUpdate of update.updates) {
-      const current = pointsByPatrol.get(scoreUpdate.patrolId) || 0;
-      pointsByPatrol.set(scoreUpdate.patrolId, current + scoreUpdate.points);
-    }
-  }
+    request.onsuccess = () => {
+      const entries = request.result as ClientOutboxEntry[];
+      const pointsByPatrol = new Map<string, number>();
 
-  return pointsByPatrol;
+      for (const entry of entries) {
+        if (entry.status === 'pending' || entry.status === 'syncing') {
+          const current = pointsByPatrol.get(entry.patrolId) || 0;
+          pointsByPatrol.set(entry.patrolId, current + entry.points);
+        }
+      }
+
+      resolve(pointsByPatrol);
+    };
+
+    request.onerror = () => reject(request.error);
+  });
 }
+
+/**
+ * Count total pending entries (client outbox + working scores indicator)
+ */
+export async function countPendingEntries(sectionId: number): Promise<{
+  clientOutbox: number;
+  workingScores: number;
+}> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([CLIENT_OUTBOX_STORE, WORKING_SCORES_STORE], 'readonly');
+
+    let clientOutboxCount = 0;
+    let workingScoresCount = 0;
+    let completed = 0;
+
+    const checkComplete = () => {
+      completed++;
+      if (completed === 2) {
+        resolve({ clientOutbox: clientOutboxCount, workingScores: workingScoresCount });
+      }
+    };
+
+    // Count client outbox entries (pending and syncing)
+    const outboxStore = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const outboxIndex = outboxStore.index('sectionId');
+    const outboxRequest = outboxIndex.getAll(sectionId);
+    outboxRequest.onsuccess = () => {
+      const entries = outboxRequest.result as ClientOutboxEntry[];
+      clientOutboxCount = entries.filter(e => e.status === 'pending' || e.status === 'syncing').length;
+      checkComplete();
+    };
+    outboxRequest.onerror = () => reject(outboxRequest.error);
+
+    // Count working scores
+    const workingStore = tx.objectStore(WORKING_SCORES_STORE);
+    const workingIndex = workingStore.index('sectionId');
+    const workingRequest = workingIndex.count(sectionId);
+    workingRequest.onsuccess = () => {
+      workingScoresCount = workingRequest.result;
+      checkComplete();
+    };
+    workingRequest.onerror = () => reject(workingRequest.error);
+
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ==================== Utility Functions ====================
 
 /**
  * Check if we're currently online

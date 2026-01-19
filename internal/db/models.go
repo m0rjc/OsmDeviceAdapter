@@ -277,13 +277,13 @@ func (UserCredential) TableName() string {
 
 // ScoreUpdateOutbox stores pending score updates for background processing.
 // Partitioned by user to preserve audit trail and simplify credential management.
+// PatrolName is NOT stored here - worker fetches authoritative name from OSM during sync.
 type ScoreUpdateOutbox struct {
 	ID              uint       `gorm:"primaryKey"`
 	IdempotencyKey  string     `gorm:"uniqueIndex;size:255;not null"`
 	OSMUserID       int        `gorm:"index:idx_outbox_user_section_patrol;not null"` // Foreign key to user_credentials
 	SectionID       int        `gorm:"index:idx_outbox_user_section_patrol;not null"`
 	PatrolID        string     `gorm:"index:idx_outbox_user_section_patrol;type:varchar(255);not null"`
-	PatrolName      string     `gorm:"size:255;not null"`
 	PointsDelta     int        `gorm:"not null"`
 	Status          string     `gorm:"size:20;index;not null;default:'pending'"` // pending, processing, completed, failed, auth_revoked
 	AttemptCount    int        `gorm:"not null;default:0"`

@@ -13,6 +13,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sections: [],
     selectedSectionId: null,
     error: null,
+    pendingWrites: 0,
   });
 
   const loadSession = useCallback(async () => {
@@ -42,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         sections: sectionsData.sections,
         selectedSectionId,
         error: null,
+        pendingWrites: sessionData.pendingWrites ?? 0,
       });
     } catch (err) {
       // Check if it's an unauthorized error - redirect to login page

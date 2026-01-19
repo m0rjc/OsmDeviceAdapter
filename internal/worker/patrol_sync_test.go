@@ -80,7 +80,6 @@ func createTestOutboxEntries(t *testing.T, conns *db.Connections, osmUserID, sec
 			OSMUserID:      osmUserID,
 			SectionID:      sectionID,
 			PatrolID:       patrolID,
-			PatrolName:     "Test Patrol",
 			PointsDelta:    10 * (i + 1), // 10, 20, 30, etc.
 			Status:         "pending",
 			BatchID:        "test-batch",

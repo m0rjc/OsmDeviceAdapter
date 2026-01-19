@@ -186,8 +186,8 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 		logger.Error("worker.patrol_sync.patrol_not_found",
 			"event", "sync.patrol_not_found",
 		)
-		// Use patrol name from first entry
-		patrolName = entries[0].PatrolName
+		// Patrol doesn't exist in OSM - use patrol ID as fallback name for error message
+		patrolName = patrolID
 		// Mark as failed - patrol doesn't exist in OSM
 		entryIDs := extractIDs(entries)
 		errMsg := fmt.Sprintf("patrol %s not found in section %d", patrolID, sectionID)

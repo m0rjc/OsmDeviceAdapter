@@ -38,60 +38,13 @@ self.addEventListener('sync', (event: SyncEvent) => {
 
 async function syncPendingScores(): Promise<void> {
   const db = await openDB();
-  const pending = await getAllPending(db);
+  const pending = await getPendingOutboxEntries(db);
 
   if (pending.length === 0) {
     return;
   }
 
-  // Consolidate all pending updates by section and patrol
-  // This ensures we only send the net change, reducing API calls
-  // and avoiding issues with rapid conflicting updates
-  const consolidatedBySection = new Map<number, Map<string, number>>();
-  const updateIdsBySection = new Map<number, number[]>();
-
-  for (const update of pending) {
-    // Track which update IDs belong to each section
-    const ids = updateIdsBySection.get(update.sectionId) || [];
-    ids.push(update.id);
-    updateIdsBySection.set(update.sectionId, ids);
-
-    // Sum points per patrol
-    let patrolPoints = consolidatedBySection.get(update.sectionId);
-    if (!patrolPoints) {
-      patrolPoints = new Map<string, number>();
-      consolidatedBySection.set(update.sectionId, patrolPoints);
-    }
-
-    for (const scoreUpdate of update.updates) {
-      const current = patrolPoints.get(scoreUpdate.patrolId) || 0;
-      patrolPoints.set(scoreUpdate.patrolId, current + scoreUpdate.points);
-    }
-  }
-
-  // Filter out patrols with net-zero changes and build final updates per section
-  const sectionsToSync: Array<{
-    sectionId: number;
-    updates: Array<{ patrolId: string; points: number }>;
-    originalIds: number[];
-  }> = [];
-
-  for (const [sectionId, patrolPoints] of consolidatedBySection) {
-    const nonZeroUpdates: Array<{ patrolId: string; points: number }> = [];
-    for (const [patrolId, points] of patrolPoints) {
-      if (points !== 0) {
-        nonZeroUpdates.push({ patrolId, points });
-      }
-    }
-
-    sectionsToSync.push({
-      sectionId,
-      updates: nonZeroUpdates,
-      originalIds: updateIdsBySection.get(sectionId) || [],
-    });
-  }
-
-  // Get CSRF token from a session request
+  // Get CSRF token from session request
   let csrfToken: string | null = null;
   try {
     const sessionResponse = await fetch('/api/admin/session', {
@@ -122,44 +75,46 @@ async function syncPendingScores(): Promise<void> {
     throw new Error('No CSRF token available');
   }
 
-  // Process each section's consolidated update
-  for (const section of sectionsToSync) {
+  // Group entries by idempotency key (each key is one submission batch)
+  const batchesByKey = new Map<string, ClientOutboxEntry[]>();
+  for (const entry of pending) {
+    const existing = batchesByKey.get(entry.idempotencyKey) || [];
+    existing.push(entry);
+    batchesByKey.set(entry.idempotencyKey, existing);
+  }
+
+  // Process each batch
+  for (const [idempotencyKey, entries] of batchesByKey) {
     try {
-      // If all changes netted to zero, just clear the queue entries
-      if (section.updates.length === 0) {
-        for (const id of section.originalIds) {
-          await removePending(db, id);
-        }
-        // We do not notify the client that sync is done as the user will not expect it. (No indication of sync
-        // pending in the UI in this case)
-        // const clients = await self.clients.matchAll();
-        // clients.forEach(client => {
-        //   client.postMessage({
-        //     type: 'SYNC_SUCCESS',
-        //     sectionId: section.sectionId,
-        //   });
-        // });
-        continue;
+      // Mark entries as syncing
+      for (const entry of entries) {
+        await markEntrySyncing(db, entry.id!);
       }
 
-      const response = await fetch(`/api/admin/sections/${section.sectionId}/scores`, {
+      const sectionId = entries[0].sectionId;
+
+      // Build updates array
+      const updates = entries.map(e => ({
+        patrolId: e.patrolId,
+        points: e.points,
+      }));
+
+      const response = await fetch(`/api/admin/sections/${sectionId}/scores`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
           'X-CSRF-Token': csrfToken,
+          'X-Idempotency-Key': idempotencyKey,
+          'X-Sync-Mode': 'background', // Use background mode for service worker
         },
-        body: JSON.stringify({ updates: section.updates }),
+        body: JSON.stringify({ updates }),
       });
 
       if (response.ok) {
-        // Remove all original entries from queue on success
-        //
-        // TODO: There is a small risk that the change may have been applied to OSM but the request subsequently failed.
-        // We'd end up resubmitting then. We may have to move towards attempting recovery server side or having
-        // this app as the source of truth with delayed sync to OSM.
-        for (const id of section.originalIds) {
-          await removePending(db, id);
+        // Success (200 OK or 202 Accepted) - delete from client outbox
+        for (const entry of entries) {
+          await deleteOutboxEntry(db, entry.id!);
         }
 
         // Notify the client
@@ -167,81 +122,147 @@ async function syncPendingScores(): Promise<void> {
         clients.forEach(client => {
           client.postMessage({
             type: 'SYNC_SUCCESS',
-            sectionId: section.sectionId,
+            sectionId: sectionId,
           });
         });
       } else if (response.status === 401 || response.status === 403) {
-        // Auth error - keep updates in queue for retry after re-login
+        // Auth error - reset to pending, keep in queue for retry after re-login
+        for (const entry of entries) {
+          await markEntryFailed(db, entry.id!, 'Authentication required');
+        }
+
         const clients = await self.clients.matchAll();
         clients.forEach(client => {
           client.postMessage({
             type: 'SYNC_AUTH_REQUIRED',
-            sectionId: section.sectionId,
+            sectionId: sectionId,
             error: 'Session expired. Please log in again to sync your changes.',
           });
         });
-        // Stop processing further sections - they'll all fail with same auth error
+        // Stop processing further batches - they'll all fail with same auth error
         return;
       } else if (response.status >= 400 && response.status < 500) {
-        // Other client error (400 Bad Request, 404 Not Found, etc.) - don't retry, remove from queue
-        // These are genuine client errors that won't be fixed by retrying
-        for (const id of section.originalIds) {
-          await removePending(db, id);
+        // Other client error (400 Bad Request, etc.) - don't retry, delete from queue
+        for (const entry of entries) {
+          await deleteOutboxEntry(db, entry.id!);
         }
 
         const clients = await self.clients.matchAll();
         clients.forEach(client => {
           client.postMessage({
             type: 'SYNC_ERROR',
-            sectionId: section.sectionId,
+            sectionId: sectionId,
             error: `Server rejected update: ${response.status}`,
           });
         });
+      } else {
+        // 5xx error - mark as failed, will retry on next sync
+        for (const entry of entries) {
+          await markEntryFailed(db, entry.id!, `Server error: ${response.status}`);
+        }
+        // Continue to next batch (maybe this one will succeed)
       }
-      // 5xx errors will cause the sync to be retried
-    } catch {
-      // Network error - will retry on next sync
-      throw new Error('Network error during sync');
+    } catch (err) {
+      // Network error - mark as failed, will retry on next sync
+      for (const entry of entries) {
+        if (entry.id) {
+          await markEntryFailed(db, entry.id, 'Network error');
+        }
+      }
+      // Continue to next batch
     }
   }
 }
 
 // IndexedDB helpers for service worker
 const DB_NAME = 'penguin-patrol-scores';
-const STORE_NAME = 'pending-updates';
+const DB_VERSION = 2;
+const CLIENT_OUTBOX_STORE = 'client-outbox';
 
-interface PendingUpdate {
-  id: number;
+interface ClientOutboxEntry {
+  id?: number;
+  idempotencyKey: string;
   sectionId: number;
-  updates: Array<{ patrolId: string; points: number }>;
+  patrolId: string;
+  points: number;
+  status: 'pending' | 'syncing' | 'server-pending';
   createdAt: number;
+  lastAttemptAt?: number;
+  error?: string;
 }
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
   });
 }
 
-function getAllPending(db: IDBDatabase): Promise<PendingUpdate[]> {
+function getPendingOutboxEntries(db: IDBDatabase): Promise<ClientOutboxEntry[]> {
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.getAll();
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readonly');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const index = store.index('status');
+    const request = index.getAll('pending');
+
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
   });
 }
 
-function removePending(db: IDBDatabase, id: number): Promise<void> {
+function markEntrySyncing(db: IDBDatabase, id: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const getRequest = store.get(id);
+
+    getRequest.onsuccess = () => {
+      const entry = getRequest.result as ClientOutboxEntry;
+      if (entry) {
+        entry.status = 'syncing';
+        entry.lastAttemptAt = Date.now();
+        store.put(entry);
+      }
+    };
+
+    getRequest.onerror = () => reject(getRequest.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function markEntryFailed(db: IDBDatabase, id: number, error: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const getRequest = store.get(id);
+
+    getRequest.onsuccess = () => {
+      const entry = getRequest.result as ClientOutboxEntry;
+      if (entry) {
+        entry.status = 'pending'; // Reset to pending for retry
+        entry.error = error;
+        entry.lastAttemptAt = Date.now();
+        store.put(entry);
+      }
+    };
+
+    getRequest.onerror = () => reject(getRequest.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function deleteOutboxEntry(db: IDBDatabase, id: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
     const request = store.delete(id);
+
     request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 

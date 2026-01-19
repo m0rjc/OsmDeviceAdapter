@@ -5,6 +5,7 @@ export interface SessionResponse {
   user?: UserInfo;
   selectedSectionId?: number;
   csrfToken?: string;
+  pendingWrites?: number; // Server-side pending count
 }
 
 export interface UserInfo {
@@ -51,7 +52,10 @@ export interface UpdateRequest {
 
 export interface UpdateResponse {
   success: boolean;
-  patrols: PatrolResult[];
+  patrols?: PatrolResult[]; // Present on 200 OK
+  status?: string; // 'accepted' on 202 Accepted
+  batchId?: string; // Batch ID on 202 Accepted
+  entriesCreated?: number; // Number of entries created on 202 Accepted
 }
 
 export interface PatrolResult {

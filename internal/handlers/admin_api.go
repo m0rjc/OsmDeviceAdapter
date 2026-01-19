@@ -514,7 +514,8 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 	// Create outbox entries
 	outboxEntries := make([]db.ScoreUpdateOutbox, 0, len(req.Updates))
 	for i, update := range req.Updates {
-		patrolName, exists := patrolNames[update.PatrolID]
+		// Validate patrol exists in section (patrol name will be fetched from OSM during sync)
+		_, exists := patrolNames[update.PatrolID]
 		if !exists {
 			slog.Warn("admin.api.scores.patrol_not_found",
 				"component", "admin_api",
@@ -533,7 +534,6 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 			OSMUserID:      session.OSMUserID,
 			SectionID:      sectionID,
 			PatrolID:       update.PatrolID,
-			PatrolName:     patrolName,
 			PointsDelta:    update.Points,
 			Status:         "pending",
 			BatchID:        batchID,

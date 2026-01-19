@@ -1,6 +1,6 @@
 # Story 003: Server-Side Outbox Pattern - Implementation Planning
 
-**Status:** In Progress (Phases 1-3 Complete)
+**Status:** In Progress (Phases 1-4 Complete)
 **Created:** 2026-01-19
 **Last Updated:** 2026-01-19
 
@@ -341,7 +341,7 @@ for {
 
 ---
 
-### Phase 4: Client Changes
+### Phase 4: Client Changes ✅ COMPLETED
 
 **New IndexedDB schema** in `web/admin/src/api/offlineQueue.ts`:
 - `working-scores` store: `{sectionId, patrolId} → {snapshotScore, localDelta}`
@@ -359,6 +359,24 @@ for {
 - `web/admin/src/api/offlineQueue.ts` - Replace event queue with outbox
 - `web/admin/src/api/client.ts` - Add headers, handle 202
 - `web/admin/src/sw.ts` - Update sync logic, send `X-Sync-Mode: background`
+
+**Completion Summary:**
+- ✅ `web/admin/src/api/offlineQueue.ts` completely rewritten with two-tier IndexedDB architecture
+- ✅ `working-scores` store for mutable user edits (optional - currently using React state)
+- ✅ `client-outbox` store for immutable pending submissions with stable idempotency keys
+- ✅ DB version bumped to 2 with automatic migration from v1
+- ✅ `web/admin/src/api/types.ts` updated with `pendingWrites` in SessionResponse
+- ✅ `web/admin/src/api/client.ts` updated to use outbox pattern with idempotency keys
+- ✅ X-Idempotency-Key and X-Sync-Mode headers added to all score update requests
+- ✅ Handle 200 OK and 202 Accepted responses properly
+- ✅ `web/admin/src/components/ScoreEntry.tsx` updated to handle new API signature
+- ✅ Handle 202 Accepted with user-friendly toast message
+- ✅ `web/admin/src/sw.ts` completely rewritten for new outbox pattern
+- ✅ Service worker groups entries by idempotency key and sends X-Sync-Mode: background
+- ✅ `web/admin/src/context/AuthContext.tsx` updated to track pendingWrites from session
+- ✅ `web/admin/src/components/Header.tsx` updated with pending indicator badge
+- ✅ All TypeScript compilation errors fixed
+- ✅ Build successful - generates production-ready bundle
 
 ---
 

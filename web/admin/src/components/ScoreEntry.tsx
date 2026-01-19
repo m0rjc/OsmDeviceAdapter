@@ -177,7 +177,7 @@ export function ScoreEntry() {
       .filter(p => p.pointsToAdd !== 0)
       .map(p => ({
         patrolId: p.id,
-        patrolName: p.name,
+        patrolName: p.name, // Used for confirmation dialog only, not sent to server
         points: p.pointsToAdd,
       }));
   };
@@ -200,29 +200,40 @@ export function ScoreEntry() {
     setIsSubmitting(true);
 
     try {
+      // Strip patrolName before sending to server (only used for confirmation dialog)
+      const updatesForServer = changes.map(c => ({
+        patrolId: c.patrolId,
+        points: c.points,
+      }));
+
       const result = await updateScores(
         selectedSectionId,
-        {
-          updates: changes.map(c => ({
-            patrolId: c.patrolId,
-            points: c.points,
-          })),
-        },
+        updatesForServer,
         csrfToken
       );
 
       if (result.success) {
-        // Update local state with new scores
-        setPatrols(prev =>
-          prev.map(p => {
-            const updated = result.patrols.find(r => r.id === p.id);
-            if (updated) {
-              return { ...p, score: updated.newScore, pointsToAdd: 0 };
-            }
-            return p;
-          })
-        );
-        showToast('success', `Updated ${result.patrols.length} patrol(s)`);
+        // Handle 200 OK response (immediate sync)
+        if (result.patrols && result.patrols.length > 0) {
+          // Update local state with new scores
+          setPatrols(prev =>
+            prev.map(p => {
+              const updated = result.patrols!.find(r => r.id === p.id);
+              if (updated) {
+                return { ...p, score: updated.newScore, pointsToAdd: 0 };
+              }
+              return p;
+            })
+          );
+          showToast('success', `Updated ${result.patrols.length} patrol(s)`);
+        } else if (result.status === 'accepted') {
+          // Handle 202 Accepted response (queued for background sync)
+          // Clear the input fields
+          setPatrols(prev => prev.map(p => ({ ...p, pointsToAdd: 0 })));
+          showToast('success', 'Changes queued for sync - will be applied shortly');
+          // Reload pending points to show the newly queued entries
+          loadPendingPoints(selectedSectionId);
+        }
       }
 
       setShowConfirm(false);

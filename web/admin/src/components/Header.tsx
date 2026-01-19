@@ -1,7 +1,7 @@
 import { useAuth } from '../hooks';
 
 export function Header() {
-  const { user, logout } = useAuth();
+  const { user, logout, pendingWrites } = useAuth();
 
   // Format build time for display (e.g., "Jan 16 14:32")
   const buildTime = new Date(__BUILD_TIME__);
@@ -17,6 +17,11 @@ export function Header() {
       <div className="header-content">
         <h1 className="header-title">Score Entry</h1>
         <div className="header-user">
+          {pendingWrites > 0 && (
+            <span className="header-pending-badge" title={`${pendingWrites} pending write(s)`}>
+              {pendingWrites} pending
+            </span>
+          )}
           {user && <span className="header-user-name">{user.name}</span>}
           <button className="btn btn-text" onClick={logout}>
             Logout

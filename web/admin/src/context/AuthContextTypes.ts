@@ -9,6 +9,7 @@ export interface AuthState {
   sections: Section[];
   selectedSectionId: number | null;
   error: string | null;
+  pendingWrites: number; // Server-side pending writes count
 }
 
 export interface AuthContextType extends AuthState {
