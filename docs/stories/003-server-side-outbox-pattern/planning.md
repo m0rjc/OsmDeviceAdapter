@@ -94,7 +94,7 @@ Separate concerns with two tables:
 
 ## Implementation Phases
 
-### Phase 1: Database Schema & Store Functions
+### Phase 1: Database Schema & Store Functions ✅ COMPLETED
 
 **New Models** - Add to `internal/db/models.go`:
 
@@ -193,6 +193,17 @@ func (ScoreUpdateOutbox) TableName() string {
 | `GetPendingDeltasBySection` | Aggregate pending deltas (for user's section) |
 | `FindUserPatrolsWithPending` | For worker to iterate (returns user+section+patrol tuples) |
 | `DeleteExpired` | Cleanup old entries |
+
+**Completion Summary:**
+- ✅ UserCredential and ScoreUpdateOutbox models added to `internal/db/models.go`
+- ✅ AutoMigrate updated to include new models
+- ✅ TokenHolder interface implemented for UserCredential
+- ✅ `internal/db/helpers.go` created with ForUpdateSkipLocked helper
+- ✅ `internal/db/usercredentials/store.go` package created with all 6 functions
+- ✅ `internal/db/scoreoutbox/store.go` package created with all 11 functions
+- ✅ `internal/db/scoreoutbox/store_test.go` created with comprehensive test coverage
+- ✅ All tests passing (12/12 scoreoutbox tests, all db tests pass)
+- ✅ Build successful
 
 ---
 

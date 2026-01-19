@@ -236,8 +236,78 @@ func (ScoreAuditLog) TableName() string {
 	return "score_audit_log"
 }
 
+// UserCredential stores persistent OSM credentials for offline processing.
+// Decoupled from web sessions to allow credentials to outlive ephemeral logins.
+// Multiple web sessions for the same user share these credentials.
+type UserCredential struct {
+	// OSMUserID is the OSM user identifier (primary key)
+	OSMUserID int `gorm:"primaryKey;column:osm_user_id"`
+
+	// OSMUserName is the user's display name from OSM (for audit readability)
+	// Updated on every login to reflect current name
+	OSMUserName string `gorm:"column:osm_user_name;size:255;not null"`
+
+	// OSMEmail is the user's email from OSM (for debugging/support)
+	// May be empty if not provided by OSM
+	OSMEmail string `gorm:"column:osm_email;size:255"`
+
+	// OSMAccessToken is the current OAuth access token
+	OSMAccessToken string `gorm:"column:osm_access_token;type:text;not null"`
+
+	// OSMRefreshToken is the OAuth refresh token
+	OSMRefreshToken string `gorm:"column:osm_refresh_token;type:text;not null"`
+
+	// OSMTokenExpiry is when the access token expires
+	OSMTokenExpiry time.Time `gorm:"column:osm_token_expiry;not null"`
+
+	// CreatedAt is when credentials were first stored (first login)
+	CreatedAt time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+
+	// UpdatedAt is last token refresh time (login or background refresh)
+	UpdatedAt time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
+
+	// LastUsedAt is when credentials were last used for outbox processing
+	// Used by cleanup job to determine if credentials are still needed
+	LastUsedAt *time.Time `gorm:"column:last_used_at;index:idx_user_credentials_last_used"`
+}
+
+func (UserCredential) TableName() string {
+	return "user_credentials"
+}
+
+// ScoreUpdateOutbox stores pending score updates for background processing.
+// Partitioned by user to preserve audit trail and simplify credential management.
+type ScoreUpdateOutbox struct {
+	ID              uint       `gorm:"primaryKey"`
+	IdempotencyKey  string     `gorm:"uniqueIndex;size:255;not null"`
+	OSMUserID       int        `gorm:"index:idx_outbox_user_section_patrol;not null"` // Foreign key to user_credentials
+	SectionID       int        `gorm:"index:idx_outbox_user_section_patrol;not null"`
+	PatrolID        string     `gorm:"index:idx_outbox_user_section_patrol;type:varchar(255);not null"`
+	PatrolName      string     `gorm:"size:255;not null"`
+	PointsDelta     int        `gorm:"not null"`
+	Status          string     `gorm:"size:20;index;not null;default:'pending'"` // pending, processing, completed, failed, auth_revoked
+	AttemptCount    int        `gorm:"not null;default:0"`
+	NextRetryAt     *time.Time `gorm:"index"`
+	LastError       string     `gorm:"type:text"`
+	BatchID         string     `gorm:"size:255;index"`
+	CreatedAt       time.Time  `gorm:"not null;default:CURRENT_TIMESTAMP"`
+	ProcessedAt     *time.Time
+}
+
+func (ScoreUpdateOutbox) TableName() string {
+	return "score_update_outbox"
+}
+
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{}, &WebSession{}, &ScoreAuditLog{})
+	return db.AutoMigrate(
+		&DeviceCode{},
+		&DeviceSession{},
+		&AllowedClientID{},
+		&WebSession{},
+		&ScoreAuditLog{},
+		&UserCredential{},
+		&ScoreUpdateOutbox{},
+	)
 }
 
 // User returns the OSM user associated with this Device, or nil if this
@@ -305,4 +375,32 @@ func (s *WebSession) GetIdentifier() string {
 // User returns the OSM user associated with this web session
 func (s *WebSession) User() types.User {
 	return types.NewUser(&s.OSMUserID, s.OSMAccessToken)
+}
+
+// TokenHolder interface implementation for UserCredential
+
+// GetOSMAccessToken returns the current OSM access token
+func (c *UserCredential) GetOSMAccessToken() string {
+	return c.OSMAccessToken
+}
+
+// GetOSMRefreshToken returns the current OSM refresh token
+func (c *UserCredential) GetOSMRefreshToken() string {
+	return c.OSMRefreshToken
+}
+
+// GetOSMTokenExpiry returns when the access token expires
+func (c *UserCredential) GetOSMTokenExpiry() time.Time {
+	return c.OSMTokenExpiry
+}
+
+// GetIdentifier returns the user ID as a unique identifier
+func (c *UserCredential) GetIdentifier() string {
+	// Convert user ID to string for the identifier
+	return ""
+}
+
+// User returns the OSM user associated with this credential
+func (c *UserCredential) User() types.User {
+	return types.NewUser(&c.OSMUserID, c.OSMAccessToken)
 }
