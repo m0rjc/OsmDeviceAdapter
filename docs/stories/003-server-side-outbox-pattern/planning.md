@@ -378,6 +378,17 @@ for {
 - ✅ All TypeScript compilation errors fixed
 - ✅ Build successful - generates production-ready bundle
 
+**Security Fix - PatrolName Removed from Trust Boundary:**
+- ✅ Removed `patrolName` field from `ScoreUpdateOutbox` model (`internal/db/models.go`)
+- ✅ Removed `PatrolName` from all client-side interfaces (`ClientOutboxEntry`)
+- ✅ Client no longer sends patrol name to server (only `patrolId` and `points`)
+- ✅ Handler validates patrol exists but doesn't store client-provided name (`internal/handlers/admin_api.go`)
+- ✅ Worker fetches authoritative patrol name from OSM during sync (`internal/worker/patrol_sync.go`)
+- ✅ PatrolName kept in UI only for confirmation dialog display (stripped before API call)
+- ✅ Eliminates XSS, log injection, and audit trail tampering risks
+- ✅ No performance cost - name comes from existing OSM fetch during read-calculate-write cycle
+- ✅ All tests updated and passing (worker + scoreoutbox)
+
 ---
 
 ### Phase 5: Device API Changes
