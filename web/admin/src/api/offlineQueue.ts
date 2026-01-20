@@ -14,7 +14,7 @@
  */
 
 const DB_NAME = 'penguin-patrol-scores';
-const DB_VERSION = 2; // Incremented for schema change
+const DB_VERSION = 3; // Incremented for unique constraint fix on idempotencyKey
 const WORKING_SCORES_STORE = 'working-scores';
 const CLIENT_OUTBOX_STORE = 'client-outbox';
 
@@ -66,7 +66,7 @@ function openDB(): Promise<IDBDatabase> {
           keyPath: 'id',
           autoIncrement: true,
         });
-        outboxStore.createIndex('idempotencyKey', 'idempotencyKey', { unique: true });
+        outboxStore.createIndex('idempotencyKey', 'idempotencyKey', { unique: false });
         outboxStore.createIndex('sectionId', 'sectionId', { unique: false });
         outboxStore.createIndex('status', 'status', { unique: false });
       }
@@ -76,6 +76,19 @@ function openDB(): Promise<IDBDatabase> {
         // Delete old store - users will need to re-enter any pending changes
         // This is acceptable for the upgrade as it's a cleaner migration path
         db.deleteObjectStore('pending-updates');
+      }
+
+      // Fix unique constraint on idempotencyKey (v2 -> v3)
+      if (oldVersion < 3 && db.objectStoreNames.contains(CLIENT_OUTBOX_STORE)) {
+        const tx = (event.target as IDBOpenDBRequest).transaction;
+        if (tx) {
+          const outboxStore = tx.objectStore(CLIENT_OUTBOX_STORE);
+          // Delete and recreate the index without unique constraint
+          if (outboxStore.indexNames.contains('idempotencyKey')) {
+            outboxStore.deleteIndex('idempotencyKey');
+          }
+          outboxStore.createIndex('idempotencyKey', 'idempotencyKey', { unique: false });
+        }
       }
     };
   });
