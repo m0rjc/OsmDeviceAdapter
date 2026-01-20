@@ -13,6 +13,9 @@ cleanupOutdatedCaches();
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
+  } else if (event.data && event.data.type === 'MANUAL_SYNC') {
+    // Manual sync triggered by user action (fallback for when background sync doesn't work)
+    event.waitUntil(syncPendingScores());
   }
 });
 

@@ -1,4 +1,5 @@
 import { useAuth } from '../hooks';
+import { Menu } from './Menu';
 
 export function Header() {
   const { user, logout, pendingWrites } = useAuth();
@@ -23,9 +24,18 @@ export function Header() {
             </span>
           )}
           {user && <span className="header-user-name">{user.name}</span>}
-          <button className="btn btn-text" onClick={logout}>
-            Logout
-          </button>
+          <Menu
+            options={[
+              {
+                label: 'Register Device',
+                href: '/device',
+              },
+              {
+                label: 'Logout',
+                onClick: logout,
+              },
+            ]}
+          />
         </div>
       </div>
       <div className="header-build">Build: {buildLabel}</div>

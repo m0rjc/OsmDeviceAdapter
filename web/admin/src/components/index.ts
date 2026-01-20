@@ -7,3 +7,4 @@ export { ToastProvider } from './Toast';
 export { LoginPage } from './LoginPage';
 export { UpdatePrompt } from './UpdatePrompt';
 export { SyncAuthHandler, getPendingSyncMessage } from './SyncAuthHandler';
+export { Menu } from './Menu';

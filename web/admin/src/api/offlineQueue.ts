@@ -488,6 +488,37 @@ export async function countPendingEntries(sectionId: number): Promise<{
 // ==================== Utility Functions ====================
 
 /**
+ * Reset stuck 'syncing' entries back to 'pending'
+ * Call this on app startup to recover from interrupted syncs
+ */
+export async function resetStuckSyncingEntries(): Promise<number> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CLIENT_OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(CLIENT_OUTBOX_STORE);
+    const index = store.index('status');
+    const request = index.getAll('syncing');
+
+    let resetCount = 0;
+
+    request.onsuccess = () => {
+      const entries = request.result as ClientOutboxEntry[];
+      for (const entry of entries) {
+        // Reset to pending
+        entry.status = 'pending';
+        entry.error = 'Previous sync interrupted';
+        store.put(entry);
+        resetCount++;
+      }
+    };
+
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve(resetCount);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
  * Check if we're currently online
  */
 export function isOnline(): boolean {
@@ -525,4 +556,17 @@ export async function requestBackgroundSync(): Promise<boolean> {
     }
   }
   return false;
+}
+
+/**
+ * Manually trigger a sync by posting a message to the service worker
+ * This is a fallback for when background sync API doesn't work (e.g., iOS)
+ */
+export async function manualSyncPendingScores(): Promise<void> {
+  if ('serviceWorker' in navigator) {
+    const registration = await navigator.serviceWorker.ready;
+    if (registration.active) {
+      registration.active.postMessage({ type: 'MANUAL_SYNC' });
+    }
+  }
 }

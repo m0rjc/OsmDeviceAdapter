@@ -8,10 +8,13 @@ import {
   getPendingPointsByPatrol,
   onConnectivityChange,
   isOnline,
+  manualSyncPendingScores,
+  resetStuckSyncingEntries,
 } from '../api';
 import type { Patrol } from '../api';
 import { Loading } from './Loading';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Menu } from './Menu';
 
 interface PatrolWithInput extends Patrol {
   pointsToAdd: number;
@@ -24,6 +27,7 @@ export function ScoreEntry() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sectionName, setSectionName] = useState<string>('');
   const [patrols, setPatrols] = useState<PatrolWithInput[]>([]);
@@ -77,6 +81,11 @@ export function ScoreEntry() {
     }
   }, []);
 
+  // Reset stuck syncing entries on mount
+  useEffect(() => {
+    resetStuckSyncingEntries().catch(console.error);
+  }, []);
+
   useEffect(() => {
     if (selectedSectionId) {
       loadScores(selectedSectionId);
@@ -101,6 +110,25 @@ export function ScoreEntry() {
       }
     });
   }, [selectedSectionId, loadScores, loadPendingPoints]);
+
+  // Periodic fallback sync for mobile browsers (where background sync may not work)
+  useEffect(() => {
+    if (!selectedSectionId) return;
+
+    const SYNC_INTERVAL = 30000; // 30 seconds
+    const intervalId = setInterval(async () => {
+      // Only sync if online and not currently syncing
+      if (online && !isSyncing) {
+        const pending = await getPendingPointsByPatrol(selectedSectionId);
+        if (pending.size > 0) {
+          console.log(`[Periodic Sync] Found ${pending.size} pending patrol(s), triggering sync`);
+          handleManualSync();
+        }
+      }
+    }, SYNC_INTERVAL);
+
+    return () => clearInterval(intervalId);
+  }, [selectedSectionId, online, isSyncing]);
 
   // Listen for service worker sync messages
   useEffect(() => {
@@ -184,6 +212,22 @@ export function ScoreEntry() {
   const handleRefresh = () => {
     if (selectedSectionId) {
       loadScores(selectedSectionId, true);
+    }
+  };
+
+  const handleManualSync = async () => {
+    if (!online || hasPendingSync === false) return;
+
+    setIsSyncing(true);
+    try {
+      await manualSyncPendingScores();
+      // The sync result will be handled by the service worker message listener
+      // which will show a toast and update the pending points
+    } catch (err) {
+      showToast('error', 'Failed to trigger sync');
+    } finally {
+      // Reset syncing state after a short delay to allow the service worker to process
+      setTimeout(() => setIsSyncing(false), 2000);
     }
   };
 
@@ -372,6 +416,17 @@ export function ScoreEntry() {
         )}
 
         <div className="action-bar">
+          {hasPendingSync && (
+            <Menu
+              options={[
+                {
+                  label: isSyncing ? 'Syncing...' : 'Sync Now',
+                  onClick: handleManualSync,
+                  disabled: isSyncing || !online,
+                },
+              ]}
+            />
+          )}
           <button
             className="btn btn-secondary"
             onClick={handleRefresh}
