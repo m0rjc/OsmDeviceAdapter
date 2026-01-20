@@ -80,3 +80,10 @@ func FindStaleCredentials(conns *db.Connections, retentionDays int) ([]db.UserCr
 func Delete(conns *db.Connections, osmUserID int) error {
 	return conns.DB.Where("osm_user_id = ?", osmUserID).Delete(&db.UserCredential{}).Error
 }
+
+// CountActive counts the total number of user credentials
+func CountActive(conns *db.Connections) (int64, error) {
+	var count int64
+	err := conns.DB.Model(&db.UserCredential{}).Count(&count).Error
+	return count, err
+}

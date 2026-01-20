@@ -1,6 +1,6 @@
 # Story 003: Server-Side Outbox Pattern - Implementation Planning
 
-**Status:** In Progress (Phases 1-4 Complete)
+**Status:** Complete (Phases 1-4 & 6 Complete, Phase 5 deferred to device update)
 **Created:** 2026-01-19
 **Last Updated:** 2026-01-19
 
@@ -408,7 +408,7 @@ Add to patrol response:
 
 ---
 
-### Phase 6: Cleanup & Monitoring
+### Phase 6: Cleanup & Monitoring ✅ COMPLETED
 
 **Prometheus metrics** in `internal/metrics/metrics.go`:
 - `score_outbox_entries_created_total`
@@ -430,6 +430,22 @@ Add to patrol response:
   - No pending/processing outbox entries for this user
   - Last used > 7 days ago (grace period)
 - Cleanup job runs every 6 hours
+
+**Completion Summary:**
+- ✅ Added 6 Prometheus metrics to `internal/metrics/metrics.go`
+  - Counters: `score_outbox_entries_created_total`, `score_outbox_entries_processed_total{status}`, `user_credentials_cleaned_total`
+  - Gauges: `score_outbox_pending_entries`, `user_credentials_active`
+  - Histogram: `score_outbox_sync_duration_seconds`
+- ✅ Instrumented handler to record entries created (`internal/handlers/admin_api.go`)
+- ✅ Instrumented worker to record sync duration and processed entries (`internal/worker/patrol_sync.go`)
+- ✅ Added cleanup to existing CronJob (`cmd/cleanup/main.go`)
+  - Runs every 6 hours (configurable via Helm chart)
+  - Removes expired outbox entries (24h completed, 7d failed)
+  - Removes stale user credentials (7d grace period, no active sessions/pending writes)
+  - Uses structured logging for observability (metrics not viable in ephemeral CronJob pods)
+- ✅ Added `scoreoutbox.CountPendingAll()` and `scoreoutbox.DeleteExpired()` functions
+- ✅ Added `usercredentials.CountActive()` and `usercredentials.FindStaleCredentials()` functions
+- ✅ All code builds successfully
 
 ---
 

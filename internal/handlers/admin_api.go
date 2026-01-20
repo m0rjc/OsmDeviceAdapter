@@ -13,6 +13,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
@@ -556,6 +557,9 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to create outbox entries")
 		return
 	}
+
+	// Record metrics for created entries
+	metrics.ScoreOutboxEntriesCreated.Add(float64(len(outboxEntries)))
 
 	slog.Info("admin.api.scores.outbox_created",
 		"component", "admin_api",

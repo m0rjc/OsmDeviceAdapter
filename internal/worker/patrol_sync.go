@@ -9,6 +9,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/redis/go-redis/v9"
 )
@@ -50,6 +51,12 @@ func NewPatrolSyncService(conns *db.Connections, osmClient *osm.Client, credenti
 //
 // Returns nil on success, error on failure.
 func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, sectionID int, patrolID string) error {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime).Seconds()
+		metrics.ScoreOutboxSyncDuration.Observe(duration)
+	}()
+
 	logger := slog.With(
 		"component", "worker.patrol_sync",
 		"osm_user_id", osmUserID,
@@ -242,6 +249,9 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 			"error", err,
 		)
 		// Don't return error - the OSM update succeeded
+	} else {
+		// Record metrics for successfully processed entries
+		metrics.ScoreOutboxEntriesProcessed.WithLabelValues("completed").Add(float64(len(entries)))
 	}
 
 	// Create audit log entry (one entry for the aggregated update)

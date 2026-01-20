@@ -220,6 +220,15 @@ func FindUserPatrolsWithPending(conns *db.Connections) ([]UserPatrolKey, error) 
 	return keys, nil
 }
 
+// CountPendingAll counts all pending and processing entries across all users
+func CountPendingAll(conns *db.Connections) (int64, error) {
+	var count int64
+	err := conns.DB.Model(&db.ScoreUpdateOutbox{}).
+		Where("status IN ?", []string{"pending", "processing"}).
+		Count(&count).Error
+	return count, err
+}
+
 // DeleteExpired deletes old outbox entries based on their status and retention periods
 // - completed: older than completedRetentionHours (default 24 hours)
 // - failed/auth_revoked: older than failedRetentionDays (default 7 days)
