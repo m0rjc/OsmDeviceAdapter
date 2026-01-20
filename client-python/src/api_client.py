@@ -37,6 +37,8 @@ class PatrolScore:
     id: str
     name: str
     score: int
+    pending_delta: int = 0
+    has_pending: bool = False
 
 
 @dataclass
@@ -265,7 +267,9 @@ class OSMDeviceClient:
                 PatrolScore(
                     id=p["id"],
                     name=p["name"],
-                    score=p["score"]
+                    score=p["score"],
+                    pending_delta=p.get("pendingDelta", 0),
+                    has_pending=p.get("hasPending", False)
                 )
                 for p in data["patrols"]
             ]

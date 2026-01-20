@@ -156,7 +156,8 @@ class ScoreboardApp:
 
             # Convert to display format
             display_patrols = [
-                DisplayPatrolScore(name=p.name, score=p.score)
+                DisplayPatrolScore(name=p.name, score=p.score,
+                                 pending_delta=p.pending_delta, has_pending=p.has_pending)
                 for p in response.patrols
             ]
 

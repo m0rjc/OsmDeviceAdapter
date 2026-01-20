@@ -15,6 +15,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/worker"
 )
@@ -309,7 +310,7 @@ func AdminScoresHandler(deps *Dependencies) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			handleGetScores(w, r, deps, session, user, sectionID, targetSection)
+			handleGetScores(w, r, deps, session, user, sectionID, targetSection, profile.Data.UserID)
 		case http.MethodPost:
 			handleUpdateScores(w, r, deps, session, user, sectionID, targetSection)
 		default:
@@ -319,13 +320,13 @@ func AdminScoresHandler(deps *Dependencies) http.HandlerFunc {
 }
 
 // handleGetScores handles GET /api/admin/sections/{sectionId}/scores
-func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, user types.User, sectionID int, section *types.OSMSection) {
+func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, user types.User, sectionID int, section *types.OSMSection, userID int) {
 	ctx := r.Context()
 
-	// Get the current term for the section
-	termInfo, err := deps.OSM.FetchActiveTermForSection(ctx, user, sectionID)
+	// Find the active term for the section using the helper
+	activeTerm, err := osm.FindActiveTerm(section)
 	if err != nil {
-		slog.Error("admin.api.scores.term_fetch_failed",
+		slog.Error("admin.api.scores.term_not_found",
 			"component", "admin_api",
 			"event", "scores.error",
 			"section_id", sectionID,
@@ -335,14 +336,16 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 		return
 	}
 
+	termID := activeTerm.TermID
+
 	// Fetch patrol scores
-	patrols, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termInfo.TermID)
+	patrols, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termID)
 	if err != nil {
 		slog.Error("admin.api.scores.fetch_failed",
 			"component", "admin_api",
 			"event", "scores.error",
 			"section_id", sectionID,
-			"term_id", termInfo.TermID,
+			"term_id", termID,
 			"error", err,
 		)
 		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to fetch patrol scores")
@@ -352,7 +355,7 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 	slog.Info("admin.api.scores.fetched",
 		"component", "admin_api",
 		"event", "scores.success",
-		"user_id", session.OSMUserID,
+		"user_id", userID,
 		"section_id", sectionID,
 		"patrol_count", len(patrols),
 	)
@@ -362,7 +365,7 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 			ID:   sectionID,
 			Name: section.SectionName,
 		},
-		TermID:    termInfo.TermID,
+		TermID:    termID,
 		Patrols:   patrols,
 		FetchedAt: time.Now().UTC(),
 	})
@@ -370,7 +373,7 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 
 // handleUpdateScores handles POST /api/admin/sections/{sectionId}/scores
 // Uses the outbox pattern: creates pending entries for background processing
-func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, user types.User, sectionID int, _ *types.OSMSection) {
+func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, user types.User, sectionID int, section *types.OSMSection) {
 	ctx := r.Context()
 
 	// Validate CSRF token
@@ -413,10 +416,10 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		// Create user context for API calls
 		user := session.User()
 
-		// Fetch current term
-		termInfo, err := deps.OSM.FetchActiveTermForSection(ctx, user, sectionID)
+		// Find the active term using the helper
+		activeTerm, err := osm.FindActiveTerm(section)
 		if err != nil {
-			slog.Error("admin.api.scores.term_fetch_failed",
+			slog.Error("admin.api.scores.term_not_found",
 				"component", "admin_api",
 				"event", "scores.duplicate_error",
 				"error", err,
@@ -426,7 +429,7 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		}
 
 		// Fetch current scores to provide fresh data even for duplicate requests
-		currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termInfo.TermID)
+		currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, activeTerm.TermID)
 		if err != nil {
 			slog.Error("admin.api.scores.fetch_failed",
 				"component", "admin_api",
@@ -522,9 +525,9 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 	// We need:
 	// - Names for the outbox entries and audit trail
 	// - Current scores to return to client (even on 202 Accepted)
-	termInfo, err := deps.OSM.FetchActiveTermForSection(ctx, user, sectionID)
+	activeTerm, err := osm.FindActiveTerm(section)
 	if err != nil {
-		slog.Error("admin.api.scores.term_fetch_failed",
+		slog.Error("admin.api.scores.term_not_found",
 			"component", "admin_api",
 			"event", "scores.update_error",
 			"section_id", sectionID,
@@ -534,7 +537,7 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		return
 	}
 
-	currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termInfo.TermID)
+	currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, activeTerm.TermID)
 	if err != nil {
 		slog.Error("admin.api.scores.fetch_failed",
 			"component", "admin_api",

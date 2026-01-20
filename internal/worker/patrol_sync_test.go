@@ -164,7 +164,7 @@ func TestSyncPatrol_Success(t *testing.T) {
 	defer osmServer.Close()
 
 	// Create OSM client pointing to mock server
-	osmClient := osm.NewClient(osmServer.URL, nil, nil)
+	osmClient := osm.NewClient(osmServer.URL, nil, nil, nil)
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil) // No token refresh needed for this test
@@ -252,7 +252,7 @@ func TestSyncPatrol_AuthRevoked(t *testing.T) {
 	defer osmServer.Close()
 
 	// Create OSM client pointing to mock server
-	osmClient := osm.NewClient(osmServer.URL, nil, nil)
+	osmClient := osm.NewClient(osmServer.URL, nil, nil, nil)
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)
@@ -338,7 +338,7 @@ func TestSyncPatrol_PatrolNotFound(t *testing.T) {
 	defer osmServer.Close()
 
 	// Create OSM client pointing to mock server
-	osmClient := osm.NewClient(osmServer.URL, nil, nil)
+	osmClient := osm.NewClient(osmServer.URL, nil, nil, nil)
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)
@@ -437,7 +437,7 @@ func TestSyncPatrol_ConcurrentLock(t *testing.T) {
 	defer osmServer.Close()
 
 	// Create OSM client pointing to mock server
-	osmClient := osm.NewClient(osmServer.URL, nil, nil)
+	osmClient := osm.NewClient(osmServer.URL, nil, nil, nil)
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)
@@ -496,7 +496,7 @@ func TestSyncPatrol_NoEntriesAfterClaim(t *testing.T) {
 	defer osmServer.Close()
 
 	// Create OSM client pointing to mock server
-	osmClient := osm.NewClient(osmServer.URL, nil, nil)
+	osmClient := osm.NewClient(osmServer.URL, nil, nil, nil)
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)

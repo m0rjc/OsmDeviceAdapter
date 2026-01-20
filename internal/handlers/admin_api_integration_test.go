@@ -132,7 +132,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestEnv {
 	}))
 
 	// Create OSM client pointing to mock server
-	osmClient := osm.NewClient(osmServer.URL, nil, nil)
+	osmClient := osm.NewClient(osmServer.URL, nil, nil, nil)
 
 	// Create worker services
 	credentialMgr := worker.NewCredentialManager(conns, nil) // No token refresh for tests

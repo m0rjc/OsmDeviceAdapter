@@ -81,7 +81,7 @@ func main() {
 	webAuthService := webauth.NewService(conns, tokenRefreshService)
 
 	// Create OSM client (token refresh is handled via context-bound functions)
-	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder)
+	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder, redisClient)
 
 	// Create worker services for outbox processing
 	credentialManager := worker.NewCredentialManager(conns, tokenRefreshService)

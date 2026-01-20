@@ -24,9 +24,11 @@ except ImportError:
 
 class PatrolScore:
     """Represents a patrol and its score."""
-    def __init__(self, name: str, score: int):
+    def __init__(self, name: str, score: int, pending_delta: int = 0, has_pending: bool = False):
         self.name = name
         self.score = score
+        self.pending_delta = pending_delta
+        self.has_pending = has_pending
 
 
 class MatrixDisplay:
@@ -137,7 +139,7 @@ class MatrixDisplay:
             print(f"[DISPLAY] Line from ({x1},{y1}) to ({x2},{y2})")
 
     def draw_status_indicator(self, rate_limit_state: str):
-        """Draw a 2x2 status indicator in the top-right corner.
+        """Draw a 1x1 status indicator in the top-right corner.
 
         Args:
             rate_limit_state: One of "LOADING", "NONE", "DEGRADED",
@@ -154,18 +156,15 @@ class MatrixDisplay:
 
         color = colors.get(rate_limit_state, (128, 128, 128))  # Default to grey
 
-        # Draw 2x2 square in top-right corner
-        x_start = self.cols - 3  # 3 pixels from right edge
-        y_start = 1              # 1 pixel from top
+        # Draw 1x1 pixel in top-right corner
+        x = self.cols - 2  # 2 pixels from right edge
+        y = 1              # 1 pixel from top
 
         if not self.simulate:
             status_color = graphics.Color(color[0], color[1], color[2])
-            # Draw a 2x2 filled square
-            for x in range(x_start, x_start + 2):
-                for y in range(y_start, y_start + 2):
-                    self.canvas.SetPixel(x, y, status_color.red, status_color.green, status_color.blue)
+            self.canvas.SetPixel(x, y, status_color.red, status_color.green, status_color.blue)
         else:
-            print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x_start},{y_start}) color={color}")
+            print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x},{y}) color={color}")
 
     def generate_qr_image(self, url: str):
         """Generate a QR code image for the given URL.
@@ -363,6 +362,15 @@ class MatrixDisplay:
             score_x = self.cols - score_width - 2  # Extra padding from edge
             self.draw_text(score_x, y, score_text, color=(255, 255, 0), font_size="small")
 
+            # Draw orange pending indicator dot if patrol has pending changes
+            if patrol.has_pending:
+                pending_x = self.cols - 1  # Right edge
+                pending_y = (i * row_height) + 4  # Vertically centered in row
+                if not self.simulate:
+                    self.canvas.SetPixel(pending_x, pending_y, 255, 140, 0)  # Orange color
+                else:
+                    print(f"[DISPLAY] Pending indicator at ({pending_x},{pending_y}) for {patrol.name}")
+
         # Draw status indicator
         self.draw_status_indicator(rate_limit_state)
 
@@ -373,7 +381,8 @@ class MatrixDisplay:
             print("SCOREBOARD")
             print("="*40)
             for patrol in patrols[:4]:
-                print(f"{patrol.name:<20} {patrol.score:>10}")
+                pending_indicator = " [PENDING]" if patrol.has_pending else ""
+                print(f"{patrol.name:<20} {patrol.score:>10}{pending_indicator}")
             print(f"\nStatus: {rate_limit_state}")
             print("="*40 + "\n")
 

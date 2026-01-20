@@ -59,9 +59,11 @@ func NewUser(userId *int, accessToken string) User {
 }
 
 type PatrolScore struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Score int    `json:"score"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Score        int    `json:"score"`
+	PendingDelta int    `json:"pendingDelta"`
+	HasPending   bool   `json:"hasPending"`
 }
 
 type OSMTokenResponse struct {

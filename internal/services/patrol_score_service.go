@@ -11,6 +11,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 	"github.com/redis/go-redis/v9"
@@ -76,7 +77,8 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 	// Check patrol scores cache
 	cached, err := s.getCachedPatrolScores(ctx, device.DeviceCode)
 	if err == nil && time.Now().Before(cached.ValidUntil) {
-		// Cache is still valid
+		// Cache is still valid - populate pending deltas before returning
+		s.populatePendingDeltas(ctx, *device.SectionID, cached.Patrols)
 		return &PatrolScoreResponse{
 			Patrols:        cached.Patrols,
 			FromCache:      true,
@@ -116,6 +118,8 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 				cached.ValidUntil = cacheUntil
 				s.cachePatrolScores(ctx, device.DeviceCode, cached)
 			}
+			// Populate pending deltas before returning
+			s.populatePendingDeltas(ctx, *device.SectionID, cached.Patrols)
 			return &PatrolScoreResponse{
 				Patrols:        cached.Patrols,
 				FromCache:      true,
@@ -141,6 +145,9 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 		ValidUntil:     validUntil,
 		RateLimitState: rateLimitState,
 	})
+
+	// Populate pending deltas before returning
+	s.populatePendingDeltas(ctx, *device.SectionID, patrols)
 
 	return &PatrolScoreResponse{
 		Patrols:        patrols,
@@ -260,5 +267,30 @@ func (s *PatrolScoreService) cachePatrolScores(
 	err = s.conns.Redis.Set(ctx, key, data, fallbackTTL).Err()
 	if err != nil {
 		slog.Error("patrol_score_service.cachePatrolScores", "message", "cannot write to REDIS cache", "error", err)
+	}
+}
+
+// populatePendingDeltas fetches pending score deltas from the outbox and populates
+// the PendingDelta and HasPending fields for each patrol
+func (s *PatrolScoreService) populatePendingDeltas(ctx context.Context, sectionID int, patrols []types.PatrolScore) {
+	// Fetch pending deltas for this section
+	deltas, err := scoreoutbox.GetPendingDeltasBySection(s.conns, sectionID)
+	if err != nil {
+		slog.Error("patrol_score_service.populatePendingDeltas",
+			"component", "patrol_score_service",
+			"event", "pending_deltas.error",
+			"section_id", sectionID,
+			"error", err,
+		)
+		// Continue with zero deltas if fetch fails
+		return
+	}
+
+	// Populate pending deltas for each patrol
+	for i := range patrols {
+		if delta, exists := deltas[patrols[i].ID]; exists {
+			patrols[i].PendingDelta = delta
+			patrols[i].HasPending = true
+		}
 	}
 }

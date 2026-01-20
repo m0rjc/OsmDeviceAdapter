@@ -22,6 +22,51 @@ type TermInfo struct {
 	UserID  int
 }
 
+// FindActiveTerm finds the currently active term for a section.
+// A term is active if the current date falls between its start and end dates (inclusive).
+// Returns ErrNotInTerm if no active term is found.
+func FindActiveTerm(section *types.OSMSection) (*types.OSMTerm, error) {
+	now := time.Now()
+	const osmTimeLayout = "2006-01-02"
+
+	for i := range section.Terms {
+		term := &section.Terms[i]
+
+		// Parse start and end dates
+		startDate, err := time.Parse(osmTimeLayout, term.StartDate)
+		if err != nil {
+			slog.Warn("osm.term_discovery.invalid_start_date",
+				"component", "term_discovery",
+				"event", "term.parse_error",
+				"term_id", term.TermID,
+				"start_date", term.StartDate,
+				"error", err,
+			)
+			continue
+		}
+
+		endDate, err := time.Parse(osmTimeLayout, term.EndDate)
+		if err != nil {
+			slog.Warn("osm.term_discovery.invalid_end_date",
+				"component", "term_discovery",
+				"event", "term.parse_error",
+				"term_id", term.TermID,
+				"end_date", term.EndDate,
+				"error", err,
+			)
+			continue
+		}
+
+		// Check if current date is within term boundaries
+		// Use >= for start and <= for end to be inclusive
+		if (now.After(startDate) || now.Equal(startDate)) && (now.Before(endDate) || now.Equal(endDate)) {
+			return term, nil
+		}
+	}
+
+	return nil, ErrNotInTerm
+}
+
 // FetchActiveTermForSection fetches the active term for a given section.
 // It queries the OAuth resource endpoint to get the user's profile and sections,
 // then finds the active term based on the current date.
@@ -84,48 +129,9 @@ func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User,
 		return nil, ErrSectionNotFound
 	}
 
-	// Find the active term (where current_date >= startdate AND current_date <= enddate)
-	now := time.Now()
-	var activeTerm *types.OSMTerm
-	const osmTimeLayout = "2006-01-02"
-
-	for i := range targetSection.Terms {
-		term := &targetSection.Terms[i]
-
-		// Parse start and end dates
-		startDate, err := time.Parse(osmTimeLayout, term.StartDate)
-		if err != nil {
-			slog.Warn("osm.term_discovery.invalid_start_date",
-				"component", "term_discovery",
-				"event", "term.parse_error",
-				"term_id", term.TermID,
-				"start_date", term.StartDate,
-				"error", err,
-			)
-			continue
-		}
-
-		endDate, err := time.Parse(osmTimeLayout, term.EndDate)
-		if err != nil {
-			slog.Warn("osm.term_discovery.invalid_end_date",
-				"component", "term_discovery",
-				"event", "term.parse_error",
-				"term_id", term.TermID,
-				"end_date", term.EndDate,
-				"error", err,
-			)
-			continue
-		}
-
-		// Check if current date is within term boundaries
-		// Use >= for start and <= for end to be inclusive
-		if (now.After(startDate) || now.Equal(startDate)) && (now.Before(endDate) || now.Equal(endDate)) {
-			activeTerm = term
-			break
-		}
-	}
-
-	if activeTerm == nil {
+	// Find the active term using the helper function
+	activeTerm, err := FindActiveTerm(targetSection)
+	if err != nil {
 		slog.Warn("osm.term_discovery.no_active_term",
 			"component", "term_discovery",
 			"event", "term.not_found",
@@ -133,9 +139,10 @@ func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User,
 			"user_id", profileResp.Data.UserID,
 			"total_terms", len(targetSection.Terms),
 		)
-		return nil, ErrNotInTerm
+		return nil, err
 	}
 
+	const osmTimeLayout = "2006-01-02"
 	endDate, _ := time.Parse(osmTimeLayout, activeTerm.EndDate)
 
 	slog.Info("osm.term_discovery.success",

@@ -496,7 +496,7 @@ func parseRateLimitHeaders(headers http.Header) (int, int, int) {
 		resetSeconds, _ = strconv.Atoi(resetStr)
 	}
 
-	slog.Info("osm.api.parse_rate_limit_header",
+	slog.Debug("osm.api.parse_rate_limit_header",
 		"component", "osm_api",
 		"limit", limit,
 		"remaining", remaining,
