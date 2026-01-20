@@ -68,6 +68,20 @@ func (r *RedisClient) Del(ctx context.Context, keys ...string) *redis.IntCmd {
 	return r.client.Del(ctx, prefixedKeys...)
 }
 
+// SetNX sets a value only if the key does not exist (with key prefix)
+func (r *RedisClient) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd {
+	return r.client.SetNX(ctx, r.prefixKey(key), value, expiration)
+}
+
+// Eval executes a Lua script with prefixed keys
+func (r *RedisClient) Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd {
+	prefixedKeys := make([]string, len(keys))
+	for i, key := range keys {
+		prefixedKeys[i] = r.prefixKey(key)
+	}
+	return r.client.Eval(ctx, script, prefixedKeys, args...)
+}
+
 // RateLimitResult contains the result of a rate limit check
 type RateLimitResult struct {
 	Allowed   bool          // Whether the request is allowed

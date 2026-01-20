@@ -21,7 +21,6 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/worker"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -137,10 +136,8 @@ func setupIntegrationTest(t *testing.T) *integrationTestEnv {
 
 	// Create worker services
 	credentialMgr := worker.NewCredentialManager(conns, nil) // No token refresh for tests
-	rawRedis, _ := redis.ParseURL("redis://" + conns.Redis.Client().Options().Addr)
-	redisClientDirect := redis.NewClient(rawRedis)
 
-	patrolSyncSvc := worker.NewPatrolSyncService(conns, osmClient, credentialMgr, redisClientDirect)
+	patrolSyncSvc := worker.NewPatrolSyncService(conns, osmClient, credentialMgr, redisClient)
 
 	// Create handler dependencies
 	cfg := &config.Config{
@@ -162,7 +159,6 @@ func setupIntegrationTest(t *testing.T) *integrationTestEnv {
 	}
 
 	cleanup := func() {
-		redisClientDirect.Close()
 		redisClient.Close()
 		mr.Close()
 		osmServer.Close()
@@ -266,17 +262,32 @@ func TestIntegration_FullFlow(t *testing.T) {
 		t.Fatalf("Expected status 202, got %d. Body: %s", w.Code, w.Body.String())
 	}
 
-	// Parse response
-	var resp AdminOutboxResponse
+	// Parse response (now returns optimistic patrol results)
+	var resp AdminUpdateResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
-	if resp.Status != "accepted" {
-		t.Errorf("Expected status 'accepted', got '%s'", resp.Status)
+	if !resp.Success {
+		t.Errorf("Expected success=true")
 	}
-	if resp.EntriesCreated != 3 {
-		t.Errorf("Expected 3 entries created, got %d", resp.EntriesCreated)
+	if len(resp.Patrols) != 2 {
+		t.Errorf("Expected 2 patrols in response (patrol-1 and patrol-2), got %d", len(resp.Patrols))
+	}
+
+	// Verify optimistic scores (current + pending delta)
+	for _, p := range resp.Patrols {
+		if p.ID == "patrol-1" {
+			// Current: 100, Delta: 10+20=30, Expected: 130
+			if p.NewScore != 130 {
+				t.Errorf("Expected patrol-1 new score 130, got %d", p.NewScore)
+			}
+		} else if p.ID == "patrol-2" {
+			// Current: 50, Delta: 5, Expected: 55
+			if p.NewScore != 55 {
+				t.Errorf("Expected patrol-2 new score 55, got %d", p.NewScore)
+			}
+		}
 	}
 
 	// Verify outbox entries were created
@@ -295,13 +306,13 @@ func TestIntegration_FullFlow(t *testing.T) {
 
 	// Manually trigger worker sync for patrol-1
 	ctx := context.Background()
-	err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
+	_, err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
 	if err != nil {
 		t.Fatalf("SyncPatrol failed: %v", err)
 	}
 
 	// Manually trigger worker sync for patrol-2
-	err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-2")
+	_, err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-2")
 	if err != nil {
 		t.Fatalf("SyncPatrol failed: %v", err)
 	}
@@ -363,9 +374,9 @@ func TestIntegration_Idempotency(t *testing.T) {
 		t.Fatalf("First request: expected status 202, got %d", w1.Code)
 	}
 
-	var resp1 AdminOutboxResponse
+	var resp1 AdminUpdateResponse
 	json.Unmarshal(w1.Body.Bytes(), &resp1)
-	batchID1 := resp1.BatchID
+	firstResponsePatrols := resp1.Patrols
 
 	// Second request with SAME idempotency key
 	bodyBytes2, _ := json.Marshal(reqBody) // Re-marshal to get fresh reader
@@ -383,12 +394,12 @@ func TestIntegration_Idempotency(t *testing.T) {
 		t.Fatalf("Second request: expected status 202, got %d", w2.Code)
 	}
 
-	var resp2 AdminOutboxResponse
+	var resp2 AdminUpdateResponse
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
 
-	// Verify same batch ID returned (cached response)
-	if resp2.BatchID != batchID1 {
-		t.Errorf("Expected same batch ID for duplicate request, got different: %s vs %s", batchID1, resp2.BatchID)
+	// Verify same patrol results returned (idempotent response)
+	if len(resp2.Patrols) != len(firstResponsePatrols) {
+		t.Errorf("Expected same number of patrols for duplicate request, got %d vs %d", len(resp2.Patrols), len(firstResponsePatrols))
 	}
 
 	// Verify only ONE entry created (not two)
@@ -402,7 +413,7 @@ func TestIntegration_Idempotency(t *testing.T) {
 
 	// Process the entry
 	ctx := context.Background()
-	env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
+	_, _ = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
 
 	// Verify only ONE OSM call made
 	osmCalls := atomic.LoadInt32(env.osmAPICalls)
@@ -489,7 +500,7 @@ func TestIntegration_ConcurrentSubmissions(t *testing.T) {
 
 	// Now trigger sync (worker would coalesce all entries into 1 OSM call)
 	ctx := context.Background()
-	err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
+	_, err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
 	if err != nil {
 		t.Fatalf("SyncPatrol failed: %v", err)
 	}
@@ -548,13 +559,31 @@ func TestIntegration_InteractiveMode(t *testing.T) {
 	handler := wrapWithMiddleware(env, AdminScoresHandler(env.deps))
 	handler.ServeHTTP(w, req)
 
-	// Verify 202 Accepted
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("Expected status 202, got %d", w.Code)
+	// Verify 200 OK (interactive sync completed successfully within timeout)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 (interactive sync succeeded), got %d. Body: %s", w.Code, w.Body.String())
 	}
 
-	// Give goroutines time to process (interactive mode triggers background sync)
-	time.Sleep(200 * time.Millisecond)
+	// Parse response
+	var resp AdminUpdateResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if !resp.Success {
+		t.Errorf("Expected success=true")
+	}
+	if len(resp.Patrols) != 1 {
+		t.Errorf("Expected 1 patrol in response, got %d", len(resp.Patrols))
+	}
+
+	// Verify actual synced score returned (not optimistic)
+	if resp.Patrols[0].ID == "patrol-1" {
+		// Current was 100, added 10, should be 110
+		if resp.Patrols[0].NewScore != 110 {
+			t.Errorf("Expected new score 110, got %d", resp.Patrols[0].NewScore)
+		}
+	}
 
 	// Verify OSM was called (interactive mode triggered sync)
 	osmCalls := atomic.LoadInt32(env.osmAPICalls)

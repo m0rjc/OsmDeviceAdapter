@@ -117,12 +117,23 @@ async function syncPendingScores(): Promise<void> {
           await deleteOutboxEntry(db, entry.id!);
         }
 
-        // Notify the client
+        // Parse response body to get patrol updates
+        let patrols: any[] | undefined;
+        try {
+          const responseData = await response.json();
+          patrols = responseData.patrols;
+        } catch (err) {
+          // If JSON parsing fails, continue without patrol data
+          // Client will refresh from server instead
+        }
+
+        // Notify the client with patrol data
         const clients = await self.clients.matchAll();
         clients.forEach(client => {
           client.postMessage({
             type: 'SYNC_SUCCESS',
             sectionId: sectionId,
+            patrols: patrols, // Include patrol data from server response
           });
         });
       } else if (response.status === 401 || response.status === 403) {

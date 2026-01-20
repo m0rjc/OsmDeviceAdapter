@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 )
 
 var (
@@ -20,7 +20,7 @@ var (
 // RedisLock provides distributed locking using Redis.
 // Implements a simple lock mechanism with TTL for safety.
 type RedisLock struct {
-	client *redis.Client
+	client *db.RedisClient
 	key    string
 	value  string
 	ttl    time.Duration
@@ -28,7 +28,8 @@ type RedisLock struct {
 
 // NewRedisLock creates a new Redis-based distributed lock.
 // The lock key is formatted as: outbox:lock:{userID}:{sectionID}:{patrolID}
-func NewRedisLock(client *redis.Client, userID, sectionID int, patrolID string, ttl time.Duration) *RedisLock {
+// The key will be prefixed with the configured Redis key prefix automatically.
+func NewRedisLock(client *db.RedisClient, userID, sectionID int, patrolID string, ttl time.Duration) *RedisLock {
 	key := fmt.Sprintf("outbox:lock:%d:%d:%s", userID, sectionID, patrolID)
 	// Use a unique value to ensure only the lock holder can release it
 	value := fmt.Sprintf("%d-%d", time.Now().UnixNano(), userID)

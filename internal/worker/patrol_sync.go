@@ -11,7 +11,6 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
-	"github.com/redis/go-redis/v9"
 )
 
 // PatrolSyncService handles synchronization of pending score updates to OSM.
@@ -21,11 +20,20 @@ type PatrolSyncService struct {
 	osmClient        *osm.Client
 	credentialMgr    *CredentialManager
 	lockTTL          time.Duration
-	redisClient      *redis.Client
+	redisClient      *db.RedisClient
+}
+
+// SyncResult contains the result of a successful patrol score synchronization.
+// Returned by SyncPatrol for interactive sync to provide immediate feedback to clients.
+type SyncResult struct {
+	PatrolID      string
+	PatrolName    string
+	PreviousScore int
+	NewScore      int
 }
 
 // NewPatrolSyncService creates a new patrol sync service
-func NewPatrolSyncService(conns *db.Connections, osmClient *osm.Client, credentialMgr *CredentialManager, redisClient *redis.Client) *PatrolSyncService {
+func NewPatrolSyncService(conns *db.Connections, osmClient *osm.Client, credentialMgr *CredentialManager, redisClient *db.RedisClient) *PatrolSyncService {
 	return &PatrolSyncService{
 		conns:         conns,
 		osmClient:     osmClient,
@@ -49,8 +57,9 @@ func NewPatrolSyncService(conns *db.Connections, osmClient *osm.Client, credenti
 //  8. Update user credentials last_used_at timestamp
 //  9. Release lock
 //
-// Returns nil on success, error on failure.
-func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, sectionID int, patrolID string) error {
+// Returns SyncResult with patrol score details on success, or error on failure.
+// Returns (nil, nil) if no entries to process or lock already held by another worker.
+func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, sectionID int, patrolID string) (*SyncResult, error) {
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime).Seconds()
@@ -72,14 +81,14 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 			"event", "sync.lock_error",
 			"error", err,
 		)
-		return fmt.Errorf("failed to acquire lock: %w", err)
+		return nil, fmt.Errorf("failed to acquire lock: %w", err)
 	}
 	if !acquired {
 		// Another worker is already processing this patrol, skip
 		logger.Debug("worker.patrol_sync.already_locked",
 			"event", "sync.already_locked",
 		)
-		return nil
+		return nil, nil
 	}
 	defer func() {
 		if err := lock.Release(ctx); err != nil {
@@ -97,7 +106,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 			"event", "sync.claim_error",
 			"error", err,
 		)
-		return fmt.Errorf("failed to claim entries: %w", err)
+		return nil, fmt.Errorf("failed to claim entries: %w", err)
 	}
 
 	if len(entries) == 0 {
@@ -105,7 +114,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 		logger.Debug("worker.patrol_sync.no_entries",
 			"event", "sync.no_entries",
 		)
-		return nil
+		return nil, nil
 	}
 
 	logger.Info("worker.patrol_sync.claimed",
@@ -130,7 +139,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 				"error", markErr,
 			)
 		}
-		return fmt.Errorf("failed to get credentials: %w", err)
+		return nil, fmt.Errorf("failed to get credentials: %w", err)
 	}
 
 	// Create a user context for OSM API calls
@@ -155,7 +164,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 				"error", markErr,
 			)
 		}
-		return fmt.Errorf("failed to fetch term: %w", err)
+		return nil, fmt.Errorf("failed to fetch term: %w", err)
 	}
 
 	// Fetch patrol scores
@@ -173,7 +182,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 				"error", markErr,
 			)
 		}
-		return fmt.Errorf("failed to fetch scores: %w", err)
+		return nil, fmt.Errorf("failed to fetch scores: %w", err)
 	}
 
 	// Find the patrol in current scores
@@ -204,7 +213,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 				"error", markErr,
 			)
 		}
-		return fmt.Errorf("patrol not found")
+		return nil, fmt.Errorf("patrol not found")
 	}
 
 	// Step 5: Calculate net delta from all claimed entries
@@ -236,7 +245,7 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 				"error", markErr,
 			)
 		}
-		return fmt.Errorf("failed to update score: %w", err)
+		return nil, fmt.Errorf("failed to update score: %w", err)
 	}
 
 	// Step 7: Mark entries as completed and create audit log
@@ -288,7 +297,15 @@ func (s *PatrolSyncService) SyncPatrol(ctx context.Context, osmUserID int, secti
 		"net_delta", netDelta,
 	)
 
-	return nil
+	// Return sync result for interactive sync
+	result := &SyncResult{
+		PatrolID:      patrolID,
+		PatrolName:    patrolName,
+		PreviousScore: currentScore,
+		NewScore:      newScore,
+	}
+
+	return result, nil
 }
 
 // userContext implements types.User for OSM API calls

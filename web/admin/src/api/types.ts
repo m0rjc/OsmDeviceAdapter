@@ -52,10 +52,10 @@ export interface UpdateRequest {
 
 export interface UpdateResponse {
   success: boolean;
-  patrols?: PatrolResult[]; // Present on 200 OK
-  status?: string; // 'accepted' on 202 Accepted
-  batchId?: string; // Batch ID on 202 Accepted
-  entriesCreated?: number; // Number of entries created on 202 Accepted
+  patrols?: PatrolResult[]; // Always present - current scores + optimistic updates
+  status?: string; // 'accepted' on 202 Accepted (omitted on 200 OK)
+  batchId?: string; // Batch ID on 202 Accepted (deprecated - kept for compatibility)
+  entriesCreated?: number; // Number of entries created on 202 Accepted (deprecated - kept for compatibility)
 }
 
 export interface PatrolResult {

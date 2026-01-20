@@ -16,6 +16,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/worker"
 )
 
 // Response types for admin API endpoints
@@ -408,19 +409,68 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		return
 	}
 	if existing != nil {
-		// Request already processed - return cached response
+		// Request already processed - need to return fresh scores + optimistic pending delta
+		// Create user context for API calls
+		user := session.User()
+
+		// Fetch current term
+		termInfo, err := deps.OSM.FetchActiveTermForSection(ctx, user, sectionID)
+		if err != nil {
+			slog.Error("admin.api.scores.term_fetch_failed",
+				"component", "admin_api",
+				"event", "scores.duplicate_error",
+				"error", err,
+			)
+			writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to determine current term")
+			return
+		}
+
+		// Fetch current scores to provide fresh data even for duplicate requests
+		currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termInfo.TermID)
+		if err != nil {
+			slog.Error("admin.api.scores.fetch_failed",
+				"component", "admin_api",
+				"event", "scores.duplicate_error",
+				"error", err,
+			)
+			writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to fetch current scores")
+			return
+		}
+
+		// Build map of current scores
+		patrolScoreMap := make(map[string]types.PatrolScore)
+		for _, p := range currentScores {
+			patrolScoreMap[p.ID] = p
+		}
+
+		// Find all entries for this batch (same batch_id)
+		var allEntries []db.ScoreUpdateOutbox
+		err = deps.Conns.DB.Where("batch_id = ?", existing.BatchID).Find(&allEntries).Error
+		if err != nil {
+			slog.Error("admin.api.scores.duplicate_fetch_failed",
+				"component", "admin_api",
+				"event", "scores.duplicate_error",
+				"batch_id", existing.BatchID,
+				"error", err,
+			)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch duplicate entries")
+			return
+		}
+
+		// Build optimistic results
+		patrolResults := buildOptimisticResults(allEntries, patrolScoreMap)
+
 		slog.Info("admin.api.scores.duplicate_request",
 			"component", "admin_api",
 			"event", "scores.duplicate",
 			"idempotency_key", idempotencyKey,
 			"status", existing.Status,
+			"patrol_count", len(patrolResults),
 		)
 		w.WriteHeader(http.StatusAccepted)
-		writeJSON(w, AdminOutboxResponse{
-			Status:         "accepted",
-			BatchID:        existing.BatchID,
-			EntriesCreated: 1, // We only return one existing entry
-			IdempotencyKey: idempotencyKey,
+		writeJSON(w, AdminUpdateResponse{
+			Success: true,
+			Patrols: patrolResults,
 		})
 		return
 	}
@@ -468,8 +518,10 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		return
 	}
 
-	// Fetch current patrol scores to get patrol names
-	// We need names for the outbox entries and audit trail
+	// Fetch current patrol scores to get patrol names AND current scores
+	// We need:
+	// - Names for the outbox entries and audit trail
+	// - Current scores to return to client (even on 202 Accepted)
 	termInfo, err := deps.OSM.FetchActiveTermForSection(ctx, user, sectionID)
 	if err != nil {
 		slog.Error("admin.api.scores.term_fetch_failed",
@@ -494,10 +546,10 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		return
 	}
 
-	// Build a map of patrol names for quick lookup
-	patrolNames := make(map[string]string)
+	// Build map for quick lookup of current scores and names
+	patrolScoreMap := make(map[string]types.PatrolScore)
 	for _, p := range currentScores {
-		patrolNames[p.ID] = p.Name
+		patrolScoreMap[p.ID] = p
 	}
 
 	// Generate batch ID for this submission
@@ -515,8 +567,8 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 	// Create outbox entries
 	outboxEntries := make([]db.ScoreUpdateOutbox, 0, len(req.Updates))
 	for i, update := range req.Updates {
-		// Validate patrol exists in section (patrol name will be fetched from OSM during sync)
-		_, exists := patrolNames[update.PatrolID]
+		// Validate patrol exists in section
+		_, exists := patrolScoreMap[update.PatrolID]
 		if !exists {
 			slog.Warn("admin.api.scores.patrol_not_found",
 				"component", "admin_api",
@@ -570,39 +622,133 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		"entry_count", len(outboxEntries),
 	)
 
+	// Build optimistic patrol results from current scores + pending deltas
+	// This is our "belief" of what the scores will be after sync
+	// We can return this immediately, regardless of sync status
+	patrolResults := buildOptimisticResults(outboxEntries, patrolScoreMap)
+
 	// Check sync mode header (default: interactive)
 	syncMode := r.Header.Get("X-Sync-Mode")
 	if syncMode == "" {
 		syncMode = "interactive"
 	}
 
-	// If interactive mode, trigger immediate sync for each patrol
+	// If interactive mode, try to sync immediately and return actual results on success
 	if syncMode == "interactive" {
+		// Create channel to collect sync results
+		type syncResult struct {
+			result *worker.SyncResult
+			err    error
+		}
+		results := make(chan syncResult, len(outboxEntries))
+
+		// Launch sync operations in parallel
 		for _, entry := range outboxEntries {
 			go func(osmUserID, sectionID int, patrolID string) {
-				// Use background context with timeout
+				// Use background context with 2-minute timeout for individual sync
 				syncCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 				defer cancel()
 
-				if err := deps.PatrolSync.SyncPatrol(syncCtx, osmUserID, sectionID, patrolID); err != nil {
+				result, err := deps.PatrolSync.SyncPatrol(syncCtx, osmUserID, sectionID, patrolID)
+				results <- syncResult{result: result, err: err}
+			}(entry.OSMUserID, entry.SectionID, entry.PatrolID)
+		}
+
+		// Wait for all results with timeout (30 seconds total)
+		timeout := time.After(30 * time.Second)
+		actualResults := make([]AdminPatrolResult, 0, len(outboxEntries))
+		successCount := 0
+
+		for i := 0; i < len(outboxEntries); i++ {
+			select {
+			case result := <-results:
+				if result.err != nil {
 					slog.Error("admin.api.scores.interactive_sync_failed",
 						"component", "admin_api",
 						"event", "scores.sync_error",
-						"patrol_id", patrolID,
-						"error", err,
+						"error", result.err,
 					)
-					// Don't fail the request - worker will retry
+					// Sync failed - return optimistic results with 202
+					goto acceptedResponse
 				}
-			}(entry.OSMUserID, entry.SectionID, entry.PatrolID)
+				if result.result != nil {
+					// Sync succeeded - collect actual result
+					successCount++
+					actualResults = append(actualResults, AdminPatrolResult{
+						ID:            result.result.PatrolID,
+						Name:          result.result.PatrolName,
+						PreviousScore: result.result.PreviousScore,
+						NewScore:      result.result.NewScore,
+					})
+				}
+			case <-timeout:
+				slog.Warn("admin.api.scores.interactive_sync_timeout",
+					"component", "admin_api",
+					"event", "scores.sync_timeout",
+					"completed", successCount,
+					"total", len(outboxEntries),
+				)
+				// Timeout - return optimistic results with 202
+				goto acceptedResponse
+			}
 		}
+
+		// All syncs completed successfully - return actual results with 200 OK
+		slog.Info("admin.api.scores.interactive_sync_success",
+			"component", "admin_api",
+			"event", "scores.sync_success",
+			"patrol_count", len(actualResults),
+		)
+
+		w.WriteHeader(http.StatusOK)
+		writeJSON(w, AdminUpdateResponse{
+			Success: true,
+			Patrols: actualResults,
+		})
+		return
 	}
 
-	// Return 202 Accepted with outbox response
+acceptedResponse:
+	// Return 202 Accepted with optimistic patrol results
+	// Client can immediately show current scores + pending updates
+	// This is reached for:
+	// 1. Background sync mode (non-interactive)
+	// 2. Interactive sync timeout
+	// 3. Interactive sync errors
+	slog.Info("admin.api.scores.accepted",
+		"component", "admin_api",
+		"event", "scores.accepted",
+		"batch_id", batchID,
+		"patrol_count", len(patrolResults),
+	)
+
 	w.WriteHeader(http.StatusAccepted)
-	writeJSON(w, AdminOutboxResponse{
-		Status:         "accepted",
-		BatchID:        batchID,
-		EntriesCreated: len(outboxEntries),
-		IdempotencyKey: idempotencyKey,
+	writeJSON(w, AdminUpdateResponse{
+		Success: true,
+		Patrols: patrolResults, // Return optimistic results
 	})
+}
+
+// buildOptimisticResults constructs patrol results from current scores + pending deltas
+// This represents our "belief" of what the scores will be after sync completes
+func buildOptimisticResults(outboxEntries []db.ScoreUpdateOutbox, currentScores map[string]types.PatrolScore) []AdminPatrolResult {
+	// Aggregate deltas by patrol (multiple entries may target same patrol)
+	deltasByPatrol := make(map[string]int)
+	for _, entry := range outboxEntries {
+		deltasByPatrol[entry.PatrolID] += entry.PointsDelta
+	}
+
+	// Build results
+	results := make([]AdminPatrolResult, 0, len(deltasByPatrol))
+	for patrolID, delta := range deltasByPatrol {
+		current := currentScores[patrolID]
+		results = append(results, AdminPatrolResult{
+			ID:            patrolID,
+			Name:          current.Name,
+			PreviousScore: current.Score,        // Current score from OSM
+			NewScore:      current.Score + delta, // Optimistic: current + pending
+		})
+	}
+
+	return results
 }

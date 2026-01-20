@@ -85,7 +85,7 @@ func main() {
 
 	// Create worker services for outbox processing
 	credentialManager := worker.NewCredentialManager(conns, tokenRefreshService)
-	patrolSyncService := worker.NewPatrolSyncService(conns, osmClient, credentialManager, redisClient.Client())
+	patrolSyncService := worker.NewPatrolSyncService(conns, osmClient, credentialManager, redisClient)
 	outboxProcessor := worker.NewOutboxProcessor(worker.DefaultConfig(), conns, patrolSyncService)
 
 	// Create handler dependencies

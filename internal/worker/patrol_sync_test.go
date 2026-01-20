@@ -14,7 +14,6 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -169,19 +168,32 @@ func TestSyncPatrol_Success(t *testing.T) {
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil) // No token refresh needed for this test
-	rawRedis, _ := redis.ParseURL("redis://" + conns.Redis.Client().Options().Addr)
-	redisClient := redis.NewClient(rawRedis)
-	defer redisClient.Close()
 
-	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, redisClient)
+	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, conns.Redis)
 
 	// Execute sync
 	ctx := context.Background()
-	err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+	result, err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
 
 	// Verify success
 	if err != nil {
 		t.Errorf("SyncPatrol failed: %v", err)
+	}
+
+	// Verify result is returned
+	if result == nil {
+		t.Error("Expected sync result, got nil")
+	} else {
+		// Verify result fields
+		if result.PatrolID != patrolID {
+			t.Errorf("Expected patrol ID %s, got %s", patrolID, result.PatrolID)
+		}
+		if result.PreviousScore != 100 {
+			t.Errorf("Expected previous score 100, got %d", result.PreviousScore)
+		}
+		if result.NewScore != 160 {
+			t.Errorf("Expected new score 160, got %d", result.NewScore)
+		}
 	}
 
 	// Verify only ONE OSM API call was made (coalescing)
@@ -244,19 +256,19 @@ func TestSyncPatrol_AuthRevoked(t *testing.T) {
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)
-	rawRedis, _ := redis.ParseURL("redis://" + conns.Redis.Client().Options().Addr)
-	redisClient := redis.NewClient(rawRedis)
-	defer redisClient.Close()
 
-	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, redisClient)
+	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, conns.Redis)
 
 	// Execute sync (should fail)
 	ctx := context.Background()
-	err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+	result, err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
 
 	// Verify it failed
 	if err == nil {
 		t.Error("Expected SyncPatrol to fail with 401, but it succeeded")
+	}
+	if result != nil {
+		t.Error("Expected nil result on error, got non-nil")
 	}
 
 	// Verify entries are marked as failed (not auth_revoked, because we're not using token refresh in this test)
@@ -330,19 +342,19 @@ func TestSyncPatrol_PatrolNotFound(t *testing.T) {
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)
-	rawRedis, _ := redis.ParseURL("redis://" + conns.Redis.Client().Options().Addr)
-	redisClient := redis.NewClient(rawRedis)
-	defer redisClient.Close()
 
-	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, redisClient)
+	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, conns.Redis)
 
 	// Execute sync
 	ctx := context.Background()
-	err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+	result, err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
 
 	// Verify it failed
 	if err == nil {
 		t.Error("Expected SyncPatrol to fail when patrol not found")
+	}
+	if result != nil {
+		t.Error("Expected nil result on error, got non-nil")
 	}
 
 	// Verify entry is marked as failed with no retry (patrol doesn't exist)
@@ -429,24 +441,23 @@ func TestSyncPatrol_ConcurrentLock(t *testing.T) {
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)
-	rawRedis, _ := redis.ParseURL("redis://" + conns.Redis.Client().Options().Addr)
-	redisClient := redis.NewClient(rawRedis)
-	defer redisClient.Close()
 
-	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, redisClient)
+	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, conns.Redis)
 
 	// Execute two syncs concurrently
 	ctx := context.Background()
 	done := make(chan error, 2)
 
 	go func() {
-		done <- syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+		_, err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+		done <- err
 	}()
 
 	go func() {
 		// Start second sync slightly after first
 		time.Sleep(10 * time.Millisecond)
-		done <- syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+		_, err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+		done <- err
 	}()
 
 	// Wait for both
@@ -489,19 +500,19 @@ func TestSyncPatrol_NoEntriesAfterClaim(t *testing.T) {
 
 	// Create worker services
 	credentialMgr := NewCredentialManager(conns, nil)
-	rawRedis, _ := redis.ParseURL("redis://" + conns.Redis.Client().Options().Addr)
-	redisClient := redis.NewClient(rawRedis)
-	defer redisClient.Close()
 
-	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, redisClient)
+	syncService := NewPatrolSyncService(conns, osmClient, credentialMgr, conns.Redis)
 
 	// Execute sync (should be no-op)
 	ctx := context.Background()
-	err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
+	result, err := syncService.SyncPatrol(ctx, osmUserID, sectionID, patrolID)
 
 	// Verify success (no-op is not an error)
 	if err != nil {
 		t.Errorf("SyncPatrol failed: %v", err)
+	}
+	if result != nil {
+		t.Error("Expected nil result for no-op, got non-nil")
 	}
 
 	// Verify no OSM API calls were made
@@ -517,8 +528,10 @@ func TestRedisLock_AcquireRelease(t *testing.T) {
 	}
 	defer mr.Close()
 
-	opt, _ := redis.ParseURL("redis://" + mr.Addr())
-	redisClient := redis.NewClient(opt)
+	redisClient, err := db.NewRedisClient("redis://"+mr.Addr(), "test:")
+	if err != nil {
+		t.Fatalf("Failed to create Redis client: %v", err)
+	}
 	defer redisClient.Close()
 
 	lock := NewRedisLock(redisClient, 123, 456, "patrol-1", 10*time.Second)
@@ -556,8 +569,10 @@ func TestRedisLock_TryAcquire(t *testing.T) {
 	}
 	defer mr.Close()
 
-	opt, _ := redis.ParseURL("redis://" + mr.Addr())
-	redisClient := redis.NewClient(opt)
+	redisClient, err := db.NewRedisClient("redis://"+mr.Addr(), "test:")
+	if err != nil {
+		t.Fatalf("Failed to create Redis client: %v", err)
+	}
 	defer redisClient.Close()
 
 	lock := NewRedisLock(redisClient, 123, 456, "patrol-1", 10*time.Second)

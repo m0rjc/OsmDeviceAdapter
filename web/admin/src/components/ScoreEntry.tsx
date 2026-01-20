@@ -111,6 +111,21 @@ export function ScoreEntry() {
           syncedSectionsRef.current.add(event.data.sectionId);
         }
 
+        // If patrol data is provided, apply it immediately (optimistic update from server)
+        // This avoids a race condition where we refresh from OSM before the background
+        // worker has processed the outbox entries (which happens every 30 seconds)
+        if (event.data.patrols && Array.isArray(event.data.patrols) && event.data.patrols.length > 0) {
+          setPatrols(prev =>
+            prev.map(p => {
+              const updated = event.data.patrols.find((r: any) => r.id === p.id);
+              if (updated) {
+                return { ...p, score: updated.newScore, pointsToAdd: 0 };
+              }
+              return p;
+            })
+          );
+        }
+
         // Debounce - multiple SYNC_SUCCESS messages may arrive in quick succession
         // (one per section). Wait for all to arrive before showing toast and refreshing.
         if (syncRefreshTimeoutRef.current) {
@@ -126,8 +141,8 @@ export function ScoreEntry() {
           }
           syncedSectionsRef.current.clear();
 
+          // Only refresh pending points (not scores) - scores were already updated above
           if (selectedSectionId) {
-            loadScores(selectedSectionId, true, true); // silent=true to skip "refreshed" toast
             loadPendingPoints(selectedSectionId);
           }
           syncRefreshTimeoutRef.current = null;
@@ -212,28 +227,28 @@ export function ScoreEntry() {
         csrfToken
       );
 
-      if (result.success) {
-        // Handle 200 OK response (immediate sync)
-        if (result.patrols && result.patrols.length > 0) {
-          // Update local state with new scores
-          setPatrols(prev =>
-            prev.map(p => {
-              const updated = result.patrols!.find(r => r.id === p.id);
-              if (updated) {
-                return { ...p, score: updated.newScore, pointsToAdd: 0 };
-              }
-              return p;
-            })
-          );
+      if (result.success && result.patrols && result.patrols.length > 0) {
+        // Update local state with scores from response
+        // Both 200 OK and 202 Accepted return patrol data
+        setPatrols(prev =>
+          prev.map(p => {
+            const updated = result.patrols!.find(r => r.id === p.id);
+            if (updated) {
+              return { ...p, score: updated.newScore, pointsToAdd: 0 };
+            }
+            return p;
+          })
+        );
+
+        // Show appropriate toast based on response status
+        if (result.status === 'accepted') {
+          showToast('success', `Scores updated (syncing to OSM in background)`);
+        } else {
           showToast('success', `Updated ${result.patrols.length} patrol(s)`);
-        } else if (result.status === 'accepted') {
-          // Handle 202 Accepted response (queued for background sync)
-          // Clear the input fields
-          setPatrols(prev => prev.map(p => ({ ...p, pointsToAdd: 0 })));
-          showToast('success', 'Changes queued for sync - will be applied shortly');
-          // Reload pending points to show the newly queued entries
-          loadPendingPoints(selectedSectionId);
         }
+
+        // Reload pending points to reflect any queued changes
+        loadPendingPoints(selectedSectionId);
       }
 
       setShowConfirm(false);

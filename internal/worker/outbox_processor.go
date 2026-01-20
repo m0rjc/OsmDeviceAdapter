@@ -188,7 +188,7 @@ func (p *OutboxProcessor) processPendingEntries(ctx context.Context, logger *slo
 		// Use a per-patrol timeout to prevent indefinite blocking
 		patrolCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 
-		err := p.syncService.SyncPatrol(patrolCtx, up.OSMUserID, up.SectionID, up.PatrolID)
+		_, err := p.syncService.SyncPatrol(patrolCtx, up.OSMUserID, up.SectionID, up.PatrolID)
 		cancel()
 
 		if err != nil {
