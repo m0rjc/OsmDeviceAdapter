@@ -41,12 +41,12 @@ func (srv *ScoreUpdateService) UpdateScores(ctx context.Context, user types.User
 		return nil, err
 	}
 
-	term, err := profile.Data.GetCurrentTermForSection(sectionId)
+	term, err := profile.GetCurrentTermForSection(sectionId)
 	if err != nil {
 		return nil, err
 	}
 
-	userId := profile.Data.UserID
+	userId := profile.UserID
 	locks := NewPatrolLockSet(srv.conns.Redis, userId, 60*time.Second)
 	for _, request := range requests {
 		locks.AddPatrol(sectionId, request.PatrolID)

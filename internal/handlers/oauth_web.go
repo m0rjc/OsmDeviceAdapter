@@ -343,7 +343,6 @@ func OAuthCancelHandler(deps *Dependencies) http.HandlerFunc {
 	}
 }
 
-
 func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
@@ -393,20 +392,20 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		if profile.Data == nil || len(profile.Data.Sections) == 0 {
+		if len(profile.Sections) == 0 {
 			http.Error(w, "No sections found for this account", http.StatusBadRequest)
 			return
 		}
 
 		// Store tokens (but not mark as authorized yet - waiting for section selection)
 		tokenExpiry := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-		if err := devicecode.UpdateWithTokens(deps.Conns, session.DeviceCode, "awaiting_section", tokenResp.AccessToken, tokenResp.RefreshToken, tokenExpiry, profile.Data.UserID); err != nil {
+		if err := devicecode.UpdateWithTokens(deps.Conns, session.DeviceCode, "awaiting_section", tokenResp.AccessToken, tokenResp.RefreshToken, tokenExpiry, profile.UserID); err != nil {
 			http.Error(w, "Failed to store tokens", http.StatusInternalServerError)
 			return
 		}
 
 		// Show section selection page
-		showSectionSelectionPage(w, state, profile.Data.Sections)
+		showSectionSelectionPage(w, state, profile.Sections)
 	}
 }
 
@@ -512,7 +511,6 @@ func showDeviceConfirmationPage(w http.ResponseWriter, userCode string, deviceCo
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
-
 
 func showSectionSelectionPage(w http.ResponseWriter, sessionID string, sections []types.OSMSection) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

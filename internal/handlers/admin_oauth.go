@@ -144,15 +144,6 @@ func AdminCallbackHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		if profile.Data == nil {
-			slog.Warn("admin.callback.no_profile_data",
-				"component", "admin_oauth",
-				"event", "callback.error",
-			)
-			http.Error(w, "No profile data returned", http.StatusBadRequest)
-			return
-		}
-
 		// Generate session ID and CSRF token
 		sessionID, err := generateUUID()
 		if err != nil {
@@ -183,7 +174,7 @@ func AdminCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		// Create web session
 		session := &db.WebSession{
 			ID:              sessionID,
-			OSMUserID:       profile.Data.UserID,
+			OSMUserID:       profile.UserID,
 			OSMAccessToken:  tokenResp.AccessToken,
 			OSMRefreshToken: tokenResp.RefreshToken,
 			OSMTokenExpiry:  tokenExpiry,
@@ -209,7 +200,7 @@ func AdminCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		slog.Info("admin.callback.success",
 			"component", "admin_oauth",
 			"event", "callback.success",
-			"user_id", profile.Data.UserID,
+			"user_id", profile.UserID,
 		)
 
 		// Redirect to admin UI

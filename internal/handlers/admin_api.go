@@ -146,10 +146,7 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		var userName string
-		if profile.Data != nil {
-			userName = profile.Data.FullName
-		}
+		userName := profile.FullName
 
 		slog.Info("admin.api.session.success",
 			"component", "admin_api",
@@ -194,14 +191,9 @@ func AdminSectionsHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		if profile.Data == nil {
-			writeJSONError(w, http.StatusBadGateway, "osm_error", "Invalid response from OSM")
-			return
-		}
-
 		// Convert OSM sections to admin sections
-		sections := make([]AdminSection, 0, len(profile.Data.Sections))
-		for _, s := range profile.Data.Sections {
+		sections := make([]AdminSection, 0, len(profile.Sections))
+		for _, s := range profile.Sections {
 			sections = append(sections, AdminSection{
 				ID:        s.SectionID,
 				Name:      s.SectionName,
@@ -236,7 +228,7 @@ func AdminScoresHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Find the section and validate access
-		targetSection, err := profile.Data.GetSection(sectionID)
+		targetSection, err := profile.GetSection(sectionID)
 		if err != nil {
 			writeJSONError(w, http.StatusForbidden, "forbidden", "You do not have access to this section")
 			return
@@ -392,7 +384,7 @@ func validateWebCsrfToken(w http.ResponseWriter, r *http.Request, session *db.We
 
 // getCompleteWebSession reads the current session from the request (via middleware) and finds the OSM User information.
 // OSM user information may be cached.
-func getCompleteWebSession(w http.ResponseWriter, r *http.Request, osm *osm.Client) (*db.WebSession, *types.OSMProfileResponse, bool) {
+func getCompleteWebSession(w http.ResponseWriter, r *http.Request, osm *osm.Client) (*db.WebSession, *types.OSMProfileData, bool) {
 	ctx := r.Context()
 	session, ok := middleware.WebSessionFromContext(ctx) // We should not get this far
 	if !ok {
@@ -410,11 +402,6 @@ func getCompleteWebSession(w http.ResponseWriter, r *http.Request, osm *osm.Clie
 			"error", err,
 		)
 		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to validate section access")
-		return nil, nil, false
-	}
-
-	if profile.Data == nil {
-		writeJSONError(w, http.StatusBadGateway, "osm_error", "Invalid response from OSM")
 		return nil, nil, false
 	}
 

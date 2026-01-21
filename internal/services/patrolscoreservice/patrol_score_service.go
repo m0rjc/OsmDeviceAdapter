@@ -79,7 +79,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 
 	// Cache miss or expired - need to fetch fresh data
 	// First, ensure we have term information
-	var profile *types.OSMProfileResponse
+	var profile *types.OSMProfileData
 	var term *types.OSMTerm
 	var patrols []types.PatrolScore
 	var rateLimitInfo osm.UserRateLimitInfo
@@ -88,7 +88,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 	// pattern
 	profile, err = s.osmClient.FetchOSMProfile(ctx, user)
 	if err == nil {
-		term, err = profile.Data.GetCurrentTermForSection(sectionId)
+		term, err = profile.GetCurrentTermForSection(sectionId)
 	}
 	if err == nil {
 		patrols, rateLimitInfo, err = s.osmClient.FetchPatrolScores(ctx, user, sectionId, term.TermID)

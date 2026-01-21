@@ -3,6 +3,7 @@ package osm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,16 +13,18 @@ import (
 )
 
 const (
-	// Cache OSM profile data for 10 minutes (term boundaries don't change often)
-	profileCacheTTL = 10 * time.Minute
+	// Cache OSM profile data for 1 hour (term boundaries don't change often)
+	profileCacheTTL = 1 * time.Hour
 )
 
+var ErrProfileRespondedError = errors.New("error fetching profile")
+var ErrProfileNoData = errors.New("osm profile had no data")
+
 // FetchOSMProfile fetches the user's profile from OSM, including sections and terms.
-// Results are cached in Redis for 10 minutes to reduce API calls during a typical session.
-func (c *Client) FetchOSMProfile(ctx context.Context, user types.User) (*types.OSMProfileResponse, error) {
+// Results are cached in Redis to reduce API calls during a typical session.
+func (c *Client) FetchOSMProfile(ctx context.Context, user types.User) (*types.OSMProfileData, error) {
 	// Only cache if we have a user ID
 	// TODO: Move caching out of the OSM layer into a higher profile service
-	// FIXME: Handle the payload error from OSM in this function. The outside world shouldn't care
 	// TODO: Consider bringing the session types into this package. They belong here conceptually
 	userID := user.UserID()
 	if userID != nil && c.redisCache != nil {
@@ -30,7 +33,7 @@ func (c *Client) FetchOSMProfile(ctx context.Context, user types.User) (*types.O
 		// Try to get from cache first
 		cached, err := c.redisCache.Get(ctx, cacheKey).Result()
 		if err == nil && cached != "" {
-			var profileResp types.OSMProfileResponse
+			var profileResp types.OSMProfileData
 			if err := json.Unmarshal([]byte(cached), &profileResp); err == nil {
 				slog.Debug("osm.profile.cache_hit",
 					"component", "osm_profile",
@@ -59,10 +62,21 @@ func (c *Client) FetchOSMProfile(ctx context.Context, user types.User) (*types.O
 		return nil, err
 	}
 
+	if !profileResp.Status || profileResp.Data == nil {
+		slog.Error("osm.profile.error_payload",
+			"component", "osm_profile",
+			"event", "profile.error",
+			"error", profileResp.Error)
+		if profileResp.Error != nil {
+			return nil, fmt.Errorf("%w: %q", ErrProfileRespondedError, profileResp.Error)
+		}
+		return nil, ErrProfileNoData
+	}
+
 	// Cache the result if we have a user ID
 	if userID != nil && c.redisCache != nil {
 		cacheKey := fmt.Sprintf("osm_profile:%d", *userID)
-		if data, err := json.Marshal(profileResp); err == nil {
+		if data, err := json.Marshal(profileResp.Data); err == nil {
 			if err := c.redisCache.Set(ctx, cacheKey, data, profileCacheTTL).Err(); err != nil {
 				slog.Warn("osm.profile.cache_write_failed",
 					"component", "osm_profile",
@@ -81,5 +95,5 @@ func (c *Client) FetchOSMProfile(ctx context.Context, user types.User) (*types.O
 		}
 	}
 
-	return &profileResp, nil
+	return profileResp.Data, nil
 }
