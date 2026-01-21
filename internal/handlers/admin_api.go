@@ -154,7 +154,7 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Fetch user profile from OSM to get the name
 		user := session.User()
-		profile, err := deps.OSM.FetchOSMProfile(user)
+		profile, err := deps.OSM.FetchOSMProfile(ctx, user)
 		if err != nil {
 			slog.Error("admin.api.session.profile_fetch_failed",
 				"component", "admin_api",
@@ -211,7 +211,7 @@ func AdminSectionsHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		user := session.User()
-		profile, err := deps.OSM.FetchOSMProfile(user)
+		profile, err := deps.OSM.FetchOSMProfile(ctx, user)
 		if err != nil {
 			slog.Error("admin.api.sections.profile_fetch_failed",
 				"component", "admin_api",
@@ -278,7 +278,7 @@ func AdminScoresHandler(deps *Dependencies) http.HandlerFunc {
 
 		// Validate user has access to this section
 		user := session.User()
-		profile, err := deps.OSM.FetchOSMProfile(user)
+		profile, err := deps.OSM.FetchOSMProfile(ctx, user)
 		if err != nil {
 			slog.Error("admin.api.scores.profile_fetch_failed",
 				"component", "admin_api",

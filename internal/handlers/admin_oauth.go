@@ -135,7 +135,7 @@ func AdminCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Fetch user profile to get user ID
-		profile, err := deps.OSM.FetchOSMProfile(types.NewUser(nil, tokenResp.AccessToken))
+		profile, err := deps.OSM.FetchOSMProfile(r.Context(), types.NewUser(nil, tokenResp.AccessToken))
 		if err != nil {
 			slog.Error("admin.callback.profile_fetch_failed",
 				"component", "admin_oauth",

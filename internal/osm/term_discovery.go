@@ -84,7 +84,7 @@ func (c *Client) FetchActiveTermForSection(ctx context.Context, user types.User,
 		"section_id", sectionID,
 	)
 
-	profileResp, err := c.FetchOSMProfile(user)
+	profileResp, err := c.FetchOSMProfile(ctx, user)
 	if err != nil {
 		slog.Error("osm.term_discovery.fetch_failed",
 			"component", "term_discovery",

@@ -18,8 +18,7 @@ const (
 
 // FetchOSMProfile fetches the user's profile from OSM, including sections and terms.
 // Results are cached in Redis for 10 minutes to reduce API calls during a typical session.
-func (c *Client) FetchOSMProfile(user types.User) (*types.OSMProfileResponse, error) {
-	ctx := context.Background()
+func (c *Client) FetchOSMProfile(ctx context.Context, user types.User) (*types.OSMProfileResponse, error) {
 
 	// Only cache if we have a user ID
 	userID := user.UserID()

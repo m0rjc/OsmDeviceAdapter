@@ -387,7 +387,7 @@ func OAuthCallbackHandler(deps *Dependencies) http.HandlerFunc {
 		}
 
 		// Fetch user profile to get sections  -- CLAUDE: I have fixed this
-		profile, err := deps.OSM.FetchOSMProfile(types.NewUser(nil, tokenResp.AccessToken))
+		profile, err := deps.OSM.FetchOSMProfile(r.Context(), types.NewUser(nil, tokenResp.AccessToken))
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to fetch profile: %v", err), http.StatusInternalServerError)
 			return
