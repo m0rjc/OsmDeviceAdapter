@@ -17,6 +17,7 @@ import (
 
 var (
 	ErrServiceBlocked = fmt.Errorf("OSM service blocked")
+	ErrUnauthorized   = fmt.Errorf("OSM unauthorized")
 )
 
 // fallbackUserBlockTime is the last resort block time to apply if we cannot find a block time from headers.
@@ -184,7 +185,8 @@ type Response struct {
 
 // Request performs an HTTP request to the OSM API.
 // It returns a Response and an error if the request failed or the API returned a non-200 status code.
-// If the service or user is blocked, it returns ErrServiceBlocked or ErrTemporaryBlocked.
+// If the service or user is blocked, it returns ErrServiceBlocked or ErrUserBlocked.
+// If the client cannot authorize then ErrUnauthorized is returned
 // If the target is non-nil and the response status is 200 OK, the response body is decoded into target.
 func (c *Client) Request(ctx context.Context, method string, target any, options ...RequestOption) (*Response, error) {
 	config := &requestConfig{
@@ -369,6 +371,10 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 			"response_body", logBody,
 			"duration_ms", duration.Milliseconds(),
 		)
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			return osmResponse, ErrUnauthorized
+		}
 		return osmResponse, fmt.Errorf("OSM API error: %s - %s", resp.Status, logBody)
 	}
 

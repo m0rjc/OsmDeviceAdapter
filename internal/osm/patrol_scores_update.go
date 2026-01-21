@@ -20,7 +20,7 @@ import (
 // - user: The authenticated user
 //
 // Returns:
-// - error: Any error that occurred during the update
+// - error: Any error that occurred during the update, for example osm.ErrUserBlocked or osm.ErrServiceBlocked
 func (c *Client) UpdatePatrolScore(ctx context.Context, user types.User, sectionID int, patrolID string, newScore int) error {
 	slog.Debug("osm.patrol_scores.updating",
 		"component", "patrol_scores",

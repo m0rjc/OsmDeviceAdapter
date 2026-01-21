@@ -1,23 +1,17 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/services/scoreupdateservice"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/worker"
 )
 
 // Response types for admin API endpoints
@@ -28,7 +22,6 @@ type AdminSessionResponse struct {
 	User              *AdminUserInfo `json:"user,omitempty"`
 	SelectedSectionID *int           `json:"selectedSectionId,omitempty"`
 	CSRFToken         string         `json:"csrfToken,omitempty"`
-	PendingWrites     int            `json:"pendingWrites"` // Count of pending/processing outbox entries
 }
 
 // AdminUserInfo contains user information for the session response
@@ -75,26 +68,20 @@ type AdminScoreUpdate struct {
 }
 
 // AdminUpdateResponse is returned by POST /api/admin/sections/{sectionId}/scores
-// DEPRECATED: Will be replaced by AdminOutboxResponse after outbox pattern rollout
 type AdminUpdateResponse struct {
-	Success bool                `json:"success"`
 	Patrols []AdminPatrolResult `json:"patrols"`
 }
 
 // AdminPatrolResult contains the result of a single patrol score update
 type AdminPatrolResult struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	PreviousScore int    `json:"previousScore"`
-	NewScore      int    `json:"newScore"`
-}
-
-// AdminOutboxResponse is returned by POST /api/admin/sections/{sectionId}/scores (outbox pattern)
-type AdminOutboxResponse struct {
-	Status          string `json:"status"`           // "accepted"
-	BatchID         string `json:"batchId"`          // UUID for this batch of updates
-	EntriesCreated  int    `json:"entriesCreated"`   // Number of outbox entries created
-	IdempotencyKey  string `json:"idempotencyKey"`   // Echo back the idempotency key
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Success          bool       `json:"success"`
+	IsTemporaryError *bool      `json:"isTemporaryError,omitempty"`
+	RetryAfter       *time.Time `json:"retryAfter,omitempty"`
+	ErrorMessage     *string    `json:"error,omitempty"`
+	PreviousScore    *int       `json:"previousScore,omitempty"`
+	NewScore         *int       `json:"newScore,omitempty"`
 }
 
 // AdminErrorResponse is used for error responses
@@ -140,18 +127,6 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Count pending writes for this user
-		pendingCount, err := scoreoutbox.CountPendingByUser(deps.Conns, session.OSMUserID)
-		if err != nil {
-			slog.Error("admin.api.session.pending_count_failed",
-				"component", "admin_api",
-				"event", "session.warning",
-				"error", err,
-			)
-			// Continue with 0 - non-critical error
-			pendingCount = 0
-		}
-
 		// Fetch user profile from OSM to get the name
 		user := session.User()
 		profile, err := deps.OSM.FetchOSMProfile(ctx, user)
@@ -167,7 +142,6 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 				User:              &AdminUserInfo{OSMUserID: session.OSMUserID},
 				SelectedSectionID: session.SelectedSectionID,
 				CSRFToken:         session.CSRFToken,
-				PendingWrites:     int(pendingCount),
 			})
 			return
 		}
@@ -181,7 +155,6 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 			"component", "admin_api",
 			"event", "session.fetched",
 			"user_id", session.OSMUserID,
-			"pending_writes", pendingCount,
 		)
 
 		writeJSON(w, AdminSessionResponse{
@@ -189,7 +162,6 @@ func AdminSessionHandler(deps *Dependencies) http.HandlerFunc {
 			User:              &AdminUserInfo{OSMUserID: session.OSMUserID, Name: userName},
 			SelectedSectionID: session.SelectedSectionID,
 			CSRFToken:         session.CSRFToken,
-			PendingWrites:     int(pendingCount),
 		})
 	}
 }
@@ -251,68 +223,30 @@ func AdminSectionsHandler(deps *Dependencies) http.HandlerFunc {
 // AdminScoresHandler handles both GET and POST for /api/admin/sections/{sectionId}/scores
 func AdminScoresHandler(deps *Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		session, ok := middleware.WebSessionFromContext(ctx)
+		session, profile, ok := getCompleteWebSession(w, r, deps.OSM)
 		if !ok {
-			writeJSONError(w, http.StatusUnauthorized, "unauthorized", "Not authenticated")
 			return
 		}
 
-		// Parse section ID from URL path
-		// Expected format: /api/admin/sections/{sectionId}/scores
-		path := r.URL.Path
-		prefix := "/api/admin/sections/"
-		suffix := "/scores"
-
-		if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
-			writeJSONError(w, http.StatusNotFound, "not_found", "Invalid path")
-			return
-		}
-
-		sectionStr := path[len(prefix) : len(path)-len(suffix)]
+		sectionStr := r.PathValue("sectionId")
 		sectionID, err := strconv.Atoi(sectionStr)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid section ID")
 			return
 		}
 
-		// Validate user has access to this section
-		user := session.User()
-		profile, err := deps.OSM.FetchOSMProfile(ctx, user)
-		if err != nil {
-			slog.Error("admin.api.scores.profile_fetch_failed",
-				"component", "admin_api",
-				"event", "scores.error",
-				"error", err,
-			)
-			writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to validate section access")
-			return
-		}
-
-		if profile.Data == nil {
-			writeJSONError(w, http.StatusBadGateway, "osm_error", "Invalid response from OSM")
-			return
-		}
-
 		// Find the section and validate access
-		var targetSection *types.OSMSection
-		for i := range profile.Data.Sections {
-			if profile.Data.Sections[i].SectionID == sectionID {
-				targetSection = &profile.Data.Sections[i]
-				break
-			}
-		}
-
-		if targetSection == nil {
+		targetSection, err := profile.Data.GetSection(sectionID)
+		if err != nil {
 			writeJSONError(w, http.StatusForbidden, "forbidden", "You do not have access to this section")
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			handleGetScores(w, r, deps, session, user, sectionID, targetSection, profile.Data.UserID)
+			handleGetScores(w, r, deps, session, targetSection)
 		case http.MethodPost:
-			handleUpdateScores(w, r, deps, session, user, sectionID, targetSection)
+			handleUpdateScores(w, r, deps, session, targetSection)
 		default:
 			writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
 		}
@@ -320,17 +254,16 @@ func AdminScoresHandler(deps *Dependencies) http.HandlerFunc {
 }
 
 // handleGetScores handles GET /api/admin/sections/{sectionId}/scores
-func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, user types.User, sectionID int, section *types.OSMSection, userID int) {
+func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, section *types.OSMSection) {
 	ctx := r.Context()
 
 	// Find the active term for the section using the helper
-	activeTerm, err := osm.FindActiveTerm(section)
-	if err != nil {
+	activeTerm, err := section.GetCurrentTerm()
+	if activeTerm == nil {
 		slog.Error("admin.api.scores.term_not_found",
 			"component", "admin_api",
 			"event", "scores.error",
-			"section_id", sectionID,
-			"error", err,
+			"section_id", section.SectionID,
 		)
 		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to determine current term")
 		return
@@ -339,12 +272,12 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 	termID := activeTerm.TermID
 
 	// Fetch patrol scores
-	patrols, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termID)
+	patrols, _, err := deps.OSM.FetchPatrolScores(ctx, session.User(), section.SectionID, termID)
 	if err != nil {
 		slog.Error("admin.api.scores.fetch_failed",
 			"component", "admin_api",
 			"event", "scores.error",
-			"section_id", sectionID,
+			"section_id", section.SectionID,
 			"term_id", termID,
 			"error", err,
 		)
@@ -352,17 +285,17 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 		return
 	}
 
-	slog.Info("admin.api.scores.fetched",
+	slog.Debug("admin.api.scores.fetched",
 		"component", "admin_api",
 		"event", "scores.success",
-		"user_id", userID,
-		"section_id", sectionID,
+		"user_id", session.OSMUserID,
+		"section_id", section.SectionID,
 		"patrol_count", len(patrols),
 	)
 
 	writeJSON(w, AdminScoresResponse{
 		Section: AdminSectionInfo{
-			ID:   sectionID,
+			ID:   section.SectionID,
 			Name: section.SectionName,
 		},
 		TermID:    termID,
@@ -372,109 +305,10 @@ func handleGetScores(w http.ResponseWriter, r *http.Request, deps *Dependencies,
 }
 
 // handleUpdateScores handles POST /api/admin/sections/{sectionId}/scores
-// Uses the outbox pattern: creates pending entries for background processing
-func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, user types.User, sectionID int, section *types.OSMSection) {
+func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession, section *types.OSMSection) {
 	ctx := r.Context()
 
-	// Validate CSRF token
-	csrfToken := r.Header.Get("X-CSRF-Token")
-	if csrfToken == "" {
-		writeJSONError(w, http.StatusForbidden, "csrf_required", "CSRF token required")
-		return
-	}
-	if csrfToken != session.CSRFToken {
-		slog.Warn("admin.api.scores.csrf_invalid",
-			"component", "admin_api",
-			"event", "scores.csrf_error",
-			"user_id", session.OSMUserID,
-		)
-		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
-		return
-	}
-
-	// Require idempotency key for outbox pattern
-	idempotencyKey := r.Header.Get("X-Idempotency-Key")
-	if idempotencyKey == "" {
-		writeJSONError(w, http.StatusBadRequest, "idempotency_key_required", "X-Idempotency-Key header is required")
-		return
-	}
-
-	// Check for duplicate idempotency key (return cached result)
-	existing, err := scoreoutbox.FindByIdempotencyKey(deps.Conns, idempotencyKey)
-	if err != nil {
-		slog.Error("admin.api.scores.idempotency_check_failed",
-			"component", "admin_api",
-			"event", "scores.update_error",
-			"idempotency_key", idempotencyKey,
-			"error", err,
-		)
-		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to check idempotency")
-		return
-	}
-	if existing != nil {
-		// Request already processed - need to return fresh scores + optimistic pending delta
-		// Create user context for API calls
-		user := session.User()
-
-		// Find the active term using the helper
-		activeTerm, err := osm.FindActiveTerm(section)
-		if err != nil {
-			slog.Error("admin.api.scores.term_not_found",
-				"component", "admin_api",
-				"event", "scores.duplicate_error",
-				"error", err,
-			)
-			writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to determine current term")
-			return
-		}
-
-		// Fetch current scores to provide fresh data even for duplicate requests
-		currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, activeTerm.TermID)
-		if err != nil {
-			slog.Error("admin.api.scores.fetch_failed",
-				"component", "admin_api",
-				"event", "scores.duplicate_error",
-				"error", err,
-			)
-			writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to fetch current scores")
-			return
-		}
-
-		// Build map of current scores
-		patrolScoreMap := make(map[string]types.PatrolScore)
-		for _, p := range currentScores {
-			patrolScoreMap[p.ID] = p
-		}
-
-		// Find all entries for this batch (same batch_id)
-		var allEntries []db.ScoreUpdateOutbox
-		err = deps.Conns.DB.Where("batch_id = ?", existing.BatchID).Find(&allEntries).Error
-		if err != nil {
-			slog.Error("admin.api.scores.duplicate_fetch_failed",
-				"component", "admin_api",
-				"event", "scores.duplicate_error",
-				"batch_id", existing.BatchID,
-				"error", err,
-			)
-			writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch duplicate entries")
-			return
-		}
-
-		// Build optimistic results
-		patrolResults := buildOptimisticResults(allEntries, patrolScoreMap)
-
-		slog.Info("admin.api.scores.duplicate_request",
-			"component", "admin_api",
-			"event", "scores.duplicate",
-			"idempotency_key", idempotencyKey,
-			"status", existing.Status,
-			"patrol_count", len(patrolResults),
-		)
-		w.WriteHeader(http.StatusAccepted)
-		writeJSON(w, AdminUpdateResponse{
-			Success: true,
-			Patrols: patrolResults,
-		})
+	if !validateWebCsrfToken(w, r, session) {
 		return
 	}
 
@@ -490,268 +324,99 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		return
 	}
 
-	// Validate points range
-	for _, update := range req.Updates {
+	// Validate updates and form requests for the service
+	serviceRequests := make([]scoreupdateservice.UpdateRequest, len(req.Updates))
+	for i, update := range req.Updates {
 		if update.Points < -1000 || update.Points > 1000 {
 			writeJSONError(w, http.StatusBadRequest, "validation_error", "Points must be between -1000 and 1000")
 			return
 		}
-	}
-
-	// Defensive check: ensure user credentials exist
-	// (Should already exist from login, but check anyway)
-	credentials, err := usercredentials.Get(deps.Conns, session.OSMUserID)
-	if err != nil {
-		slog.Error("admin.api.scores.credentials_check_failed",
-			"component", "admin_api",
-			"event", "scores.update_error",
-			"user_id", session.OSMUserID,
-			"error", err,
-		)
-		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to verify credentials")
-		return
-	}
-	if credentials == nil {
-		slog.Error("admin.api.scores.no_credentials",
-			"component", "admin_api",
-			"event", "scores.update_error",
-			"user_id", session.OSMUserID,
-		)
-		writeJSONError(w, http.StatusInternalServerError, "no_credentials", "User credentials not found - please re-login")
-		return
-	}
-
-	// Fetch current patrol scores to get patrol names AND current scores
-	// We need:
-	// - Names for the outbox entries and audit trail
-	// - Current scores to return to client (even on 202 Accepted)
-	activeTerm, err := osm.FindActiveTerm(section)
-	if err != nil {
-		slog.Error("admin.api.scores.term_not_found",
-			"component", "admin_api",
-			"event", "scores.update_error",
-			"section_id", sectionID,
-			"error", err,
-		)
-		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to determine current term")
-		return
-	}
-
-	currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, activeTerm.TermID)
-	if err != nil {
-		slog.Error("admin.api.scores.fetch_failed",
-			"component", "admin_api",
-			"event", "scores.update_error",
-			"section_id", sectionID,
-			"error", err,
-		)
-		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to fetch current scores")
-		return
-	}
-
-	// Build map for quick lookup of current scores and names
-	patrolScoreMap := make(map[string]types.PatrolScore)
-	for _, p := range currentScores {
-		patrolScoreMap[p.ID] = p
-	}
-
-	// Generate batch ID for this submission
-	batchID, err := generateUUID()
-	if err != nil {
-		slog.Error("admin.api.scores.batch_id_generation_failed",
-			"component", "admin_api",
-			"event", "scores.update_error",
-			"error", err,
-		)
-		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to generate batch ID")
-		return
-	}
-
-	// Create outbox entries
-	outboxEntries := make([]db.ScoreUpdateOutbox, 0, len(req.Updates))
-	for i, update := range req.Updates {
-		// Validate patrol exists in section
-		_, exists := patrolScoreMap[update.PatrolID]
-		if !exists {
-			slog.Warn("admin.api.scores.patrol_not_found",
-				"component", "admin_api",
-				"event", "scores.update_warning",
-				"patrol_id", update.PatrolID,
-			)
-			continue // Skip unknown patrols
+		serviceRequests[i] = scoreupdateservice.UpdateRequest{
+			PatrolID: update.PatrolID,
+			Delta:    update.Points,
 		}
-
-		// Generate a unique idempotency key per entry (based on main key + patrol ID + index)
-		// Index ensures uniqueness even if same patrol appears multiple times in request
-		entryIdempotencyKey := fmt.Sprintf("%s:%s:%d", idempotencyKey, update.PatrolID, i)
-
-		outboxEntries = append(outboxEntries, db.ScoreUpdateOutbox{
-			IdempotencyKey: entryIdempotencyKey,
-			OSMUserID:      session.OSMUserID,
-			SectionID:      sectionID,
-			PatrolID:       update.PatrolID,
-			PointsDelta:    update.Points,
-			Status:         "pending",
-			BatchID:        batchID,
-		})
 	}
 
-	if len(outboxEntries) == 0 {
-		writeJSONError(w, http.StatusBadRequest, "no_valid_patrols", "No valid patrols to update")
-		return
-	}
-
-	// Create outbox entries in database
-	if err := scoreoutbox.CreateBatch(deps.Conns, outboxEntries); err != nil {
-		slog.Error("admin.api.scores.outbox_create_failed",
+	service := scoreupdateservice.New(deps.OSM, deps.Conns)
+	results, err := service.UpdateScores(ctx, session.User(), section.SectionID, serviceRequests)
+	if err != nil {
+		slog.Error("admin.api.scores.update_failed",
 			"component", "admin_api",
 			"event", "scores.update_error",
-			"batch_id", batchID,
+			"section_id", section.SectionID,
 			"error", err,
 		)
-		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to create outbox entries")
+		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to update scores")
 		return
 	}
 
-	// Record metrics for created entries
-	metrics.ScoreOutboxEntriesCreated.Add(float64(len(outboxEntries)))
-
-	slog.Info("admin.api.scores.outbox_created",
-		"component", "admin_api",
-		"event", "scores.outbox_created",
-		"user_id", session.OSMUserID,
-		"section_id", sectionID,
-		"batch_id", batchID,
-		"entry_count", len(outboxEntries),
-	)
-
-	// Build optimistic patrol results from current scores + pending deltas
-	// This is our "belief" of what the scores will be after sync
-	// We can return this immediately, regardless of sync status
-	patrolResults := buildOptimisticResults(outboxEntries, patrolScoreMap)
-
-	// Check sync mode header (default: interactive)
-	syncMode := r.Header.Get("X-Sync-Mode")
-	if syncMode == "" {
-		syncMode = "interactive"
+	patrolResults := make([]AdminPatrolResult, len(results))
+	for i, result := range results {
+		patrolResults[i] = AdminPatrolResult{
+			ID:               result.PatrolID,
+			Name:             result.PatrolName,
+			Success:          result.Success,
+			IsTemporaryError: result.IsTemporaryError,
+			RetryAfter:       result.RetryAfter,
+			ErrorMessage:     result.ErrorMessage,
+			PreviousScore:    result.PreviousScore,
+			NewScore:         result.NewScore,
+		}
 	}
 
-	// If interactive mode, try to sync immediately and return actual results on success
-	if syncMode == "interactive" {
-		// Create channel to collect sync results
-		type syncResult struct {
-			result *worker.SyncResult
-			err    error
-		}
-		results := make(chan syncResult, len(outboxEntries))
-
-		// Launch sync operations in parallel
-		for _, entry := range outboxEntries {
-			go func(osmUserID, sectionID int, patrolID string) {
-				// Use background context with 2-minute timeout for individual sync
-				syncCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				defer cancel()
-
-				result, err := deps.PatrolSync.SyncPatrol(syncCtx, osmUserID, sectionID, patrolID)
-				results <- syncResult{result: result, err: err}
-			}(entry.OSMUserID, entry.SectionID, entry.PatrolID)
-		}
-
-		// Wait for all results with timeout (30 seconds total)
-		timeout := time.After(30 * time.Second)
-		actualResults := make([]AdminPatrolResult, 0, len(outboxEntries))
-		successCount := 0
-
-		for i := 0; i < len(outboxEntries); i++ {
-			select {
-			case result := <-results:
-				if result.err != nil {
-					slog.Error("admin.api.scores.interactive_sync_failed",
-						"component", "admin_api",
-						"event", "scores.sync_error",
-						"error", result.err,
-					)
-					// Sync failed - return optimistic results with 202
-					goto acceptedResponse
-				}
-				if result.result != nil {
-					// Sync succeeded - collect actual result
-					successCount++
-					actualResults = append(actualResults, AdminPatrolResult{
-						ID:            result.result.PatrolID,
-						Name:          result.result.PatrolName,
-						PreviousScore: result.result.PreviousScore,
-						NewScore:      result.result.NewScore,
-					})
-				}
-			case <-timeout:
-				slog.Warn("admin.api.scores.interactive_sync_timeout",
-					"component", "admin_api",
-					"event", "scores.sync_timeout",
-					"completed", successCount,
-					"total", len(outboxEntries),
-				)
-				// Timeout - return optimistic results with 202
-				goto acceptedResponse
-			}
-		}
-
-		// All syncs completed successfully - return actual results with 200 OK
-		slog.Info("admin.api.scores.interactive_sync_success",
-			"component", "admin_api",
-			"event", "scores.sync_success",
-			"patrol_count", len(actualResults),
-		)
-
-		w.WriteHeader(http.StatusOK)
-		writeJSON(w, AdminUpdateResponse{
-			Success: true,
-			Patrols: actualResults,
-		})
-		return
-	}
-
-acceptedResponse:
-	// Return 202 Accepted with optimistic patrol results
-	// Client can immediately show current scores + pending updates
-	// This is reached for:
-	// 1. Background sync mode (non-interactive)
-	// 2. Interactive sync timeout
-	// 3. Interactive sync errors
-	slog.Info("admin.api.scores.accepted",
-		"component", "admin_api",
-		"event", "scores.accepted",
-		"batch_id", batchID,
-		"patrol_count", len(patrolResults),
-	)
-
-	w.WriteHeader(http.StatusAccepted)
+	w.WriteHeader(http.StatusOK)
 	writeJSON(w, AdminUpdateResponse{
-		Success: true,
 		Patrols: patrolResults, // Return optimistic results
 	})
 }
 
-// buildOptimisticResults constructs patrol results from current scores + pending deltas
-// This represents our "belief" of what the scores will be after sync completes
-func buildOptimisticResults(outboxEntries []db.ScoreUpdateOutbox, currentScores map[string]types.PatrolScore) []AdminPatrolResult {
-	// Aggregate deltas by patrol (multiple entries may target same patrol)
-	deltasByPatrol := make(map[string]int)
-	for _, entry := range outboxEntries {
-		deltasByPatrol[entry.PatrolID] += entry.PointsDelta
+// vaidateWebCsrfToken validates the CSRF Token required for write. It will return the required error response if needed.
+// returns true if OK.
+func validateWebCsrfToken(w http.ResponseWriter, r *http.Request, session *db.WebSession) bool {
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken == "" {
+		writeJSONError(w, http.StatusForbidden, "csrf_required", "CSRF token required")
+		return false
+	}
+	if csrfToken != session.CSRFToken {
+		slog.Warn("admin.api.scores.csrf_invalid",
+			"component", "admin_api",
+			"event", "scores.csrf_error",
+			"user_id", session.OSMUserID,
+		)
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return false
+	}
+	return true
+}
+
+// getCompleteWebSession reads the current session from the request (via middleware) and finds the OSM User information.
+// OSM user information may be cached.
+func getCompleteWebSession(w http.ResponseWriter, r *http.Request, osm *osm.Client) (*db.WebSession, *types.OSMProfileResponse, bool) {
+	ctx := r.Context()
+	session, ok := middleware.WebSessionFromContext(ctx) // We should not get this far
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized", "Not authenticated")
+		return nil, nil, false
 	}
 
-	// Build results
-	results := make([]AdminPatrolResult, 0, len(deltasByPatrol))
-	for patrolID, delta := range deltasByPatrol {
-		current := currentScores[patrolID]
-		results = append(results, AdminPatrolResult{
-			ID:            patrolID,
-			Name:          current.Name,
-			PreviousScore: current.Score,        // Current score from OSM
-			NewScore:      current.Score + delta, // Optimistic: current + pending
-		})
+	// Validate user has access to this section
+	user := session.User()
+	profile, err := osm.FetchOSMProfile(ctx, user)
+	if err != nil {
+		slog.Error("admin.api.scores.profile_fetch_failed",
+			"component", "admin_api",
+			"event", "scores.error",
+			"error", err,
+		)
+		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to validate section access")
+		return nil, nil, false
 	}
 
-	return results
+	if profile.Data == nil {
+		writeJSONError(w, http.StatusBadGateway, "osm_error", "Invalid response from OSM")
+		return nil, nil, false
+	}
+
+	return session, profile, true
 }

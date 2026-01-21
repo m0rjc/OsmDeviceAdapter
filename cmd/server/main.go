@@ -21,7 +21,6 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/server"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/tokenrefresh"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/webauth"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/worker"
 )
 
 func main() {
@@ -83,11 +82,6 @@ func main() {
 	// Create OSM client (token refresh is handled via context-bound functions)
 	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder, redisClient)
 
-	// Create worker services for outbox processing
-	credentialManager := worker.NewCredentialManager(conns, tokenRefreshService)
-	patrolSyncService := worker.NewPatrolSyncService(conns, osmClient, credentialManager, redisClient)
-	outboxProcessor := worker.NewOutboxProcessor(worker.DefaultConfig(), conns, patrolSyncService)
-
 	// Create handler dependencies
 	deps := &handlers.Dependencies{
 		Config:     cfg,
@@ -96,7 +90,6 @@ func main() {
 		OSMAuth:    oauthClient,
 		DeviceAuth: deviceAuthService,
 		WebAuth:    webAuthService,
-		PatrolSync: patrolSyncService,
 	}
 
 	// Create and configure HTTP server
@@ -125,13 +118,6 @@ func main() {
 		}
 	}()
 
-	// Start outbox processor background worker
-	workerCtx := context.Background()
-	if err := outboxProcessor.Start(workerCtx); err != nil {
-		slog.Error("failed to start outbox processor", "error", err)
-		os.Exit(1)
-	}
-
 	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -141,9 +127,6 @@ func main() {
 	// Graceful shutdown with 30 second timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	// Stop the outbox processor first
-	outboxProcessor.Stop()
 
 	// Shutdown both servers concurrently
 	errChan := make(chan error, 2)

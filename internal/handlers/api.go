@@ -11,7 +11,8 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/services"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/services/patrolscoreservice"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
 // GetPatrolScoresHandler handles GET /api/v1/patrols requests.
@@ -53,14 +54,25 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 		device := authCtx.DeviceCode()
 
 		// Create patrol score service
-		patrolService := services.NewPatrolScoreService(
+		patrolService := patrolscoreservice.New(
 			deps.OSM,
 			deps.Conns,
 			deps.Config,
 		)
 
+		if device.SectionID == nil {
+			// TODO: Utility function to write a HTTP error
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "section_not_configured",
+				"message": "Device has not selected a section",
+			})
+			return
+		}
+
 		// Get patrol scores with caching and term management
-		response, err := patrolService.GetPatrolScores(ctx, user, device)
+		response, err := patrolService.GetPatrolScores(ctx, user, *device.SectionID)
 		if err != nil {
 			slog.Error("api.patrol_scores.fetch_error",
 				"component", "api",
@@ -70,7 +82,7 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 			)
 
 			// Handle specific error types
-			if errors.Is(err, osm.ErrNotInTerm) {
+			if errors.Is(err, types.ErrNotInActiveTerm) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
 				json.NewEncoder(w).Encode(map[string]string{
@@ -80,17 +92,7 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 				return
 			}
 
-			if errors.Is(err, osm.ErrNoSectionConfigured) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{
-					"error":   "section_not_configured",
-					"message": "Device has not selected a section",
-				})
-				return
-			}
-
-			if errors.Is(err, osm.ErrSectionNotFound) {
+			if errors.Is(err, types.ErrCannotFindSection) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]string{
@@ -122,8 +124,8 @@ func GetPatrolScoresHandler(deps *Dependencies) http.HandlerFunc {
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 				w.WriteHeader(http.StatusTooManyRequests)
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":        "user_temporary_block",
-					"message":      "User temporarily blocked due to rate limiting",
+					"error":         "user_temporary_block",
+					"message":       "User temporarily blocked due to rate limiting",
 					"blocked_until": userBlockedErr.BlockedUntil.Format(time.RFC3339),
 					"retry_after":   retryAfterSeconds,
 				})

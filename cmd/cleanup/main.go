@@ -11,8 +11,6 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicesession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/logging"
 )
@@ -113,46 +111,6 @@ func main() {
 		exitCode = 1
 	} else {
 		slog.Info("old score audit logs cleaned up successfully")
-	}
-
-	// Clean up expired score outbox entries
-	slog.Info("cleaning up expired score outbox entries",
-		"completed_retention_hours", 24,
-		"failed_retention_days", 7,
-	)
-	if err := scoreoutbox.DeleteExpired(conns, 24, 7); err != nil {
-		slog.Error("failed to delete expired score outbox entries", "error", err)
-		exitCode = 1
-	} else {
-		slog.Info("expired score outbox entries cleaned up successfully")
-	}
-
-	// Clean up stale user credentials
-	slog.Info("cleaning up stale user credentials",
-		"retention_days", 7,
-	)
-	credentials, err := usercredentials.FindStaleCredentials(conns, 7)
-	if err != nil {
-		slog.Error("failed to find stale user credentials", "error", err)
-		exitCode = 1
-	} else if len(credentials) > 0 {
-		deletedCount := 0
-		for _, cred := range credentials {
-			if err := usercredentials.Delete(conns, cred.OSMUserID); err != nil {
-				slog.Error("failed to delete stale user credential",
-					"osm_user_id", cred.OSMUserID,
-					"error", err,
-				)
-				exitCode = 1
-			} else {
-				deletedCount++
-			}
-		}
-		slog.Info("stale user credentials cleaned up successfully",
-			"deleted_count", deletedCount,
-		)
-	} else {
-		slog.Info("no stale user credentials to clean up")
 	}
 
 	if exitCode == 0 {

@@ -53,7 +53,7 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 
 	mux.Handle("/api/admin/session", adminMiddleware(handlers.AdminSessionHandler(deps)))
 	mux.Handle("/api/admin/sections", adminMiddleware(handlers.AdminSectionsHandler(deps)))
-	mux.Handle("/api/admin/sections/", adminMiddleware(handlers.AdminScoresHandler(deps)))
+	mux.Handle("/api/admin/sections/{sectionId}/scores", adminMiddleware(handlers.AdminScoresHandler(deps)))
 
 	// Admin SPA (serves static files for /admin/*)
 	// Note: More specific routes (/admin/login, /admin/callback, /admin/logout, /api/admin/*)

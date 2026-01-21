@@ -19,8 +19,10 @@ const (
 // FetchOSMProfile fetches the user's profile from OSM, including sections and terms.
 // Results are cached in Redis for 10 minutes to reduce API calls during a typical session.
 func (c *Client) FetchOSMProfile(ctx context.Context, user types.User) (*types.OSMProfileResponse, error) {
-
 	// Only cache if we have a user ID
+	// TODO: Move caching out of the OSM layer into a higher profile service
+	// FIXME: Handle the payload error from OSM in this function. The outside world shouldn't care
+	// TODO: Consider bringing the session types into this package. They belong here conceptually
 	userID := user.UserID()
 	if userID != nil && c.redisCache != nil {
 		cacheKey := fmt.Sprintf("osm_profile:%d", *userID)

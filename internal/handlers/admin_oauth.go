@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
@@ -203,40 +201,6 @@ func AdminCallbackHandler(deps *Dependencies) http.HandlerFunc {
 			)
 			http.Error(w, "Failed to create session", http.StatusInternalServerError)
 			return
-		}
-
-		// Create or update user credentials for background processing
-		// This allows outbox entries to be processed even after web session expires
-		credential := &db.UserCredential{
-			OSMUserID:       profile.Data.UserID,
-			OSMUserName:     profile.Data.FullName,
-			OSMEmail:        profile.Data.Email,
-			OSMAccessToken:  tokenResp.AccessToken,
-			OSMRefreshToken: tokenResp.RefreshToken,
-			OSMTokenExpiry:  tokenExpiry,
-		}
-
-		if err := usercredentials.CreateOrUpdate(deps.Conns, credential); err != nil {
-			slog.Error("admin.callback.credentials_create_failed",
-				"component", "admin_oauth",
-				"event", "callback.error",
-				"user_id", profile.Data.UserID,
-				"error", err,
-			)
-			// Don't fail the login - web session is still valid
-			// Outbox processing will fail gracefully if credentials missing
-		} else {
-			// If credentials were updated, recover any auth_revoked outbox entries
-			// User has re-authorized, so we can retry pending writes
-			if err := scoreoutbox.RecoverAuthRevoked(deps.Conns, profile.Data.UserID); err != nil {
-				slog.Error("admin.callback.recover_auth_revoked_failed",
-					"component", "admin_oauth",
-					"event", "callback.warning",
-					"user_id", profile.Data.UserID,
-					"error", err,
-				)
-				// Don't fail - this is a recovery operation
-			}
 		}
 
 		// Set secure session cookie

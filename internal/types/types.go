@@ -10,8 +10,8 @@ type ContextKey string
 
 // Context keys used across the application
 const (
-	UserContextKey         ContextKey = "user"
-	TokenRefreshFuncKey    ContextKey = "token_refresh_func"
+	UserContextKey      ContextKey = "user"
+	TokenRefreshFuncKey ContextKey = "token_refresh_func"
 )
 
 // TokenRefreshFunc is a function that refreshes the current user's token.
@@ -59,11 +59,9 @@ func NewUser(userId *int, accessToken string) User {
 }
 
 type PatrolScore struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Score        int    `json:"score"`
-	PendingDelta int    `json:"pendingDelta"`
-	HasPending   bool   `json:"hasPending"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Score int    `json:"score"`
 }
 
 type OSMTokenResponse struct {
@@ -77,36 +75,4 @@ type PatrolScoresResponse struct {
 	Patrols   []PatrolScore `json:"patrols"`
 	CachedAt  time.Time     `json:"cached_at"`
 	ExpiresAt time.Time     `json:"expires_at"`
-}
-
-// OSM Profile Response Types
-type OSMTerm struct {
-	Name      string `json:"name"`
-	StartDate string `json:"startdate"`
-	EndDate   string `json:"enddate"`
-	TermID    int    `json:"term_id"`
-}
-
-type OSMSection struct {
-	SectionName string    `json:"section_name"`
-	GroupName   string    `json:"group_name"`
-	SectionID   int       `json:"section_id"`
-	GroupID     int       `json:"group_id"`
-	SectionType string    `json:"section_type"`
-	Terms       []OSMTerm `json:"terms"`
-}
-
-type OSMProfileData struct {
-	UserID           int          `json:"user_id"`
-	FullName         string       `json:"full_name"`
-	Email            string       `json:"email"`
-	Sections         []OSMSection `json:"sections"`
-	HasParentAccess  bool         `json:"has_parent_access"`
-	HasSectionAccess bool         `json:"has_section_access"`
-}
-
-type OSMProfileResponse struct {
-	Status bool            `json:"status"`
-	Error  *string         `json:"error"`
-	Data   *OSMProfileData `json:"data"`
 }

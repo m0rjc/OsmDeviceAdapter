@@ -122,7 +122,7 @@ func DeleteExpired(conns *db.Connections) error {
 	return conns.DB.Where("expires_at < ? AND status NOT IN (?, ?)", time.Now(), "authorized", "revoked").Delete(&db.DeviceCode{}).Error
 }
 
-// UpdateTermInfo updates a device code with term information
+// UpdateTermInfo updates a device code with user and current term information
 func UpdateTermInfo(conns *db.Connections, deviceCode string, userID int, termID int, termCheckedAt time.Time, termEndDate time.Time) error {
 	updates := map[string]interface{}{
 		"osm_user_id":     userID,
