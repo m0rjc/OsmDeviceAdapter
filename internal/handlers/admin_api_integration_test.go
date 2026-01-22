@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,33 +14,26 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreoutbox"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/db/usercredentials"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/websession"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
-	"github.com/m0rjc/OsmDeviceAdapter/internal/worker"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 // integrationTestEnv holds the full test environment
 type integrationTestEnv struct {
-	deps           *Dependencies
-	conns          *db.Connections
-	miniredis      *miniredis.Miniredis
-	osmServer      *httptest.Server
-	osmAPICalls    *int32 // atomic counter
-	patrolSyncSvc  *worker.PatrolSyncService
-	cleanup        func()
+	deps        *Dependencies
+	conns       *db.Connections
+	miniredis   *miniredis.Miniredis
+	osmServer   *httptest.Server
+	osmAPICalls *int32 // atomic counter
+	cleanup     func()
 }
 
 // setupIntegrationTest creates a full test environment with all components
 func setupIntegrationTest(t *testing.T) *integrationTestEnv {
 	// Use in-memory SQLite with shared cache and WAL mode for testing
-	// Each test gets a unique database name to ensure isolation
-	// Shared cache allows multiple connections within the same test to access the same database
-	// WAL mode enables better concurrency (allows concurrent reads and writes)
 	dbName := fmt.Sprintf("file:%s?mode=memory&cache=shared&_journal_mode=WAL", t.Name())
 	database, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 	if err != nil {
@@ -134,11 +126,6 @@ func setupIntegrationTest(t *testing.T) *integrationTestEnv {
 	// Create OSM client pointing to mock server
 	osmClient := osm.NewClient(osmServer.URL, nil, nil, nil)
 
-	// Create worker services
-	credentialMgr := worker.NewCredentialManager(conns, nil) // No token refresh for tests
-
-	patrolSyncSvc := worker.NewPatrolSyncService(conns, osmClient, credentialMgr, redisClient)
-
 	// Create handler dependencies
 	cfg := &config.Config{
 		ExternalDomains: config.ExternalDomainsConfig{
@@ -152,10 +139,9 @@ func setupIntegrationTest(t *testing.T) *integrationTestEnv {
 	}
 
 	deps := &Dependencies{
-		Config:     cfg,
-		Conns:      conns,
-		OSM:        osmClient,
-		PatrolSync: patrolSyncSvc,
+		Config: cfg,
+		Conns:  conns,
+		OSM:    osmClient,
 	}
 
 	cleanup := func() {
@@ -165,29 +151,28 @@ func setupIntegrationTest(t *testing.T) *integrationTestEnv {
 	}
 
 	return &integrationTestEnv{
-		deps:          deps,
-		conns:         conns,
-		miniredis:     mr,
-		osmServer:     osmServer,
-		osmAPICalls:   &osmAPICalls,
-		patrolSyncSvc: patrolSyncSvc,
-		cleanup:       cleanup,
+		deps:        deps,
+		conns:       conns,
+		miniredis:   mr,
+		osmServer:   osmServer,
+		osmAPICalls: &osmAPICalls,
+		cleanup:     cleanup,
 	}
 }
 
 // createTestSession creates a web session for testing
 func createTestSession(t *testing.T, env *integrationTestEnv, osmUserID int) *db.WebSession {
 	session := &db.WebSession{
-		ID:             "test-session-id",
-		OSMUserID:      osmUserID,
-		OSMAccessToken: "test-access-token",
-		OSMRefreshToken: "test-refresh-token",
-		OSMTokenExpiry: time.Now().Add(1 * time.Hour),
-		CSRFToken:      "test-csrf-token",
+		ID:                "test-session-id",
+		OSMUserID:         osmUserID,
+		OSMAccessToken:    "test-access-token",
+		OSMRefreshToken:   "test-refresh-token",
+		OSMTokenExpiry:    time.Now().Add(1 * time.Hour),
+		CSRFToken:         "test-csrf-token",
 		SelectedSectionID: func() *int { id := 456; return &id }(),
-		CreatedAt:      time.Now(),
-		LastActivity:   time.Now(),
-		ExpiresAt:      time.Now().Add(24 * time.Hour),
+		CreatedAt:         time.Now(),
+		LastActivity:      time.Now(),
+		ExpiresAt:         time.Now().Add(24 * time.Hour),
 	}
 	if err := websession.Create(env.conns, session); err != nil {
 		t.Fatalf("Failed to create test session: %v", err)
@@ -195,41 +180,33 @@ func createTestSession(t *testing.T, env *integrationTestEnv, osmUserID int) *db
 	return session
 }
 
-// createTestCredentials creates user credentials for testing
-func createTestCredentials(t *testing.T, env *integrationTestEnv, osmUserID int) {
-	credential := &db.UserCredential{
-		OSMUserID:       osmUserID,
-		OSMUserName:     "Test User",
-		OSMEmail:        "test@example.com",
-		OSMAccessToken:  "test-access-token",
-		OSMRefreshToken: "test-refresh-token",
-		OSMTokenExpiry:  time.Now().Add(1 * time.Hour),
-	}
-	if err := usercredentials.CreateOrUpdate(env.conns, credential); err != nil {
-		t.Fatalf("Failed to create test credentials: %v", err)
-	}
-}
-
 // wrapWithMiddleware wraps a handler with SessionMiddleware and CSRFMiddleware
+// and registers it on a ServeMux for proper path parameter handling
 func wrapWithMiddleware(env *integrationTestEnv, handler http.HandlerFunc) http.Handler {
+	// Create a ServeMux for proper path parameter handling
+	mux := http.NewServeMux()
+
 	// Apply middleware in reverse order (innermost first)
 	wrapped := http.Handler(handler)
 	wrapped = middleware.CSRFMiddleware(wrapped)
 	wrapped = middleware.SessionMiddleware(env.conns, AdminSessionCookieName)(wrapped)
-	return wrapped
+
+	// Register the handler with the path pattern
+	mux.Handle("/api/admin/sections/{sectionId}/scores", wrapped)
+
+	return mux
 }
 
-// TestIntegration_FullFlow tests the complete end-to-end flow
-func TestIntegration_FullFlow(t *testing.T) {
+// TestIntegration_BasicScoreUpdate tests a simple successful score update
+func TestIntegration_BasicScoreUpdate(t *testing.T) {
 	env := setupIntegrationTest(t)
 	defer env.cleanup()
 
 	osmUserID := 123
 	sectionID := 456
 
-	// Create session and credentials
+	// Create session
 	session := createTestSession(t, env, osmUserID)
-	createTestCredentials(t, env, osmUserID)
 
 	// Reset OSM API call counter
 	atomic.StoreInt32(env.osmAPICalls, 0)
@@ -238,7 +215,6 @@ func TestIntegration_FullFlow(t *testing.T) {
 	reqBody := AdminUpdateRequest{
 		Updates: []AdminScoreUpdate{
 			{PatrolID: "patrol-1", Points: 10},
-			{PatrolID: "patrol-1", Points: 20}, // Same patrol, should coalesce
 			{PatrolID: "patrol-2", Points: 5},
 		},
 	}
@@ -248,8 +224,6 @@ func TestIntegration_FullFlow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/admin/sections/%d/scores", sectionID), bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", session.CSRFToken)
-	req.Header.Set("X-Idempotency-Key", "test-idempotency-key-1")
-	req.Header.Set("X-Sync-Mode", "background") // Don't trigger interactive sync
 	req.AddCookie(&http.Cookie{Name: AdminSessionCookieName, Value: session.ID})
 
 	// Execute handler with middleware
@@ -257,191 +231,77 @@ func TestIntegration_FullFlow(t *testing.T) {
 	handler := wrapWithMiddleware(env, AdminScoresHandler(env.deps))
 	handler.ServeHTTP(w, req)
 
-	// Verify 202 Accepted
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("Expected status 202, got %d. Body: %s", w.Code, w.Body.String())
+	// Verify 200 OK (synchronous)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
 	}
 
-	// Parse response (now returns optimistic patrol results)
+	// Parse response
 	var resp AdminUpdateResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
-	if !resp.Success {
-		t.Errorf("Expected success=true")
-	}
+	// Verify we got results for 2 patrols
 	if len(resp.Patrols) != 2 {
-		t.Errorf("Expected 2 patrols in response (patrol-1 and patrol-2), got %d", len(resp.Patrols))
+		t.Errorf("Expected 2 patrols in response, got %d", len(resp.Patrols))
 	}
 
-	// Verify optimistic scores (current + pending delta)
-	for _, p := range resp.Patrols {
-		if p.ID == "patrol-1" {
-			// Current: 100, Delta: 10+20=30, Expected: 130
-			if p.NewScore != 130 {
-				t.Errorf("Expected patrol-1 new score 130, got %d", p.NewScore)
-			}
-		} else if p.ID == "patrol-2" {
-			// Current: 50, Delta: 5, Expected: 55
-			if p.NewScore != 55 {
-				t.Errorf("Expected patrol-2 new score 55, got %d", p.NewScore)
-			}
-		}
+	// Verify patrol-1 result
+	patrol1 := findPatrolResult(resp.Patrols, "patrol-1")
+	if patrol1 == nil {
+		t.Fatal("Expected patrol-1 in response")
+	}
+	if !patrol1.Success {
+		t.Errorf("Expected patrol-1 success=true, got false. Error: %v", patrol1.ErrorMessage)
+	}
+	if patrol1.PreviousScore == nil || *patrol1.PreviousScore != 100 {
+		t.Errorf("Expected patrol-1 previous score 100, got %v", patrol1.PreviousScore)
+	}
+	if patrol1.NewScore == nil || *patrol1.NewScore != 110 {
+		t.Errorf("Expected patrol-1 new score 110 (100+10), got %v", patrol1.NewScore)
 	}
 
-	// Verify outbox entries were created
-	pendingCount, err := scoreoutbox.CountPendingByUser(env.conns, osmUserID)
-	if err != nil {
-		t.Fatalf("Failed to count pending entries: %v", err)
+	// Verify patrol-2 result
+	patrol2 := findPatrolResult(resp.Patrols, "patrol-2")
+	if patrol2 == nil {
+		t.Fatal("Expected patrol-2 in response")
 	}
-	if pendingCount != 3 {
-		t.Errorf("Expected 3 pending entries, got %d", pendingCount)
+	if !patrol2.Success {
+		t.Errorf("Expected patrol-2 success=true, got false. Error: %v", patrol2.ErrorMessage)
 	}
-
-	// Verify no OSM calls yet (background mode)
-	if atomic.LoadInt32(env.osmAPICalls) != 0 {
-		t.Errorf("Expected 0 OSM API calls before worker runs, got %d", atomic.LoadInt32(env.osmAPICalls))
+	if patrol2.PreviousScore == nil || *patrol2.PreviousScore != 50 {
+		t.Errorf("Expected patrol-2 previous score 50, got %v", patrol2.PreviousScore)
 	}
-
-	// Manually trigger worker sync for patrol-1
-	ctx := context.Background()
-	_, err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
-	if err != nil {
-		t.Fatalf("SyncPatrol failed: %v", err)
+	if patrol2.NewScore == nil || *patrol2.NewScore != 55 {
+		t.Errorf("Expected patrol-2 new score 55 (50+5), got %v", patrol2.NewScore)
 	}
 
-	// Manually trigger worker sync for patrol-2
-	_, err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-2")
-	if err != nil {
-		t.Fatalf("SyncPatrol failed: %v", err)
-	}
-
-	// Verify OSM was called exactly twice (once per patrol, despite 2 updates for patrol-1)
+	// Verify OSM was called twice (once per patrol)
 	osmCalls := atomic.LoadInt32(env.osmAPICalls)
 	if osmCalls != 2 {
-		t.Errorf("Expected 2 OSM API calls (coalescing worked), got %d", osmCalls)
-	}
-
-	// Verify all entries marked as completed
-	pendingCount, err = scoreoutbox.CountPendingByUser(env.conns, osmUserID)
-	if err != nil {
-		t.Fatalf("Failed to count pending entries: %v", err)
-	}
-	if pendingCount != 0 {
-		t.Errorf("Expected 0 pending entries after sync, got %d", pendingCount)
+		t.Errorf("Expected 2 OSM API calls, got %d", osmCalls)
 	}
 }
 
-// TestIntegration_Idempotency tests that duplicate idempotency keys are handled correctly
-func TestIntegration_Idempotency(t *testing.T) {
+// TestIntegration_ConcurrentUpdates tests concurrent updates to the same patrol
+func TestIntegration_ConcurrentUpdates(t *testing.T) {
 	env := setupIntegrationTest(t)
 	defer env.cleanup()
 
 	osmUserID := 123
 	sectionID := 456
 
-	// Create session and credentials
+	// Create session
 	session := createTestSession(t, env, osmUserID)
-	createTestCredentials(t, env, osmUserID)
-
-	// Reset OSM API call counter
-	atomic.StoreInt32(env.osmAPICalls, 0)
-
-	// Prepare score update request
-	reqBody := AdminUpdateRequest{
-		Updates: []AdminScoreUpdate{
-			{PatrolID: "patrol-1", Points: 10},
-		},
-	}
-	bodyBytes, _ := json.Marshal(reqBody)
-
-	idempotencyKey := "test-idempotency-key-unique"
-
-	// First request
-	req1 := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/admin/sections/%d/scores", sectionID), bytes.NewReader(bodyBytes))
-	req1.Header.Set("Content-Type", "application/json")
-	req1.Header.Set("X-CSRF-Token", session.CSRFToken)
-	req1.Header.Set("X-Idempotency-Key", idempotencyKey)
-	req1.Header.Set("X-Sync-Mode", "background")
-	req1.AddCookie(&http.Cookie{Name: AdminSessionCookieName, Value: session.ID})
-
-	w1 := httptest.NewRecorder()
-	handler := wrapWithMiddleware(env, AdminScoresHandler(env.deps))
-	handler.ServeHTTP(w1, req1)
-
-	if w1.Code != http.StatusAccepted {
-		t.Fatalf("First request: expected status 202, got %d", w1.Code)
-	}
-
-	var resp1 AdminUpdateResponse
-	json.Unmarshal(w1.Body.Bytes(), &resp1)
-	firstResponsePatrols := resp1.Patrols
-
-	// Second request with SAME idempotency key
-	bodyBytes2, _ := json.Marshal(reqBody) // Re-marshal to get fresh reader
-	req2 := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/admin/sections/%d/scores", sectionID), bytes.NewReader(bodyBytes2))
-	req2.Header.Set("Content-Type", "application/json")
-	req2.Header.Set("X-CSRF-Token", session.CSRFToken)
-	req2.Header.Set("X-Idempotency-Key", idempotencyKey) // SAME KEY
-	req2.Header.Set("X-Sync-Mode", "background")
-	req2.AddCookie(&http.Cookie{Name: AdminSessionCookieName, Value: session.ID})
-
-	w2 := httptest.NewRecorder()
-	handler.ServeHTTP(w2, req2)
-
-	if w2.Code != http.StatusAccepted {
-		t.Fatalf("Second request: expected status 202, got %d", w2.Code)
-	}
-
-	var resp2 AdminUpdateResponse
-	json.Unmarshal(w2.Body.Bytes(), &resp2)
-
-	// Verify same patrol results returned (idempotent response)
-	if len(resp2.Patrols) != len(firstResponsePatrols) {
-		t.Errorf("Expected same number of patrols for duplicate request, got %d vs %d", len(resp2.Patrols), len(firstResponsePatrols))
-	}
-
-	// Verify only ONE entry created (not two)
-	pendingCount, err := scoreoutbox.CountPendingByUser(env.conns, osmUserID)
-	if err != nil {
-		t.Fatalf("Failed to count pending entries: %v", err)
-	}
-	if pendingCount != 1 {
-		t.Errorf("Expected 1 pending entry (idempotency worked), got %d", pendingCount)
-	}
-
-	// Process the entry
-	ctx := context.Background()
-	_, _ = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
-
-	// Verify only ONE OSM call made
-	osmCalls := atomic.LoadInt32(env.osmAPICalls)
-	if osmCalls != 1 {
-		t.Errorf("Expected 1 OSM API call (idempotency prevented duplicate), got %d", osmCalls)
-	}
-}
-
-// TestIntegration_ConcurrentSubmissions tests concurrent submissions for the same patrol
-func TestIntegration_ConcurrentSubmissions(t *testing.T) {
-	env := setupIntegrationTest(t)
-	defer env.cleanup()
-
-	osmUserID := 123
-	sectionID := 456
-
-	// Create session and credentials
-	session := createTestSession(t, env, osmUserID)
-	createTestCredentials(t, env, osmUserID)
 
 	// Reset OSM API call counter
 	atomic.StoreInt32(env.osmAPICalls, 0)
 
 	// Launch 3 concurrent requests for the same patrol
-	// Note: Using 3 instead of 5 to accommodate SQLite's concurrency limitations in tests
-	// Production uses PostgreSQL which handles much higher concurrency
 	var wg sync.WaitGroup
-	results := make(chan int, 3) // Status codes
+	results := make([]*AdminUpdateResponse, 3)
+	statusCodes := make([]int, 3)
 
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
@@ -458,145 +318,117 @@ func TestIntegration_ConcurrentSubmissions(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/admin/sections/%d/scores", sectionID), bytes.NewReader(bodyBytes))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-CSRF-Token", session.CSRFToken)
-			req.Header.Set("X-Idempotency-Key", fmt.Sprintf("concurrent-key-%d", index)) // Unique keys
-			req.Header.Set("X-Sync-Mode", "background")
 			req.AddCookie(&http.Cookie{Name: AdminSessionCookieName, Value: session.ID})
 
 			w := httptest.NewRecorder()
 			handler := wrapWithMiddleware(env, AdminScoresHandler(env.deps))
 			handler.ServeHTTP(w, req)
 
-			results <- w.Code
+			statusCodes[index] = w.Code
+
+			var resp AdminUpdateResponse
+			if w.Code == http.StatusOK {
+				json.Unmarshal(w.Body.Bytes(), &resp)
+				results[index] = &resp
+			}
 		}(i)
 	}
 
 	wg.Wait()
-	close(results)
 
-	// Count successful requests
+	// Count successful requests (should get lock) vs locked requests (couldn't get lock)
 	successCount := 0
-	for statusCode := range results {
-		if statusCode == http.StatusAccepted {
-			successCount++
+	lockedCount := 0
+	for i := 0; i < 3; i++ {
+		if statusCodes[i] == http.StatusOK && results[i] != nil && len(results[i].Patrols) > 0 {
+			if results[i].Patrols[0].Success {
+				successCount++
+			} else if results[i].Patrols[0].IsTemporaryError != nil && *results[i].Patrols[0].IsTemporaryError {
+				lockedCount++
+			}
 		}
 	}
 
-	// Verify at least 2 out of 3 succeeded (SQLite concurrency limitation)
-	if successCount < 2 {
-		t.Fatalf("Expected at least 2 successful requests, got %d", successCount)
+	// Only one request should succeed (got the lock)
+	if successCount != 1 {
+		t.Errorf("Expected exactly 1 successful request (got lock), got %d", successCount)
 	}
 
-	// Verify entries were created (at least 2)
-	pendingCount, err := scoreoutbox.CountPendingByUser(env.conns, osmUserID)
-	if err != nil {
-		t.Fatalf("Failed to count pending entries: %v", err)
-	}
-	if pendingCount < 2 {
-		t.Fatalf("Expected at least 2 pending entries, got %d", pendingCount)
-	}
-	if pendingCount > 3 {
-		t.Fatalf("Expected at most 3 pending entries, got %d", pendingCount)
+	// The other 2 should fail with lock contention
+	if lockedCount != 2 {
+		t.Errorf("Expected 2 requests to fail with lock contention, got %d", lockedCount)
 	}
 
-	// Now trigger sync (worker would coalesce all entries into 1 OSM call)
-	ctx := context.Background()
-	_, err = env.patrolSyncSvc.SyncPatrol(ctx, osmUserID, sectionID, "patrol-1")
-	if err != nil {
-		t.Fatalf("SyncPatrol failed: %v", err)
-	}
-
-	// Verify only ONE OSM call made (coalescing worked)
-	// This proves that even though 2-3 entries were created concurrently,
-	// the worker coalesced them into a single update
+	// Verify only ONE OSM call was made (only the successful one)
 	osmCalls := atomic.LoadInt32(env.osmAPICalls)
 	if osmCalls != 1 {
-		t.Errorf("Expected 1 OSM API call (entries coalesced), got %d", osmCalls)
-	}
-
-	// Verify all entries marked as completed
-	pendingCount, err = scoreoutbox.CountPendingByUser(env.conns, osmUserID)
-	if err != nil {
-		t.Fatalf("Failed to count pending entries: %v", err)
-	}
-	if pendingCount != 0 {
-		t.Errorf("Expected 0 pending entries after sync, got %d", pendingCount)
+		t.Errorf("Expected 1 OSM API call (only successful request), got %d", osmCalls)
 	}
 }
 
-// TestIntegration_InteractiveMode tests that interactive mode triggers immediate sync
-func TestIntegration_InteractiveMode(t *testing.T) {
+// TestIntegration_MultiplePatrols tests updating multiple different patrols
+func TestIntegration_MultiplePatrols(t *testing.T) {
 	env := setupIntegrationTest(t)
 	defer env.cleanup()
 
 	osmUserID := 123
 	sectionID := 456
 
-	// Create session and credentials
+	// Create session
 	session := createTestSession(t, env, osmUserID)
-	createTestCredentials(t, env, osmUserID)
 
 	// Reset OSM API call counter
 	atomic.StoreInt32(env.osmAPICalls, 0)
 
-	// Prepare score update request
+	// Update both patrols
 	reqBody := AdminUpdateRequest{
 		Updates: []AdminScoreUpdate{
-			{PatrolID: "patrol-1", Points: 10},
+			{PatrolID: "patrol-1", Points: 25},
+			{PatrolID: "patrol-2", Points: 15},
 		},
 	}
 	bodyBytes, _ := json.Marshal(reqBody)
 
-	// Create HTTP request with interactive mode
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/admin/sections/%d/scores", sectionID), bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", session.CSRFToken)
-	req.Header.Set("X-Idempotency-Key", "test-interactive-key")
-	req.Header.Set("X-Sync-Mode", "interactive") // Interactive mode
 	req.AddCookie(&http.Cookie{Name: AdminSessionCookieName, Value: session.ID})
 
-	// Execute handler with middleware
 	w := httptest.NewRecorder()
 	handler := wrapWithMiddleware(env, AdminScoresHandler(env.deps))
 	handler.ServeHTTP(w, req)
 
-	// Verify 200 OK (interactive sync completed successfully within timeout)
 	if w.Code != http.StatusOK {
-		t.Fatalf("Expected status 200 (interactive sync succeeded), got %d. Body: %s", w.Code, w.Body.String())
+		t.Fatalf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
 	}
 
-	// Parse response
 	var resp AdminUpdateResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("Failed to parse response: %v", err)
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	// Both should succeed
+	if len(resp.Patrols) != 2 {
+		t.Fatalf("Expected 2 patrols, got %d", len(resp.Patrols))
 	}
 
-	if !resp.Success {
-		t.Errorf("Expected success=true")
-	}
-	if len(resp.Patrols) != 1 {
-		t.Errorf("Expected 1 patrol in response, got %d", len(resp.Patrols))
-	}
-
-	// Verify actual synced score returned (not optimistic)
-	if resp.Patrols[0].ID == "patrol-1" {
-		// Current was 100, added 10, should be 110
-		if resp.Patrols[0].NewScore != 110 {
-			t.Errorf("Expected new score 110, got %d", resp.Patrols[0].NewScore)
+	for _, p := range resp.Patrols {
+		if !p.Success {
+			t.Errorf("Expected patrol %s to succeed, got error: %v", p.ID, p.ErrorMessage)
 		}
 	}
 
-	// Verify OSM was called (interactive mode triggered sync)
+	// Verify both OSM calls were made
 	osmCalls := atomic.LoadInt32(env.osmAPICalls)
-	if osmCalls != 1 {
-		t.Errorf("Expected 1 OSM API call (interactive mode triggered sync), got %d", osmCalls)
+	if osmCalls != 2 {
+		t.Errorf("Expected 2 OSM API calls, got %d", osmCalls)
 	}
+}
 
-	// Verify entry marked as completed
-	pendingCount, err := scoreoutbox.CountPendingByUser(env.conns, osmUserID)
-	if err != nil {
-		t.Fatalf("Failed to count pending entries: %v", err)
+// Helper function to find a patrol result by ID
+func findPatrolResult(patrols []AdminPatrolResult, patrolID string) *AdminPatrolResult {
+	for _, p := range patrols {
+		if p.ID == patrolID {
+			return &p
+		}
 	}
-	if pendingCount != 0 {
-		t.Errorf("Expected 0 pending entries after interactive sync, got %d", pendingCount)
-	}
+	return nil
 }

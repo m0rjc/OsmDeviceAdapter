@@ -1,8 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { ToastContext } from './ToastContext';
-
-type ToastType = 'success' | 'error' | 'warning';
+import type { ToastType } from './ToastContext';
 
 interface Toast {
   id: number;

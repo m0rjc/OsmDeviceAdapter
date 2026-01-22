@@ -62,7 +62,7 @@ func (srv *ScoreUpdateService) UpdateScores(ctx context.Context, user types.User
 		return nil, err
 	}
 
-	results := make([]UpdateResponse, len(currentScores))
+	results := make([]UpdateResponse, len(requests))
 	for i, request := range requests {
 		currentScore := findPatrolScore(currentScores, request.PatrolID)
 		if currentScore == nil {
@@ -80,10 +80,19 @@ func (srv *ScoreUpdateService) UpdateScores(ctx context.Context, user types.User
 		newScore := currentScore.Score + request.Delta
 		err = srv.osmClient.UpdatePatrolScore(ctx, user, sectionId, request.PatrolID, newScore)
 		if err != nil {
-			modelResponse := newOsmErrorUpdateResponse(sectionId, &request, currentScore, err)
+			modelResponse := newOsmErrorUpdateResponse(&request, currentScore, err)
 			abandonRemainingWork(requests, results, currentScores, i, modelResponse)
 			// TODO: Logging
 			break
+		}
+
+		// Success case - populate result
+		results[i] = UpdateResponse{
+			PatrolID:      request.PatrolID,
+			PatrolName:    currentScore.Name,
+			Success:       true,
+			PreviousScore: toPtr(currentScore.Score),
+			NewScore:      toPtr(newScore),
 		}
 	}
 	return results, nil
@@ -111,7 +120,7 @@ func newLockedUpdateResponse(request UpdateRequest, currentScore *types.PatrolSc
 	}
 }
 
-func newOsmErrorUpdateResponse(sectionId int, request *UpdateRequest, currentScore *types.PatrolScore, err error) *UpdateResponse {
+func newOsmErrorUpdateResponse(request *UpdateRequest, currentScore *types.PatrolScore, err error) *UpdateResponse {
 	response := UpdateResponse{
 		PatrolID:         request.PatrolID,
 		PatrolName:       currentScore.Name,

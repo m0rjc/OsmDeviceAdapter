@@ -69,28 +69,6 @@ var (
 		Help: "Total HTTP requests by method, path, and status",
 	}, []string{"method", "path", "status"})
 
-	// Score outbox metrics
-	ScoreOutboxEntriesCreated = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "score_outbox_entries_created_total",
-		Help: "Total number of score outbox entries created",
-	})
-
-	ScoreOutboxEntriesProcessed = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "score_outbox_entries_processed_total",
-		Help: "Total number of score outbox entries processed by final status",
-	}, []string{"status"}) // status: completed|failed|auth_revoked
-
-	ScoreOutboxSyncDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "score_outbox_sync_duration_seconds",
-		Help:    "Duration of score outbox sync operations",
-		Buckets: []float64{.1, .25, .5, 1, 2.5, 5, 10, 30},
-	})
-
-	ScoreOutboxPendingEntries = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "score_outbox_pending_entries",
-		Help: "Number of pending entries in the score outbox",
-	})
-
 	// User credentials metrics
 	UserCredentialsActive = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "user_credentials_active",
@@ -115,10 +93,6 @@ func init() {
 	Registry.MustRegister(CacheOperations)
 	Registry.MustRegister(HTTPRequestDuration)
 	Registry.MustRegister(HTTPRequestsTotal)
-	Registry.MustRegister(ScoreOutboxEntriesCreated)
-	Registry.MustRegister(ScoreOutboxEntriesProcessed)
-	Registry.MustRegister(ScoreOutboxSyncDuration)
-	Registry.MustRegister(ScoreOutboxPendingEntries)
 	Registry.MustRegister(UserCredentialsActive)
 	Registry.MustRegister(UserCredentialsCleaned)
 }

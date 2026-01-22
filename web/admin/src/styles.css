@@ -766,3 +766,76 @@ body {
     left: 0;
   }
 }
+
+/* Failed Updates Banner */
+.failed-updates-banner {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background-color: #fef2f2;
+  border: 2px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  align-items: flex-start;
+}
+
+.banner-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.banner-content {
+  flex-grow: 1;
+}
+
+.banner-content strong {
+  color: var(--color-danger);
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 1.1rem;
+}
+
+.banner-content p {
+  margin: 0.5rem 0;
+}
+
+.banner-content ul {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.banner-content li {
+  margin: 0.25rem 0;
+}
+
+.error-detail {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.banner-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-direction: column;
+}
+
+.banner-actions button {
+  white-space: nowrap;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+  .failed-updates-banner {
+    flex-direction: column;
+  }
+
+  .banner-actions {
+    flex-direction: row;
+    width: 100%;
+  }
+
+  .banner-actions button {
+    flex: 1;
+  }
+}

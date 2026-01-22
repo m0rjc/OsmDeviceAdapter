@@ -4,17 +4,33 @@ import {
   fetchScores,
   updateScores,
   ApiError,
-  OfflineQueuedError,
-  getPendingPointsByPatrol,
-  onConnectivityChange,
-  isOnline,
-  manualSyncPendingScores,
-  resetStuckSyncingEntries,
 } from '../api';
 import type { Patrol } from '../api';
+import { OpenOfflineStore, OutboxEntry } from '../offlineStore';
 import { Loading } from './Loading';
 import { ConfirmDialog } from './ConfirmDialog';
-import { Menu } from './Menu';
+
+// Helper to check if online
+const isOnline = () => typeof navigator !== 'undefined' && navigator.onLine;
+
+// Helper to listen for connectivity changes
+const onConnectivityChange = (callback: (online: boolean) => void) => {
+  const handleOnline = () => callback(true);
+  const handleOffline = () => callback(false);
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('offline', handleOffline);
+  return () => {
+    window.removeEventListener('online', handleOnline);
+    window.removeEventListener('offline', handleOffline);
+  };
+};
+
+// Helper to trigger manual sync
+const manualSyncPendingScores = async () => {
+  if (navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: 'MANUAL_SYNC' });
+  }
+};
 
 interface PatrolWithInput extends Patrol {
   pointsToAdd: number;
@@ -34,6 +50,7 @@ export function ScoreEntry() {
   const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [pendingPoints, setPendingPoints] = useState<Map<string, number>>(new Map());
+  const [failedEntries, setFailedEntries] = useState<OutboxEntry[]>([]);
   const [online, setOnline] = useState(isOnline());
 
   // Refs for debouncing sync-triggered refreshes and consolidating toasts
@@ -74,24 +91,44 @@ export function ScoreEntry() {
   // Load pending points from IndexedDB
   const loadPendingPoints = useCallback(async (sectionId: number) => {
     try {
-      const pending = await getPendingPointsByPatrol(sectionId);
+      const store = await OpenOfflineStore();
+      const allPending = await store.getAllPending();
+
+      // Filter to current section and build map
+      const pending = new Map<string, number>();
+      for (const entry of allPending) {
+        if (entry.sectionId === sectionId.toString() && entry.retryAfter !== -1) {
+          // Only include entries that aren't permanently failed
+          pending.set(entry.patrolId, entry.scoreDelta);
+        }
+      }
+
       setPendingPoints(pending);
     } catch {
       // Ignore errors loading pending points
     }
   }, []);
 
-  // Reset stuck syncing entries on mount
-  useEffect(() => {
-    resetStuckSyncingEntries().catch(console.error);
+  // Load failed entries from IndexedDB
+  const loadFailedEntries = useCallback(async (sectionId: number) => {
+    try {
+      const store = await OpenOfflineStore();
+      const failed = await store.getFailedEntries();
+      // Filter to current section
+      const failedForSection = failed.filter(e => e.sectionId === sectionId.toString());
+      setFailedEntries(failedForSection);
+    } catch {
+      // Ignore errors loading failed entries
+    }
   }, []);
 
   useEffect(() => {
     if (selectedSectionId) {
       loadScores(selectedSectionId);
       loadPendingPoints(selectedSectionId);
+      loadFailedEntries(selectedSectionId);
     }
-  }, [selectedSectionId, loadScores, loadPendingPoints]);
+  }, [selectedSectionId, loadScores, loadPendingPoints, loadFailedEntries]);
 
   // Listen for online/offline status changes
   useEffect(() => {
@@ -99,17 +136,23 @@ export function ScoreEntry() {
       setOnline(isNowOnline);
       if (isNowOnline && selectedSectionId) {
         // Check if there are pending updates to sync
-        const pending = await getPendingPointsByPatrol(selectedSectionId);
-        if (pending.size === 0) {
+        const store = await OpenOfflineStore();
+        const pending = await store.getPendingForSyncNow();
+        const pendingForSection = pending.filter(e => e.sectionId === selectedSectionId.toString());
+
+        if (pendingForSection.length === 0) {
           // No pending sync - refresh immediately
           loadScores(selectedSectionId, true);
+        } else {
+          // Trigger sync for pending updates
+          await manualSyncPendingScores();
+          // SYNC_SUCCESS handler will refresh pending points and failed entries
         }
-        // If there are pending updates, wait for SYNC_SUCCESS to refresh
-        // This ensures we get the correct data after sync completes
         loadPendingPoints(selectedSectionId);
+        loadFailedEntries(selectedSectionId);
       }
     });
-  }, [selectedSectionId, loadScores, loadPendingPoints]);
+  }, [selectedSectionId, loadScores, loadPendingPoints, loadFailedEntries]);
 
   // Periodic fallback sync for mobile browsers (where background sync may not work)
   useEffect(() => {
@@ -119,9 +162,12 @@ export function ScoreEntry() {
     const intervalId = setInterval(async () => {
       // Only sync if online and not currently syncing
       if (online && !isSyncing) {
-        const pending = await getPendingPointsByPatrol(selectedSectionId);
-        if (pending.size > 0) {
-          console.log(`[Periodic Sync] Found ${pending.size} pending patrol(s), triggering sync`);
+        const store = await OpenOfflineStore();
+        const pending = await store.getPendingForSyncNow();
+        const pendingForSection = pending.filter(e => e.sectionId === selectedSectionId.toString());
+
+        if (pendingForSection.length > 0) {
+          console.log(`[Periodic Sync] Found ${pendingForSection.length} pending patrol(s), triggering sync`);
           handleManualSync();
         }
       }
@@ -129,6 +175,49 @@ export function ScoreEntry() {
 
     return () => clearInterval(intervalId);
   }, [selectedSectionId, online, isSyncing]);
+
+  // Detect removed patrols with pending updates
+  useEffect(() => {
+    if (patrols.length === 0 || pendingPoints.size === 0) return;
+
+    const currentPatrolIds = new Set(patrols.map(p => p.id));
+    const orphanedPending = Array.from(pendingPoints.entries())
+      .filter(([id]) => !currentPatrolIds.has(id));
+
+    if (orphanedPending.length > 0) {
+      const patrolList = orphanedPending.map(([id, points]) => `  • Patrol ${id}: ${points} points`).join('\n');
+
+      const shouldClear = confirm(
+        `You have pending changes for ${orphanedPending.length} patrol(s) that no longer exist:\n\n` +
+        `${patrolList}\n\n` +
+        `These patrols may have been removed or merged. Clear these pending updates?`
+      );
+
+      if (shouldClear && selectedSectionId) {
+        (async () => {
+          const store = await OpenOfflineStore();
+          for (const [id] of orphanedPending) {
+            await store.clear(selectedSectionId.toString(), id);
+          }
+          await loadPendingPoints(selectedSectionId);
+          showToast('info', `Cleared ${orphanedPending.length} orphaned update(s)`);
+        })();
+      }
+    }
+  }, [patrols, pendingPoints, selectedSectionId, loadPendingPoints, showToast]);
+
+  // Listen for pendingCleared event from Header
+  useEffect(() => {
+    const handlePendingCleared = () => {
+      if (selectedSectionId) {
+        loadPendingPoints(selectedSectionId);
+        loadFailedEntries(selectedSectionId);
+      }
+    };
+
+    window.addEventListener('pendingCleared', handlePendingCleared);
+    return () => window.removeEventListener('pendingCleared', handlePendingCleared);
+  }, [selectedSectionId, loadPendingPoints, loadFailedEntries]);
 
   // Listen for service worker sync messages
   useEffect(() => {
@@ -169,16 +258,23 @@ export function ScoreEntry() {
           }
           syncedSectionsRef.current.clear();
 
-          // Only refresh pending points (not scores) - scores were already updated above
+          // Refresh pending points and failed entries
           if (selectedSectionId) {
             loadPendingPoints(selectedSectionId);
+            loadFailedEntries(selectedSectionId);
           }
           syncRefreshTimeoutRef.current = null;
         }, 100);
+
+        // Check if there are permanent errors
+        if (event.data.hasPermanentErrors) {
+          showToast('error', 'Some updates failed. See details above.');
+        }
       } else if (event.data?.type === 'SYNC_ERROR') {
         showToast('error', event.data.error || 'Failed to sync pending scores');
         if (selectedSectionId) {
           loadPendingPoints(selectedSectionId);
+          loadFailedEntries(selectedSectionId);
         }
       }
       // Note: SYNC_AUTH_REQUIRED is handled globally by SyncAuthHandler in App.tsx
@@ -191,7 +287,7 @@ export function ScoreEntry() {
         clearTimeout(syncRefreshTimeoutRef.current);
       }
     };
-  }, [selectedSectionId, loadScores, loadPendingPoints, showToast]);
+  }, [selectedSectionId, loadScores, loadPendingPoints, loadFailedEntries, showToast]);
 
   const handlePointsChange = (patrolId: string, value: string) => {
     const points = value === '' || value === '-' ? 0 : parseInt(value, 10);
@@ -259,58 +355,122 @@ export function ScoreEntry() {
     setIsSubmitting(true);
 
     try {
+      // Add entries to offline store first (for offline sync)
+      const store = await OpenOfflineStore();
+      for (const change of changes) {
+        await store.addPoints(
+          selectedSectionId.toString(),
+          change.patrolId,
+          change.points
+        );
+      }
+
       // Strip patrolName before sending to server (only used for confirmation dialog)
       const updatesForServer = changes.map(c => ({
         patrolId: c.patrolId,
         points: c.points,
       }));
 
-      const result = await updateScores(
+      // Try to submit immediately
+      const response = await updateScores(
         selectedSectionId,
         updatesForServer,
         csrfToken
       );
 
-      if (result.success && result.patrols && result.patrols.length > 0) {
-        // Update local state with scores from response
-        // Both 200 OK and 202 Accepted return patrol data
-        setPatrols(prev =>
-          prev.map(p => {
-            const updated = result.patrols!.find(r => r.id === p.id);
-            if (updated) {
-              return { ...p, score: updated.newScore, pointsToAdd: 0 };
-            }
-            return p;
-          })
-        );
+      if (response.ok) {
+        // Parse response to get patrol results
+        const result = await response.json();
 
-        // Show appropriate toast based on response status
-        if (result.status === 'accepted') {
-          showToast('success', `Scores updated (syncing to OSM in background)`);
-        } else {
-          showToast('success', `Updated ${result.patrols.length} patrol(s)`);
+        // Clear successful entries from store
+        if (result.patrols && result.patrols.length > 0) {
+          for (const patrol of result.patrols) {
+            if (patrol.success) {
+              await store.clear(selectedSectionId.toString(), patrol.id);
+            }
+          }
+
+          // Update local state with scores from response
+          setPatrols(prev =>
+            prev.map(p => {
+              const updated = result.patrols.find((r: any) => r.id === p.id);
+              if (updated && updated.newScore !== undefined) {
+                return { ...p, score: updated.newScore, pointsToAdd: 0 };
+              }
+              return p;
+            })
+          );
         }
 
-        // Reload pending points to reflect any queued changes
-        loadPendingPoints(selectedSectionId);
+        showToast('success', `Scores updated`);
+      } else if (response.status === 202) {
+        // Accepted - service worker will sync in background
+        showToast('success', 'Scores queued for sync');
+      } else {
+        // Error - leave in store for service worker to retry
+        showToast('error', 'Failed to update scores - will retry automatically');
       }
+
+      // Clear input fields
+      setPatrols(prev => prev.map(p => ({ ...p, pointsToAdd: 0 })));
+
+      // Reload pending display
+      await loadPendingPoints(selectedSectionId);
+      await loadFailedEntries(selectedSectionId);
 
       setShowConfirm(false);
     } catch (err) {
-      if (err instanceof OfflineQueuedError) {
-        // Changes were queued for later sync
-        showToast('warning', 'Offline - changes queued for sync');
-        // Clear the input fields and update pending points display
-        setPatrols(prev => prev.map(p => ({ ...p, pointsToAdd: 0 })));
-        loadPendingPoints(selectedSectionId);
-        setShowConfirm(false);
+      // Check if this is a network error (offline) or a different error
+      const isNetworkError = err instanceof TypeError && err.message.includes('fetch');
+
+      if (isNetworkError || !navigator.onLine) {
+        // Network error - entries already in store, service worker will retry
+        showToast('warning', 'Offline - scores will sync when online');
       } else {
+        // Other error - show specific message if available
         const message = err instanceof ApiError ? err.message : 'Failed to update scores';
         showToast('error', message);
       }
+
+      // Clear input fields
+      setPatrols(prev => prev.map(p => ({ ...p, pointsToAdd: 0 })));
+
+      // Reload pending display
+      await loadPendingPoints(selectedSectionId);
+
+      setShowConfirm(false);
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleRetryFailed = async () => {
+    if (!selectedSectionId) return;
+
+    const store = await OpenOfflineStore();
+    for (const entry of failedEntries) {
+      // Reset to retryAfter=0 for immediate retry
+      await store.setRetryAfter(entry.sectionId, entry.patrolId, new Date(0));
+    }
+    await manualSyncPendingScores();
+    showToast('info', 'Retrying failed updates...');
+  };
+
+  const handleClearFailed = async () => {
+    if (!selectedSectionId) return;
+
+    if (!confirm(`Clear ${failedEntries.length} failed update(s)? This cannot be undone.`)) {
+      return;
+    }
+
+    const store = await OpenOfflineStore();
+    for (const entry of failedEntries) {
+      await store.clear(entry.sectionId, entry.patrolId);
+    }
+
+    setFailedEntries([]);
+    await loadPendingPoints(selectedSectionId);
+    showToast('success', 'Failed updates cleared');
   };
 
   const hasChanges = patrols.some(p => p.pointsToAdd !== 0);
@@ -361,6 +521,32 @@ export function ScoreEntry() {
             {fetchedAt && <span>Updated {fetchedAt.toLocaleTimeString()}</span>}
           </div>
         </div>
+
+        {failedEntries.length > 0 && (
+          <div className="failed-updates-banner">
+            <div className="banner-icon">⚠️</div>
+            <div className="banner-content">
+              <strong>Some updates failed to sync</strong>
+              <p>{failedEntries.length} update(s) could not be saved. Details:</p>
+              <ul>
+                {failedEntries.map(entry => (
+                  <li key={entry.key}>
+                    Patrol {entry.patrolId}: {entry.scoreDelta > 0 ? '+' : ''}{entry.scoreDelta} points
+                    <span className="error-detail"> - {entry.errorMessage}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="banner-actions">
+              <button className="btn btn-secondary" onClick={handleRetryFailed}>
+                Retry All
+              </button>
+              <button className="btn btn-secondary" onClick={handleClearFailed}>
+                Clear All
+              </button>
+            </div>
+          </div>
+        )}
 
         {patrols.length === 0 ? (
           <div className="empty-state">
@@ -416,17 +602,6 @@ export function ScoreEntry() {
         )}
 
         <div className="action-bar">
-          {hasPendingSync && (
-            <Menu
-              options={[
-                {
-                  label: isSyncing ? 'Syncing...' : 'Sync Now',
-                  onClick: handleManualSync,
-                  disabled: isSyncing || !online,
-                },
-              ]}
-            />
-          )}
           <button
             className="btn btn-secondary"
             onClick={handleRefresh}
