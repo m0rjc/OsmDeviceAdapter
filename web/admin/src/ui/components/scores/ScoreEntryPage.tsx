@@ -24,7 +24,7 @@ import { useToast } from '../../../hooks';
 import { ScoreHeader } from './ScoreHeader';
 import { PatrolList } from './PatrolList';
 import { ScoreActions } from './ScoreActions';
-import { EmptyState } from './EmptyState';
+import { MessageCard } from './MessageCard.tsx';
 
 interface ScoreEntryPageProps {
   /** CSRF token for authenticated API requests */
@@ -306,7 +306,7 @@ export function ScoreEntryPage({ csrfToken }: ScoreEntryPageProps) {
   // Render empty states
   if (!selectedSection) {
     return (
-      <EmptyState
+      <MessageCard
         title="No Section Selected"
         message="Please select a section to view and edit patrol scores."
       />
@@ -319,7 +319,7 @@ export function ScoreEntryPage({ csrfToken }: ScoreEntryPageProps) {
 
   if (error && !patrols) {
     return (
-      <EmptyState
+      <MessageCard
         title="Error Loading Scores"
         message={error}
         action={{

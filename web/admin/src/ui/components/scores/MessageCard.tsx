@@ -35,7 +35,7 @@ interface EmptyStateProps {
  * />
  * ```
  */
-export function EmptyState({ title, message, action }: EmptyStateProps) {
+export function MessageCard({ title, message, action }: EmptyStateProps) {
   return (
     <div className="empty-state">
       <h3>{title}</h3>
