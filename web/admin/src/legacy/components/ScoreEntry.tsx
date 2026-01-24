@@ -10,8 +10,8 @@ import {
   isOnline,
 } from '../api';
 import type { Patrol } from '../api';
-import { Loading } from './Loading';
-import { ConfirmDialog } from './ConfirmDialog';
+import { Loading } from './Loading.tsx';
+import { ConfirmDialog } from './ConfirmDialog.tsx';
 
 interface PatrolWithInput extends Patrol {
   pointsToAdd: number;

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { fetchSession, fetchSections, ApiError } from '../api';
-import { AuthContext } from './AuthContextTypes';
-import type { AuthState, AuthContextType } from './AuthContextTypes';
+import { AuthContext } from './AuthContextTypes.ts';
+import type { AuthState, AuthContextType } from './AuthContextTypes.ts';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({

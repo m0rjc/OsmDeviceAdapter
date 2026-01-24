@@ -3,7 +3,7 @@
  * When offline, score changes are stored locally and synced when back online.
  */
 
-import type { ScoreUpdate } from './types';
+import type { ScoreUpdate } from './types.ts';
 
 const DB_NAME = 'penguin-patrol-scores';
 const DB_VERSION = 1;

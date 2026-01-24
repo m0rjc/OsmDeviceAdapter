@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context';
-import { useAuth } from './hooks';
-import { ToastProvider, Header, SectionSelector, ScoreEntry, Loading, LoginPage, UpdatePrompt, SyncAuthHandler } from './components';
+import { AuthProvider } from './legacy/context';
+import { useAuth } from './legacy/hooks';
+import { ToastProvider, Header, SectionSelector, ScoreEntry, Loading, LoginPage, UpdatePrompt, SyncAuthHandler } from './legacy/components';
 import './styles.css';
 
 function ScoresPage() {

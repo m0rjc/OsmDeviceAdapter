@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getPendingSyncMessage } from './SyncAuthHandler';
+import { getPendingSyncMessage } from './SyncAuthHandler.tsx';
 
 export function LoginPage() {
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);

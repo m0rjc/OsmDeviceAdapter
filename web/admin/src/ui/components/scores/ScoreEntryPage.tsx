@@ -17,10 +17,10 @@ import {
   getPendingPointsByPatrol,
   onConnectivityChange,
   isOnline,
-} from '../../../api';
-import { Loading } from '../../../components/Loading';
-import { ConfirmDialog } from '../../../components/ConfirmDialog';
-import { useToast } from '../../../hooks';
+} from '../../../legacy/api';
+import { Loading } from '../../../legacy/components/Loading';
+import { ConfirmDialog } from '../../../legacy/components/ConfirmDialog';
+import { useToast } from '../../../legacy/hooks';
 import { ScoreHeader } from './ScoreHeader';
 import { PatrolList } from './PatrolList';
 import { ScoreActions } from './ScoreActions';

@@ -5,8 +5,8 @@ import type {
   UpdateRequest,
   UpdateResponse,
   ErrorResponse,
-} from './types';
-import { queueUpdate, isOnline, requestBackgroundSync } from './offlineQueue';
+} from './types.ts';
+import { queueUpdate, isOnline, requestBackgroundSync } from './offlineQueue.ts';
 
 class ApiError extends Error {
   statusCode: number;
