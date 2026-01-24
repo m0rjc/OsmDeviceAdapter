@@ -11,6 +11,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/services/scoreupdateservice"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -75,10 +76,14 @@ type AdminUpdateResponse struct {
 
 // AdminPatrolResult contains the result of a single patrol score update
 type AdminPatrolResult struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	PreviousScore int    `json:"previousScore"`
-	NewScore      int    `json:"newScore"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Success          bool       `json:"success"`
+	PreviousScore    int        `json:"previousScore"`
+	NewScore         int        `json:"newScore"`
+	IsTemporaryError *bool      `json:"isTemporaryError,omitempty"`
+	RetryAfter       *time.Time `json:"retryAfter,omitempty"`
+	ErrorMessage     *string    `json:"errorMessage,omitempty"`
 }
 
 // AdminErrorResponse is used for error responses
@@ -378,85 +383,64 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		}
 	}
 
-	// Get the current term for the section
-	termInfo, err := deps.OSM.FetchActiveTermForSection(ctx, user, sectionID)
+	// Convert to service request format
+	serviceRequests := make([]scoreupdateservice.UpdateRequest, len(req.Updates))
+	for i, update := range req.Updates {
+		serviceRequests[i] = scoreupdateservice.UpdateRequest{
+			PatrolID: update.PatrolID,
+			Delta:    update.Points,
+		}
+	}
+
+	// Call the score update service
+	serviceResults, err := deps.ScoreUpdateService.UpdateScores(ctx, user, sectionID, serviceRequests)
 	if err != nil {
-		slog.Error("admin.api.scores.term_fetch_failed",
+		slog.Error("admin.api.scores.service_error",
 			"component", "admin_api",
 			"event", "scores.update_error",
 			"section_id", sectionID,
 			"error", err,
 		)
-		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to determine current term")
+		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to update scores")
 		return
 	}
 
-	// Fetch current patrol scores
-	currentScores, _, err := deps.OSM.FetchPatrolScores(ctx, user, sectionID, termInfo.TermID)
-	if err != nil {
-		slog.Error("admin.api.scores.fetch_failed",
-			"component", "admin_api",
-			"event", "scores.update_error",
-			"section_id", sectionID,
-			"error", err,
-		)
-		writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to fetch current scores")
-		return
-	}
+	// Convert service results to API response format and prepare audit logs
+	results := make([]AdminPatrolResult, 0, len(serviceResults))
+	auditLogs := make([]db.ScoreAuditLog, 0, len(serviceResults))
 
-	// Build a map of current scores for quick lookup
-	scoreMap := make(map[string]types.PatrolScore)
-	for _, p := range currentScores {
-		scoreMap[p.ID] = p
-	}
-
-	// Process updates
-	results := make([]AdminPatrolResult, 0, len(req.Updates))
-	auditLogs := make([]db.ScoreAuditLog, 0, len(req.Updates))
-
-	for _, update := range req.Updates {
-		patrol, exists := scoreMap[update.PatrolID]
-		if !exists {
-			slog.Warn("admin.api.scores.patrol_not_found",
-				"component", "admin_api",
-				"event", "scores.update_warning",
-				"patrol_id", update.PatrolID,
-			)
-			continue // Skip unknown patrols
+	for _, serviceResult := range serviceResults {
+		result := AdminPatrolResult{
+			ID:               serviceResult.PatrolID,
+			Name:             serviceResult.PatrolName,
+			Success:          serviceResult.Success,
+			IsTemporaryError: serviceResult.IsTemporaryError,
+			RetryAfter:       serviceResult.RetryAfter,
+			ErrorMessage:     serviceResult.ErrorMessage,
 		}
 
-		previousScore := patrol.Score
-		newScore := previousScore + update.Points
-
-		// Update the score in OSM
-		if err := deps.OSM.UpdatePatrolScore(ctx, user, sectionID, update.PatrolID, newScore); err != nil {
-			slog.Error("admin.api.scores.update_failed",
-				"component", "admin_api",
-				"event", "scores.update_error",
-				"patrol_id", update.PatrolID,
-				"error", err,
-			)
-			writeJSONError(w, http.StatusBadGateway, "osm_error", "Failed to update patrol score")
-			return
+		if serviceResult.PreviousScore != nil {
+			result.PreviousScore = *serviceResult.PreviousScore
+		}
+		if serviceResult.NewScore != nil {
+			result.NewScore = *serviceResult.NewScore
 		}
 
-		results = append(results, AdminPatrolResult{
-			ID:            patrol.ID,
-			Name:          patrol.Name,
-			PreviousScore: previousScore,
-			NewScore:      newScore,
-		})
+		results = append(results, result)
 
-		// Prepare audit log entry
-		auditLogs = append(auditLogs, db.ScoreAuditLog{
-			OSMUserID:     session.OSMUserID,
-			SectionID:     sectionID,
-			PatrolID:      update.PatrolID,
-			PatrolName:    patrol.Name,
-			PreviousScore: previousScore,
-			NewScore:      newScore,
-			PointsAdded:   update.Points,
-		})
+		// Only create audit log for successful updates
+		if serviceResult.Success && serviceResult.PreviousScore != nil && serviceResult.NewScore != nil {
+			pointsAdded := *serviceResult.NewScore - *serviceResult.PreviousScore
+			auditLogs = append(auditLogs, db.ScoreAuditLog{
+				OSMUserID:     session.OSMUserID,
+				SectionID:     sectionID,
+				PatrolID:      serviceResult.PatrolID,
+				PatrolName:    serviceResult.PatrolName,
+				PreviousScore: *serviceResult.PreviousScore,
+				NewScore:      *serviceResult.NewScore,
+				PointsAdded:   pointsAdded,
+			})
+		}
 	}
 
 	// Create audit log entries

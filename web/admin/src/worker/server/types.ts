@@ -50,7 +50,6 @@ export interface UpdateRequest {
 }
 
 export interface UpdateResponse {
-  success: boolean;
   patrols: PatrolResult[];
 }
 

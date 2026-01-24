@@ -1,4 +1,4 @@
-import type {WorkerMessage} from "./messages.ts";
+import type {WorkerMessage} from "./messages/workerToClient.ts";
 
 declare let self: ServiceWorkerGlobalScope;
 
