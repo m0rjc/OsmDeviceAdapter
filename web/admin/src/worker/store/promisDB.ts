@@ -1,6 +1,6 @@
-export type UnitOfWork<T> = (tx: IDBTransaction) => Promise<T>
+export type UnitOfWorkItem<T> = (tx: IDBTransaction) => Promise<T>
 
-export async function inTransaction<T>(db : IDBDatabase, stores: string[], mode: IDBTransactionMode, fn: UnitOfWork<T>) : Promise<T> {
+export async function inTransaction<T>(db : IDBDatabase, stores: string[], mode: IDBTransactionMode, fn: UnitOfWorkItem<T>) : Promise<T> {
     const tx = db.transaction(stores, mode);
     const completion = new Promise<void>( (resolve, reject) => {
         tx.oncomplete = () => resolve()

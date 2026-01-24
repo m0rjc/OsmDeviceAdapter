@@ -1,4 +1,4 @@
-import { OpenPatrolPointsStore, PatrolPointsStore, Section, Patrol } from './store'
+import { OpenPatrolPointsStore, PatrolPointsStore, Section } from './store'
 
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
@@ -15,58 +15,9 @@ describe('PatrolPointsStore', () => {
     store = await OpenPatrolPointsStore(userId)
   })
 
-  describe('ambient test',  () => {
-    it('FakeDB does not hang on a simple PUT', async () => {
-      const dbName = 'ambient-test-db'
-      const storeName = 'test-store'
-
-      console.log('[jest runtime]', {
-        node: process.version,
-        platform: process.platform,
-        arch: process.arch,
-        execPath: process.execPath,
-      });
-
-      if (globalThis.structuredClone) {
-        console.log('[structuredClone]', {
-          supported: true,
-        });
-      }
-
-      const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open(dbName, 1)
-        request.onupgradeneeded = () => {
-          request.result.createObjectStore(storeName, { keyPath: 'id' })
-        }
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-      })
-
-      const tx = db.transaction(storeName, 'readwrite')
-      const store = tx.objectStore(storeName)
-      const data = { id: 1, name: 'test' }
-      
-      await new Promise<void>((resolve, reject) => {
-        const request = store.put(data)
-        request.onsuccess = () => resolve()
-        request.onerror = () => reject(request.error)
-      })
-
-      const result = await new Promise<any>((resolve, reject) => {
-        const request = db.transaction(storeName).objectStore(storeName).get(1)
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-      })
-
-      expect(result).toEqual(data)
-      db.close()
-      indexedDB.deleteDatabase(dbName)
-    })
-
-    it('should not hang in the cleanup hook on the second test', async () => {
-      // Do nothing
-    });
-  });
+  afterEach(() => {
+    store.close();
+  })
 
   describe('Section Management', () => {
     it('should start with no sections', async () => {
@@ -76,8 +27,8 @@ describe('PatrolPointsStore', () => {
 
     it('should add sections via setCanonicalSectionList', async () => {
       const sections = [
-        new Section(userId, 1, 'Beavers'),
-        new Section(userId, 2, 'Cubs'),
+        new Section(userId, 1, 'Beavers', 'Test Group'),
+        new Section(userId, 2, 'Cubs', 'Test Group'),
       ]
 
       await store.setCanonicalSectionList(sections)
@@ -88,10 +39,10 @@ describe('PatrolPointsStore', () => {
     })
 
     it('should update section names', async () => {
-      const sections = [new Section(userId, 1, 'Beavers')]
+      const sections = [new Section(userId, 1, 'Beavers', 'Test Group')]
       await store.setCanonicalSectionList(sections)
 
-      const updated = [new Section(userId, 1, 'Beavers Updated')]
+      const updated = [new Section(userId, 1, 'Beavers Updated', 'Test Group')]
       await store.setCanonicalSectionList(updated)
 
       const retrieved = await store.getSections()
@@ -100,8 +51,8 @@ describe('PatrolPointsStore', () => {
 
     it('should delete sections not in canonical list', async () => {
       const sections = [
-        new Section(userId, 1, 'Beavers'),
-        new Section(userId, 2, 'Cubs'),
+        new Section(userId, 1, 'Beavers', 'Test Group'),
+        new Section(userId, 2, 'Cubs', 'Test Group'),
       ]
       await store.setCanonicalSectionList(sections)
 
@@ -114,8 +65,8 @@ describe('PatrolPointsStore', () => {
 
     it('should delete section patrols when section is removed', async () => {
       const sections = [
-        new Section(userId, 1, 'Beavers'),
-        new Section(userId, 2, 'Cubs'),
+        new Section(userId, 1, 'Beavers', 'Test Group'),
+        new Section(userId, 2, 'Cubs', 'Test Group'),
       ]
       await store.setCanonicalSectionList(sections)
 
@@ -136,7 +87,7 @@ describe('PatrolPointsStore', () => {
     beforeEach(async () => {
       // Setup a section for patrol tests
       await store.setCanonicalSectionList([
-        new Section(userId, 1, 'Beavers')
+        new Section(userId, 1, 'Beavers', 'Test Group')
       ])
     })
 
@@ -213,7 +164,7 @@ describe('PatrolPointsStore', () => {
   describe('Score Updates', () => {
     beforeEach(async () => {
       await store.setCanonicalSectionList([
-        new Section(userId, 1, 'Beavers')
+        new Section(userId, 1, 'Beavers', 'Test Group')
       ])
       await store.setCanonicalPatrolList(1, [
         { id: "1", name: 'Red', score: 10 },
@@ -258,7 +209,10 @@ describe('PatrolPointsStore', () => {
 
     it('should clear pending delta when setting committed score', async () => {
       await store.addPendingPoints(1, "1", 5)
-      await store.setCommittedScore(1, "1", 15, 'Red')
+
+      const uow = store.newUnitOfWork()
+      uow.setCommittedScore(1, "1", 15, 'Red')
+      await uow.commit()
 
       const patrols = await store.getScoresForSection(1)
       expect(patrols[0].committedScore).toBe(15)
@@ -266,7 +220,9 @@ describe('PatrolPointsStore', () => {
     })
 
     it('should update patrol name when setting committed score', async () => {
-      await store.setCommittedScore(1, "1", 12, 'Red Team')
+      const uow = store.newUnitOfWork()
+      uow.setCommittedScore(1, "1", 12, 'Red Team')
+      await uow.commit()
 
       const patrols = await store.getScoresForSection(1)
       expect(patrols[0].patrolName).toBe('Red Team')
@@ -277,7 +233,7 @@ describe('PatrolPointsStore', () => {
   describe('Error Handling', () => {
     beforeEach(async () => {
       await store.setCanonicalSectionList([
-        new Section(userId, 1, 'Beavers')
+        new Section(userId, 1, 'Beavers', 'Test Group')
       ])
       await store.setCanonicalPatrolList(1, [
         { id: "1", name: 'Red', score: 10 },
@@ -288,7 +244,9 @@ describe('PatrolPointsStore', () => {
       await store.addPendingPoints(1, "1", 5)
 
       const retryTime = new Date(Date.now() + 60000) // 1 minute from now
-      await store.setRetryAfter(1, "1", retryTime, 'Temporary error')
+      const uow = store.newUnitOfWork()
+      uow.setRetryAfter(1, "1", retryTime, 'Temporary error')
+      await uow.commit()
 
       const patrols = await store.getScoresForSection(1)
       expect(patrols[0].retryAfter).toBe(retryTime.getTime())
@@ -298,7 +256,10 @@ describe('PatrolPointsStore', () => {
 
     it('should set permanent error', async () => {
       await store.addPendingPoints(1, "1", 5)
-      await store.setError(1, "1", 'Permanent failure')
+
+      const uow = store.newUnitOfWork()
+      uow.setError(1, "1", 'Permanent failure')
+      await uow.commit()
 
       const patrols = await store.getScoresForSection(1)
       expect(patrols[0].retryAfter).toBe(-1)
@@ -307,22 +268,22 @@ describe('PatrolPointsStore', () => {
 
     it('should throw error when setting retry for non-existent patrol', async () => {
       const retryTime = new Date(Date.now() + 60000)
-      await expect(
-        store.setRetryAfter(1, "999", retryTime)
-      ).rejects.toThrow('Patrol 999 does not exist')
+      const uow = store.newUnitOfWork()
+      uow.setRetryAfter(1, "999", retryTime)
+      await expect(uow.commit()).rejects.toThrow('Patrol 999 does not exist')
     })
 
     it('should throw error when setting error for non-existent patrol', async () => {
-      await expect(
-        store.setError(1, "999", 'Error message')
-      ).rejects.toThrow('Patrol 999 does not exist')
+      const uow = store.newUnitOfWork()
+      uow.setError(1, "999", 'Error message')
+      await expect(uow.commit()).rejects.toThrow('Patrol 999 does not exist')
     })
   })
 
   describe('Pending Sync Queries', () => {
     beforeEach(async () => {
       await store.setCanonicalSectionList([
-        new Section(userId, 1, 'Beavers')
+        new Section(userId, 1, 'Beavers', 'Test Group')
       ])
       await store.setCanonicalPatrolList(1, [
         { id: "1", name: 'Red', score: 10 },
@@ -353,7 +314,9 @@ describe('PatrolPointsStore', () => {
       await store.addPendingPoints(1, "1", 5)
 
       const futureDate = new Date(Date.now() + 60000) // 1 minute from now
-      await store.setRetryAfter(1, "1", futureDate)
+      const uow = store.newUnitOfWork()
+      uow.setRetryAfter(1, "1", futureDate)
+      await uow.commit()
 
       const pending = await store.getPendingForSyncNow(1)
       expect(pending).toHaveLength(0)
@@ -363,7 +326,9 @@ describe('PatrolPointsStore', () => {
       await store.addPendingPoints(1, "1", 5)
 
       const pastDate = new Date(Date.now() - 60000) // 1 minute ago
-      await store.setRetryAfter(1, "1", pastDate)
+      const uow = store.newUnitOfWork()
+      uow.setRetryAfter(1, "1", pastDate)
+      await uow.commit()
 
       const pending = await store.getPendingForSyncNow(1)
       expect(pending).toHaveLength(1)
@@ -372,7 +337,10 @@ describe('PatrolPointsStore', () => {
 
     it('should not return patrols with permanent errors', async () => {
       await store.addPendingPoints(1, "1", 5)
-      await store.setError(1, "1", 'Permanent failure')
+
+      const uow = store.newUnitOfWork()
+      uow.setError(1, "1", 'Permanent failure')
+      await uow.commit()
 
       const pending = await store.getPendingForSyncNow(1)
       expect(pending).toHaveLength(0)
@@ -380,7 +348,10 @@ describe('PatrolPointsStore', () => {
 
     it('should get failed entries', async () => {
       await store.addPendingPoints(1, "1", 5)
-      await store.setError(1, "1", 'Permanent failure')
+
+      const uow = store.newUnitOfWork()
+      uow.setError(1, "1", 'Permanent failure')
+      await uow.commit()
 
       const failed = await store.getFailedEntries()
       expect(failed).toHaveLength(1)
@@ -389,7 +360,9 @@ describe('PatrolPointsStore', () => {
 
     it('should not return failed entries without pending changes', async () => {
       // Don't add any points
-      await store.setError(1, "1", 'Error but no pending changes')
+      const uow = store.newUnitOfWork()
+      uow.setError(1, "1", 'Error but no pending changes')
+      await uow.commit()
 
       const failed = await store.getFailedEntries()
       expect(failed).toHaveLength(0)
@@ -402,8 +375,13 @@ describe('PatrolPointsStore', () => {
       const retryTime1 = new Date(Date.now() + 60000) // 1 minute
       const retryTime2 = new Date(Date.now() + 120000) // 2 minutes
 
-      await store.setRetryAfter(1, "1", retryTime1)
-      await store.setRetryAfter(1, "2", retryTime2)
+      const uow1 = store.newUnitOfWork()
+      uow1.setRetryAfter(1, "1", retryTime1)
+      await uow1.commit()
+
+      const uow2 = store.newUnitOfWork()
+      uow2.setRetryAfter(1, "2", retryTime2)
+      await uow2.commit()
 
       const soonest = await store.getSoonestRetryAfter()
       expect(soonest).toBe(retryTime1.getTime())
@@ -418,9 +396,14 @@ describe('PatrolPointsStore', () => {
       await store.addPendingPoints(1, "1", 5)
       await store.addPendingPoints(1, "2", 3)
 
-      await store.setError(1, "1", 'Permanent')
+      const uow1 = store.newUnitOfWork()
+      uow1.setError(1, "1", 'Permanent')
+      await uow1.commit()
+
       const retryTime = new Date(Date.now() + 60000)
-      await store.setRetryAfter(1, "2", retryTime)
+      const uow2 = store.newUnitOfWork()
+      uow2.setRetryAfter(1, "2", retryTime)
+      await uow2.commit()
 
       const soonest = await store.getSoonestRetryAfter()
       expect(soonest).toBe(retryTime.getTime())
@@ -433,11 +416,11 @@ describe('PatrolPointsStore', () => {
       const user2Store = await OpenPatrolPointsStore(2)
 
       await user1Store.setCanonicalSectionList([
-        new Section(1, 1, 'User 1 Section')
+        new Section(1, 1, 'User 1 Section', 'Group 1')
       ])
 
       await user2Store.setCanonicalSectionList([
-        new Section(2, 1, 'User 2 Section')
+        new Section(2, 1, 'User 2 Section', 'Group 2')
       ])
 
       const user1Sections = await user1Store.getSections()
@@ -452,8 +435,8 @@ describe('PatrolPointsStore', () => {
       const user2Store = await OpenPatrolPointsStore(2)
 
       // Both users have a section with same ID
-      await user1Store.setCanonicalSectionList([new Section(1, 1, 'Section')])
-      await user2Store.setCanonicalSectionList([new Section(2, 1, 'Section')])
+      await user1Store.setCanonicalSectionList([new Section(1, 1, 'Section', 'Group 1')])
+      await user2Store.setCanonicalSectionList([new Section(2, 1, 'Section', 'Group 2')])
 
       await user1Store.setCanonicalPatrolList(1, [
         { id: "1", name: 'User 1 Patrol', score: 10 }
@@ -474,8 +457,8 @@ describe('PatrolPointsStore', () => {
       const user1Store = await OpenPatrolPointsStore(1)
       const user2Store = await OpenPatrolPointsStore(2)
 
-      await user1Store.setCanonicalSectionList([new Section(1, 1, 'Section')])
-      await user2Store.setCanonicalSectionList([new Section(2, 1, 'Section')])
+      await user1Store.setCanonicalSectionList([new Section(1, 1, 'Section', 'Group 1')])
+      await user2Store.setCanonicalSectionList([new Section(2, 1, 'Section', 'Group 2')])
 
       await user1Store.setCanonicalPatrolList(1, [
         { id: "1", name: 'Patrol', score: 10 }
@@ -498,7 +481,7 @@ describe('PatrolPointsStore', () => {
   describe('deleteUserData', () => {
     it('should delete all sections and patrols for user', async () => {
       await store.setCanonicalSectionList([
-        new Section(userId, 1, 'Beavers')
+        new Section(userId, 1, 'Beavers', 'Test Group')
       ])
       await store.setCanonicalPatrolList(1, [
         { id: "1", name: 'Red', score: 10 },
@@ -517,10 +500,10 @@ describe('PatrolPointsStore', () => {
       const user2Store = await OpenPatrolPointsStore(2)
 
       await store.setCanonicalSectionList([
-        new Section(userId, 1, 'User 1 Section')
+        new Section(userId, 1, 'User 1 Section', 'Group 1')
       ])
       await user2Store.setCanonicalSectionList([
-        new Section(2, 1, 'User 2 Section')
+        new Section(2, 1, 'User 2 Section', 'Group 2')
       ])
 
       await store.deleteUserData()

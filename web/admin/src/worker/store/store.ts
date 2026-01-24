@@ -1,4 +1,5 @@
 import {deleteRecord, getAllFromIndex, inTransaction, put, read} from "./promisDB";
+import * as model from "../types/model"
 
 const DB_NAME = 'penguin-patrol-scores';
 const DB_VERSION = 1;
@@ -8,12 +9,16 @@ const INDEX_USERID_SECTIONID = 'userId_sectionId';
 const INDEX_USERID_RETRY_AFTER = 'userId_retryAfter';
 const INDEX_SECTIONS_USERID = 'userId';
 
+/** How long before we allow retry if we get an unexpected server error (milliseconds) */
+const SERVER_ERROR_RETRY_TIME = 1000 * 60 * 5;
+
 /** Represents a section of patrols for a user */
 export class Section {
     public readonly key: string;
     public readonly userId: number;
     public readonly id: number;
     public name: string;
+    public groupName: string;
     /** The timestamp of the last successful sync (milliseconds) */
     public lastRefresh: number = 0;
 
@@ -21,12 +26,14 @@ export class Section {
      * @param userId The ID of the user who owns this section
      * @param id The unique ID of the section
      * @param name The display name of the section
+     * @param groupName The display name of the group this section belongs to
      */
-    public constructor(userId: number, id: number, name: string) {
+    public constructor(userId: number, id: number, name: string, groupName: string) {
         this.key = getSectionKey(userId, id);
         this.userId = userId;
         this.id = id;
         this.name = name;
+        this.groupName = groupName;
     }
 }
 
@@ -92,8 +99,6 @@ export class Patrol {
     }
 }
 
-type SyncSectionResult = { id: number, name: string };
-
 /** Result of a patrol sync from the server */
 type SyncPatrolResult = { id: string, name: string, score: number };
 
@@ -136,11 +141,16 @@ function handleDatabaseInstall(event: IDBVersionChangeEvent) {
 /** Unit of work for batching multiple store operations into a single transaction */
 export class UnitOfWork {
     private operations: Array<(tx: IDBTransaction) => Promise<void>> = [];
+    private readonly db: IDBDatabase;
+    private readonly userId: number;
 
     constructor(
-        private readonly db: IDBDatabase,
-        private readonly userId: number
-    ) {}
+        db: IDBDatabase,
+        userId: number
+    ) {
+        this.userId = userId;
+        this.db = db;
+    }
 
     /** Update the committed score from the server. Clears pendingScoreDelta, error state, and lock. */
     setCommittedScore(sectionId: number, patrolId: string, score: number, patrolName: string): this {
@@ -221,6 +231,11 @@ export class PatrolPointsStore {
         this.userId = userId;
     }
 
+    /** Close the database connection */
+    public close(): void {
+        this.db.close();
+    }
+
     /** Create a new unit of work for batching multiple operations into a single transaction */
     newUnitOfWork(): UnitOfWork {
         return new UnitOfWork(this.db, this.userId);
@@ -286,32 +301,46 @@ export class PatrolPointsStore {
      * Updates the local list of sections to match the provided list.
      * Sections not in the new list will be deleted along with their patrols.
      * @param sections The new list of sections
+     * @returns A promise that resolves to true if any sections were added, deleted, or changed.
      */
-    public setCanonicalSectionList(sections: SyncSectionResult[]): Promise<void> {
-        return inTransaction<void>(this.db, [SECTIONS_STORE, PATROL_SCORES_STORE], "readwrite", async (tx: IDBTransaction): Promise<void> => {
+    public setCanonicalSectionList(sections: model.Section[]): Promise<boolean> {
+        return inTransaction<boolean>(this.db, [SECTIONS_STORE, PATROL_SCORES_STORE], "readwrite", async (tx: IDBTransaction): Promise<boolean> => {
             const sectionsStore = tx.objectStore(SECTIONS_STORE);
             const index = sectionsStore.index(INDEX_SECTIONS_USERID);
             const range = IDBKeyRange.only(this.userId);
 
             // Get existing sections for this user
             const existingSections = await getAllFromIndex<Section>(index, range);
+            const existingSectionsMap = new Map(existingSections.map(s => [s.id, s]));
             const canonicalSectionIds = new Set(sections.map(s => s.id));
+
+            let changed = false;
 
             // Add or update sections from the canonical list
             for (const section of sections) {
-                const sectionRecord = new Section(this.userId, section.id, section.name);
-                await put(sectionsStore, sectionRecord);
+                const existing = existingSectionsMap.get(section.id);
+                if (!existing || existing.name !== section.name) {
+                    changed = true;
+                    const sectionRecord = new Section(this.userId, section.id, section.name, section.groupName);
+                    await put(sectionsStore, sectionRecord);
+                }
             }
 
             // Delete sections that are no longer in the canonical list
             for (const existingSection of existingSections) {
                 if (!canonicalSectionIds.has(existingSection.id)) {
+                    changed = true;
                     console.log(`[PatrolPointsStore] Deleting section ${existingSection.id} and its patrols`);
                     await deleteSectionAndPatrols(tx, this.userId, existingSection.id);
                 }
             }
 
-            console.log(`[PatrolPointsStore] Updated canonical section list: ${sections.length} sections`);
+            if (changed) {
+                console.log(`[PatrolPointsStore] Updated canonical section list: ${sections.length} sections (changes detected)`);
+            } else {
+                console.log(`[PatrolPointsStore] Updated canonical section list: ${sections.length} sections (no changes)`);
+            }
+            return changed;
         });
     }
 
@@ -589,7 +618,8 @@ export class PatrolPointsStore {
     }
 
     /**
-     * Mark all pending entries in a section as permanently failed.
+     * Mark all pending entries in a section as failed. Allow some retry later to prevent them
+     * becoming stuck.
      * Used when a catastrophic error occurs during sync (e.g., network failure, server error).
      * @param sectionId The section containing the failed entries
      * @param errorMessage The error message to set
@@ -609,7 +639,7 @@ export class PatrolPointsStore {
                         const patrol = cursor.value as Patrol;
                         // Only mark entries with pending changes
                         if (patrol.pendingScoreDelta !== 0) {
-                            patrol.retryAfter = -1; // Permanent error
+                            patrol.retryAfter = Date.now() + SERVER_ERROR_RETRY_TIME;
                             patrol.errorMessage = errorMessage;
                             await put(store, patrol);
                         }

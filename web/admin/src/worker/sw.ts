@@ -3,11 +3,10 @@ import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 import { registerRoute } from 'workbox-routing';
 import { NetworkFirst } from 'workbox-strategies';
 import * as messages from './messages'
-import {OsmAdapterApiService} from "./server/server.ts";
-import {sendMessage} from "./client.ts";
-import {newAuthenticationRequiredMessage, type PatrolsChangeMessage} from "./messages/workerToClient.ts";
-import {OpenPatrolPointsStore, Patrol, PatrolPointsStore} from "./store/store.ts";
-import type {ScoreDelta} from "./messages";
+import {NetworkError, OsmAdapterApiService, type SessionStatus} from "./server/server";
+import * as clients from "./client";
+import {OpenPatrolPointsStore, PatrolPointsStore, Patrol as StoredPatrol} from "./store/store";
+import type {ScoreDelta} from "./types/model";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -28,15 +27,21 @@ registerRoute(
     })
 );
 
+/**
+ * Listen for messages from clients.
+ */
 self.addEventListener('message', (event) => {
-//    const client = event.source as Client;
+    const client = event.source as Client;
     const message = event.data as messages.ClientMessage;
     switch (message.type) {
+        case 'get-profile':
+            getProfile(client, message.userId);
+            break;
         case 'refresh':
-            refreshScores(message.sectionId);
+            refreshScores(client, message.userId, message.sectionId);
             break;
         case 'submit-scores':
-            submitScores(message.userId, message.sectionId, message.deltas);
+            submitScores(client, message.userId, message.sectionId, message.deltas);
             break;
         default:
             const unrecognized = message as any;
@@ -44,72 +49,136 @@ self.addEventListener('message', (event) => {
     }
 });
 
-async function refreshScores(sectionId: number) {
-    const server = new OsmAdapterApiService();
+/**
+ * Require the specified user to be logged in.
+ * Sends message to client if not logged in.
+ * @param server
+ * @param client
+ * @param userId
+ */
+async function requireLoggedInUser(server: OsmAdapterApiService, client: Client, userId: number): Promise<SessionStatus>  {
     const session = await server.fetchSession();
     if(!session.isAuthenticated) {
-        sendMessage(newAuthenticationRequiredMessage(server.getLoginUrl()));
+        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl()));
+        return session;
+    }
+    if (session.userId != userId) {
+        client.postMessage(messages.newWrongUserMessage(userId, session.userId));
+        return {isAuthenticated: false };
+    }
+    return session;
+}
+
+/**
+ * Fetch the user profile from the server and send it to the client.
+ * Synchronize the stored canonical list of sections with the server's list and
+ * broadcast a newSectionListChangeMessage if the list has changed.
+ * @param client
+ * @param userId
+ */
+export async function getProfile(client: Client, userId: number) {
+    const server = new OsmAdapterApiService();
+    const session : SessionStatus = await requireLoggedInUser(server, client, userId);
+    if (!session.isAuthenticated) {
         return;
     }
 
-    const store = await OpenPatrolPointsStore(session.userId);
-    const scores = await server.fetchScores(sectionId);
-    const newScores = await store.setCanonicalPatrolList(sectionId, scores);
-    publishScores(session.userId, sectionId, newScores);
+    const store = await OpenPatrolPointsStore(userId);
+    try {
+        const sections = await server.fetchSections()
+        const changed = await store.setCanonicalSectionList(sections);
+        if (changed) {
+            await clients.sendMessage(messages.newSectionListChangeMessage(sections));
+        }
+        client.postMessage(messages.newUserProfileMessage(userId, session.userName, sections));
+    } finally {
+        store.close();
+    }
+}
+
+/**
+ * Refresh the scores for the specified section from the server.
+ * This synchronizes the canonical list of patrols with the server's list and adjusts the
+ * committed score values.
+ * @param client
+ * @param userId
+ * @param sectionId
+ */
+export async function refreshScores(client: Client, userId: number, sectionId: number) {
+    const server = new OsmAdapterApiService();
+    const session = await requireLoggedInUser(server, client, userId);
+    if(!session.isAuthenticated) {
+        return;
+    }
+
+    const store = await OpenPatrolPointsStore(userId);
+    try {
+        const scores = await server.fetchScores(sectionId);
+        const newScores = await store.setCanonicalPatrolList(sectionId, scores);
+        await clients.publishScores(userId, sectionId, newScores);
+    } finally {
+        store.close();
+    }
 }
 
 /**
  * Add pending score changes to the store and trigger a sync.
  * This is called when the user makes changes in the UI.
  */
-async function submitScores(userId: number, sectionId: number, deltas: ScoreDelta[]) {
-    // Add pending changes to the store (optimistic update)
+export async function submitScores(client: Client, userId: number, sectionId: number, deltas: ScoreDelta[]) {
     const store: PatrolPointsStore = await OpenPatrolPointsStore(userId);
-    for (const delta of deltas) {
-        await store.addPendingPoints(sectionId, delta.patrolId, delta.score);
+    try {
+        // Add pending changes to the store.
+        // This optimistic update ensures that user intent is saved even if they have lost
+        // authentication. This allows the user to recover by logging in again.
+        for (const delta of deltas) {
+            await store.addPendingPoints(sectionId, delta.patrolId, delta.score);
+        }
+
+        // Publish the optimistic update immediately to all clients
+        const updatedScores = await store.getScoresForSection(sectionId);
+        await clients.publishScores(userId, sectionId, updatedScores);
+
+        // Only perform the sync if the user is still logged in.
+        // If the user is not logged in, then requireLoggedInUser will send a message to the client
+        // requesting them to log in again.
+        const server = new OsmAdapterApiService();
+        if (! (await requireLoggedInUser(server, client, userId)).isAuthenticated) {
+            return;
+        }
+
+        // Perform a sync process for this {user,section} to commit the changes to the server.
+        if(!server.isOffline()) {
+            await syncPendingScores(server, store, userId, sectionId);
+        }
+    } finally {
+        store.close();
     }
-
-    // Publish the optimistic update immediately to all clients
-    const updatedScores = await store.getScoresForSection(sectionId);
-    publishScores(userId, sectionId, updatedScores);
-
-    // Now trigger a background sync to commit the changes
-    await syncPendingScores(userId, sectionId);
 }
 
 /**
- * Sync all pending score changes for a section to the server.
- * This can be called directly for background sync or after submitScores.
+ * Sync all pending score changes for a {user,section} to the server.
+ * The server and store must be tied to the same user.
  */
-async function syncPendingScores(userId: number, sectionId: number) {
-    const store: PatrolPointsStore = await OpenPatrolPointsStore(userId);
-
-    // Verify the user is still authenticated
-    const server = new OsmAdapterApiService();
-    const session = await server.fetchSession();
-    if (!session.isAuthenticated || session.userId !== userId) {
-        // User is no longer authenticated or has switched accounts
-        // The pending changes are preserved in the store under their original userId
-        sendMessage(newAuthenticationRequiredMessage(server.getLoginUrl()));
-        return;
-    }
-
+async function syncPendingScores(server: OsmAdapterApiService, store: PatrolPointsStore, userId: number, sectionId: number) {
     // Atomically acquire lock and get pending patrols
     let lockId: string | null = null;
+    let hasChanges: boolean = false;
     try {
-        const { lockId: acquiredLockId, pending } = await store.acquirePendingForSync(sectionId, 30000);
+        const {lockId: acquiredLockId, pending} = await store.acquirePendingForSync(sectionId, 30000);
         lockId = acquiredLockId;
 
         if (pending.length === 0) {
             console.log(`[ServiceWorker] No pending scores to sync for section ${sectionId}`);
-            return;
+            return // via finally;
         }
 
         // Build the updates array from the pending patrols
-        const updates = pending.map(patrol => ({
+        const updates = pending.map((patrol : StoredPatrol):ScoreDelta => ({
             patrolId: patrol.patrolId,
-            points: patrol.pendingScoreDelta
+            score: patrol.pendingScoreDelta
         }));
+        hasChanges = true;
 
         console.log(`[ServiceWorker] Syncing ${updates.length} pending scores for section ${sectionId}`);
 
@@ -121,44 +190,40 @@ async function syncPendingScores(userId: number, sectionId: number) {
         for (const patrol of serverResult) {
             if (patrol.success) {
                 uow.setCommittedScore(sectionId, patrol.id, patrol.newScore, patrol.name);
-            } else if (patrol.isTemporaryError && patrol.retryAfter) {
+                continue;
+            }
+
+            // Type narrow: patrol is now a failure result (use type assertion as workaround)
+            const failedPatrol = patrol as any;
+            if (failedPatrol.isTemporaryError && failedPatrol.retryAfter) {
                 // Temporary error - schedule retry
-                const retryDate = new Date(patrol.retryAfter);
-                uow.setRetryAfter(sectionId, patrol.id, retryDate, patrol.errorMessage);
+                const retryDate = new Date(failedPatrol.retryAfter);
+                uow.setRetryAfter(sectionId, failedPatrol.id, retryDate, failedPatrol.errorMessage);
             } else {
                 // Permanent error - mark as failed
-                uow.setError(sectionId, patrol.id, patrol.errorMessage || 'Update failed');
+                uow.setError(sectionId, failedPatrol.id, failedPatrol.errorMessage || 'Update failed');
             }
         }
         await uow.commit();
     } catch (e: any) {
         // Catastrophic error (network failure, server error, etc.)
-        // Mark all pending entries as failed so the user can see what happened
-        await store.markAllPendingAsFailed(sectionId, e.message || 'Failed to sync scores');
+        if(e instanceof NetworkError) {
+            console.warn(`[ServiceWorker] Network error syncing scores for section ${sectionId}:`, e.cause);
+        } else {
+            // Mark all pending entries as failed so the user can see what happened
+            await store.markAllPendingAsFailed(sectionId, e.message || 'Failed to sync scores');
+            console.error(`[ServiceWorker] Error in syncPendingScores for section ${sectionId}:`, e);
+        }
     } finally {
         // Always release the lock
         if (lockId) {
             await store.releaseSyncLock(sectionId, lockId);
         }
 
-        // Publish the updated scores to all clients
-        const updatedScores = await store.getScoresForSection(sectionId);
-        publishScores(userId, sectionId, updatedScores);
+        // If I did anything, then publish the updated scores to all clients
+        if (hasChanges) {
+            const updatedScores = await store.getScoresForSection(sectionId);
+            await clients.publishScores(userId, sectionId, updatedScores);
+        }
     }
-}
-
-/** Publish the updated scores to all clients. */
-async function publishScores(userId: number, sectionId: number, scores: Patrol[]) {
-    const message : PatrolsChangeMessage = {
-        type: 'patrols-change',
-        userId,
-        sectionId,
-        scores: scores.map( (s:Patrol):messages.PatrolScore => ({
-            id: s.patrolId,
-            name: s.patrolName,
-            committedScore: s.committedScore,
-            pendingScore: s.pendingScoreDelta
-        }))
-    }
-    sendMessage(message);
 }

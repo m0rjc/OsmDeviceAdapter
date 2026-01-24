@@ -1,4 +1,5 @@
 import * as api from './types';
+import * as model from '../types/model';
 import type {SessionResponse} from "./types";
 
 /**
@@ -16,6 +17,20 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Error thrown when a network request fails (offline, connection issues, etc.)
+ * This indicates a temporary/retryable error condition
+ */
+export class NetworkError extends Error {
+  public readonly cause?: any;
+
+  constructor(message: string, cause?: any) {
+    super(message);
+    this.cause = cause;
+    this.name = 'NetworkError';
+  }
+}
+
 export type OsmUser = api.UserInfo
 
 export type SessionStatusAuthenticated = {
@@ -30,7 +45,6 @@ export type SessionStatusUnauthenticated = {
 
 export type SessionStatus = SessionStatusAuthenticated | SessionStatusUnauthenticated;
 
-export type SectionsResponse = api.SectionsResponse;
 export type PatrolScore = api.Patrol;
 
 export type PatrolScoreUpdateResultSuccess = {
@@ -61,11 +75,6 @@ export type PatrolScoreUpdateResultError = {
 }
 
 export type PatrolScoreUpdateResult = PatrolScoreUpdateResultSuccess | PatrolScoreUpdateResultTemporaryError | PatrolScoreUpdateResultError;
-
-export type ScoreUpdate = {
-  patrolId: string;  // OSM API uses string IDs (can be empty or negative for special patrols)
-  points: number;
-}
 
 /**
  * OsmAdapterApiService represents a connection to the OSMAdapter server.
@@ -99,11 +108,23 @@ export class OsmAdapterApiService {
     return this.user?.osmUserId ?? null;
   }
 
+  public isOffline(): boolean {
+    return !navigator.onLine;
+  }
+
   /**
-   * Handle API responses, parsing JSON and throwing errors as needed
-   * @throws {ApiError} for other API errors
+   * Perform a fetch request and handle the response
+   * @throws {NetworkError} for network/offline errors (retryable)
+   * @throws {ApiError} for API errors
    */
-  private async handleResponse<T>(response: Response): Promise<T> {
+  private async fetchAndHandle<T>(url: string, init?: RequestInit): Promise<T> {
+    let response : Response;
+    try {
+      response = await fetch(url, init);
+    } catch (error) {
+      throw new NetworkError('Network request failed. Check your internet connection.', error);
+    }
+
     if (!response.ok) {
       // Handle authentication errors
       if (response.status === 401 || response.status === 403) {
@@ -123,12 +144,13 @@ export class OsmAdapterApiService {
 
   /**
    * Fetch the current session information and update this class' authentication state.
+   * @throws {NetworkError} for network/offline errors
+   * @throws {ApiError} for API errors
    */
   async fetchSession(): Promise<SessionStatus> {
-    const response = await fetch('/api/admin/session', {
+    this.currentSession = await this.fetchAndHandle<api.SessionResponse>('/api/admin/session', {
       credentials: 'same-origin',
     });
-    this.currentSession = await this.handleResponse<api.SessionResponse>(response);
 
     if(this.currentSession.authenticated){
       return {
@@ -174,35 +196,41 @@ export class OsmAdapterApiService {
 
   /**
    * Fetch the list of sections the user has access to
+   * @throws {NetworkError} for network/offline errors
+   * @throws {ApiError} for API errors
    */
-  async fetchSections(): Promise<SectionsResponse> {
-    const response = await fetch('/api/admin/sections', {
+  async fetchSections(): Promise<model.Section[]> {
+    const parsedResponse = await this.fetchAndHandle<api.SectionsResponse>('/api/admin/sections', {
       credentials: 'same-origin',
     });
-    return this.handleResponse<api.SectionsResponse>(response);
+    return parsedResponse.sections;
   }
 
   /**
    * Fetch patrol scores for a specific section
+   * @throws {NetworkError} for network/offline errors
+   * @throws {ApiError} for API errors
    */
   async fetchScores(sectionId: number): Promise<PatrolScore[]> {
-    const response = await fetch(`/api/admin/sections/${sectionId}/scores`, {
+    const raw = await this.fetchAndHandle<api.ScoresResponse>(`/api/admin/sections/${sectionId}/scores`, {
       credentials: 'same-origin',
     });
-    const raw: api.ScoresResponse = await this.handleResponse<api.ScoresResponse>(response);
     return raw.patrols;
   }
 
   /**
    * Update patrol scores for a specific section
-   * @throws {UnauthenticatedError} if not authenticated or CSRF token is not available
-   * @throws {ApiError} if the update fails
+   * @throws {NetworkError} for network/offline errors (retryable)
+   * @throws {ApiError} for API errors
    */
-  async updateScores(sectionId: number, updates: ScoreUpdate[]): Promise<PatrolScoreUpdateResult[]> {
+  async updateScores(sectionId: number, updates: model.ScoreDelta[]): Promise<PatrolScoreUpdateResult[]> {
     // Updates already have string patrol IDs matching the API format
-    const apiUpdates: api.ScoreUpdate[] = updates;
+    const apiUpdates: api.ScoreUpdate[] = updates.map( (request : model.ScoreDelta) : api.ScoreUpdate => ({
+      patrolId: request.patrolId,
+      points: request.score
+    }));
 
-    const response = await fetch(`/api/admin/sections/${sectionId}/scores`, {
+    const rawResponse = await this.fetchAndHandle<api.UpdateResponse>(`/api/admin/sections/${sectionId}/scores`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: {
@@ -212,10 +240,8 @@ export class OsmAdapterApiService {
       body: JSON.stringify(apiUpdates),
     });
 
-    const rawResponse = await this.handleResponse<api.UpdateResponse>(response);
-
     // Convert the response to our internal types with proper date parsing
-    return rawResponse.patrols.map(patrol => {
+    return rawResponse.patrols.map( (patrol : api.PatrolResult):PatrolScoreUpdateResult => {
       if (patrol.success) {
         return {
           success: true,
@@ -223,7 +249,7 @@ export class OsmAdapterApiService {
           name: patrol.name,
           previousScore: patrol.previousScore,
           newScore: patrol.newScore,
-        } as PatrolScoreUpdateResultSuccess;
+        };
       } else if (patrol.isTemporaryError && patrol.retryAfter) {
         return {
           success: false,
@@ -233,7 +259,7 @@ export class OsmAdapterApiService {
           newScore: patrol.newScore,
           retryAfter: patrol.retryAfter, // Keep as string, will be parsed by caller
           errorMessage: patrol.errorMessage || 'Temporary error',
-        } as PatrolScoreUpdateResultTemporaryError;
+        };
       } else {
         return {
           success: false,
@@ -242,7 +268,7 @@ export class OsmAdapterApiService {
           name: patrol.name,
           newScore: patrol.newScore,
           errorMessage: patrol.errorMessage || 'Update failed',
-        } as PatrolScoreUpdateResultError;
+        };
       }
     });
   }
