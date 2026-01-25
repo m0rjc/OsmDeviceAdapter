@@ -1,7 +1,8 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import { GetWorker } from '../worker';
-import { setCanonicalSections, selectSection as selectSectionAction, setPatrolsLoading } from './appSlice';
-import { addPendingRequest } from './pendingRequestsSlice';
+import { setCanonicalSections, selectSection as selectSectionAction, setPatrolsLoading, clearAllData, setGlobalError } from './appSlice';
+import { clearUser } from './userSlice';
+import { addPendingRequest, clearAllPendingRequests } from './pendingRequestsSlice';
 import type { RootState } from './store';
 import type { Section } from '../../types/model';
 
@@ -126,5 +127,30 @@ export const selectSection = createAsyncThunk<
       console.log('[selectSection] Auto-fetching patrols for section:', sectionId);
       dispatch(fetchPatrolScores(sectionId));
     }
+  }
+);
+
+/**
+ * Thunk to handle wrong user scenarios.
+ *
+ * This thunk handles the case where worker messages arrive for a different user
+ * (e.g., user logged out and back in as different user in another tab).
+ *
+ * It:
+ * 1. Clears the user state
+ * 2. Clears all application data
+ * 3. Clears all pending requests
+ * 4. Shows a global error message prompting the user to reload
+ *
+ * This is a centralized action to maintain DRY when handling user mismatches
+ * in different message handlers.
+ */
+export const handleWrongUser = createAsyncThunk<void, void, { state: RootState }>(
+  'worker/handleWrongUser',
+  async (_, { dispatch }) => {
+    dispatch(clearUser());
+    dispatch(clearAllData());
+    dispatch(clearAllPendingRequests());
+    dispatch(setGlobalError('You have logged out or changed accounts in another tab. Please reload this page.'));
   }
 );

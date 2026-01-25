@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { useAppDispatch } from '../state/hooks';
-import { setUser, clearUser } from '../state/userSlice';
-import { setCanonicalPatrols, clearAllData, setGlobalError, setPatrolsError } from '../state/appSlice';
+import { setUser } from '../state/userSlice';
+import { setCanonicalPatrols, setGlobalError, setPatrolsError } from '../state/appSlice';
 import { showErrorDialog } from '../state/dialogSlice';
-import { removePendingRequest, addPendingRequest, clearAllPendingRequests } from '../state/pendingRequestsSlice';
-import { updateSectionsList } from '../state/workerThunks';
+import { removePendingRequest, addPendingRequest } from '../state/pendingRequestsSlice';
+import { updateSectionsList, handleWrongUser } from '../state/workerThunks';
 import { store } from '../state/store';
 import { GetWorker, type Worker } from '../worker';
 import type { WorkerMessage } from '../../types/messages';
@@ -82,9 +82,19 @@ export function useWorkerBootstrap(): Worker | null {
           // Update patrols for a specific section
           console.log('[useWorkerBootstrap] Patrols changed for section:', message.sectionId);
 
+          // Validate user context - data must be for current user
+          const patrolsState = store.getState();
+          const patrolsUserId = patrolsState.user.userId;
+          if (patrolsUserId && message.userId.toString() !== patrolsUserId) {
+            // User mismatch in patrols data - treat like wrong-user
+            console.warn('[useWorkerBootstrap] Patrols userId mismatch:', message.userId, 'vs', patrolsUserId);
+            dispatch(handleWrongUser());
+            break;
+          }
+
           // If this is a response to a tracked request, remove it from pending
           if (message.requestId) {
-            const pendingRequest = store.getState().pendingRequests.requests[message.requestId];
+            const pendingRequest = patrolsState.pendingRequests.requests[message.requestId];
             if (pendingRequest) {
               console.log('[useWorkerBootstrap] Completing pending request:', message.requestId);
               dispatch(removePendingRequest(message.requestId));
@@ -101,9 +111,7 @@ export function useWorkerBootstrap(): Worker | null {
         case 'wrong-user':
           // User mismatch - clear state and show error message
           console.warn('[useWorkerBootstrap] Wrong user detected:', message.requestedUserId, 'vs', message.currentUserId);
-          dispatch(clearUser());
-          dispatch(clearAllData());
-          dispatch(setGlobalError('You have logged out or changed accounts in another tab. Please reload this page.'));
+          dispatch(handleWrongUser());
           break;
 
         case 'service-error':
@@ -115,12 +123,22 @@ export function useWorkerBootstrap(): Worker | null {
             requestId: message.requestId,
           });
 
+          // FIRST: Validate user context - error must be for current user
+          const currentState = store.getState();
+          const currentUserId = currentState.user.userId;
+          if (currentUserId && message.userId.toString() !== currentUserId) {
+            // User mismatch in error - treat like wrong-user
+            console.warn('[useWorkerBootstrap] Service error userId mismatch:', message.userId, 'vs', currentUserId);
+            dispatch(handleWrongUser());
+            break;
+          }
+
           // If this is a response to a tracked request, remove it from pending
           // Note: Worker may send BOTH PatrolsChangeMessage (cached) AND ServiceErrorMessage (refresh failed)
           // in that order. If PatrolsChangeMessage arrived first, pending request is already removed,
           // so we won't find it here. This is correct - data is loaded (from cache), just stale.
           if (message.requestId) {
-            const pendingRequest = store.getState().pendingRequests.requests[message.requestId];
+            const pendingRequest = currentState.pendingRequests.requests[message.requestId];
             if (pendingRequest) {
               console.log('[useWorkerBootstrap] Removing pending request:', message.requestId, pendingRequest.type);
               dispatch(removePendingRequest(message.requestId));
