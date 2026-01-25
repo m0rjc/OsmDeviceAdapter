@@ -40,4 +40,9 @@ charts/secrets/values-*.yaml
 
 # Built server (often built here by Claude)
 /server
+
+# Deployment values files with secrets
 values-dev.yaml
+values-live.yaml
+charts/osm-device-adapter/values-live.yaml
+charts/osm-secrets/values-live.yaml
