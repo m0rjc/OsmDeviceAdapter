@@ -19,6 +19,8 @@ export type { UserState } from './userSlice';
 export {
   setCanonicalSections,
   setCanonicalPatrols,
+  setPatrolsLoading,
+  setPatrolsError,
   setUserEntry,
   clearUserEntry,
   clearAllUserEntries,
@@ -35,5 +37,39 @@ export {
   selectHasUnsavedEdits,
   selectTotalUserEntryPoints,
   selectPatrolById,
+  selectPatrolsLoadingStateForSelectedSection,
+  selectIsPatrolsLoading,
+  selectPatrolsError,
+  selectCanRetryPatrolsLoad,
 } from './appSlice';
-export type { UISection, UIPatrol, AppState } from './appSlice';
+export type { UISection, UIPatrol, AppState, PatrolsLoadingState } from './appSlice';
+
+// Dialog slice
+export {
+  showErrorDialog,
+  closeErrorDialog,
+  selectDialogState,
+  selectIsErrorDialogOpen,
+  selectErrorTitle,
+  selectErrorMessage,
+} from './dialogSlice';
+export type { DialogState } from './dialogSlice';
+
+// Pending requests slice
+export {
+  addPendingRequest,
+  removePendingRequest,
+  clearAllPendingRequests,
+  selectPendingRequests,
+  selectPendingRequest,
+  selectPendingRefreshForSection,
+  selectHasPendingRefreshForSection,
+} from './pendingRequestsSlice';
+export type { PendingRequest, PendingRequestType, PendingRequestsState } from './pendingRequestsSlice';
+
+// Worker thunks
+export {
+  fetchPatrolScores,
+  updateSectionsList,
+  selectSection as selectSectionWithPatrolFetch,
+} from './workerThunks';

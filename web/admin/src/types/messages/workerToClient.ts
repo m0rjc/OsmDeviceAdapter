@@ -27,13 +27,15 @@ export function newWrongUserMessage(requestedUserId: number, currentUserId: numb
 
 export type UserProfileMessage = {
     type: 'user-profile';
+    /** Correlation ID matching the request that triggered this response */
+    requestId: string;
     userId: number;
     userName: string;
     sections: Section[];
 }
 
-export function newUserProfileMessage(userId: number, userName: string, sections: Section[]) {
-    return { type: 'user-profile', userId, userName, sections };
+export function newUserProfileMessage(userId: number, userName: string, sections: Section[], requestId: string) {
+    return { type: 'user-profile', requestId, userId, userName, sections };
 }
 
 export type SectionListChangeMessage = {
@@ -47,10 +49,29 @@ export function newSectionListChangeMessage(sections: Section[]): SectionListCha
 
 export type PatrolsChangeMessage = {
     type: 'patrols-change';
+    /**
+     * Correlation ID matching the request that triggered this response.
+     * Optional - may be undefined for unsolicited updates (background sync, other clients).
+     */
+    requestId?: string;
     userId: number;
     sectionId: number;
     scores: PatrolScore[]
 }
 
+export type ServiceErrorMessage = {
+    type: 'service-error';
+    /** Correlation ID matching the request that triggered this error (optional for general errors) */
+    requestId?: string;
+    /** The function is what we were trying to do, for example load scores. */
+    function: string;
+    /** The error message returned by the service. */
+    error: string;
+}
+
+export function newServiceErrorMessage(functionName: string, error: string, requestId?: string): ServiceErrorMessage {
+    return { type: 'service-error', requestId, function: functionName, error };
+}
+
 /** Union of all messages sent to the client. */
-export type WorkerMessage = AuthenticationRequiredMessage | PatrolsChangeMessage | SectionListChangeMessage | UserProfileMessage | ClientIsWrongUserMessage ;
+export type WorkerMessage = AuthenticationRequiredMessage | PatrolsChangeMessage | SectionListChangeMessage | UserProfileMessage | ClientIsWrongUserMessage | ServiceErrorMessage ;

@@ -13,17 +13,23 @@ import type {ScoreDelta} from "../model.ts";
  */
 export type GetProfileMessage = {
   type: "get-profile";
+  /** Correlation ID to match request with response */
+  requestId: string;
 };
 
 /** Request to refresh the patrol scores from the server. */
 export type RefreshRequestMessage = {
   type: "refresh";
+  /** Correlation ID to match request with response */
+  requestId: string;
   userId: number;
   sectionId: number;
 };
 
 export type SubmitScoresMessage = {
     type: "submit-scores";
+    /** Correlation ID to match request with response */
+    requestId: string;
     userId: number;
     sectionId: number;
     deltas:ScoreDelta[];

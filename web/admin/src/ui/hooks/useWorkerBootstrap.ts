@@ -1,7 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useAppDispatch } from '../state/hooks';
 import { setUser, clearUser } from '../state/userSlice';
-import { setCanonicalSections, setCanonicalPatrols, clearAllData, setGlobalError } from '../state/appSlice';
+import { setCanonicalPatrols, clearAllData, setGlobalError, setPatrolsError } from '../state/appSlice';
+import { showErrorDialog } from '../state/dialogSlice';
+import { removePendingRequest, addPendingRequest, clearAllPendingRequests } from '../state/pendingRequestsSlice';
+import { updateSectionsList } from '../state/workerThunks';
+import { store } from '../state/store';
 import { GetWorker, type Worker } from '../worker';
 import type { WorkerMessage } from '../../types/messages';
 
@@ -54,23 +58,40 @@ export function useWorkerBootstrap(): Worker | null {
         case 'user-profile':
           // Set user profile in Redux
           console.log('[useWorkerBootstrap] User profile received:', message.userId, message.userName);
+
+          // Remove pending request if this was a response to our request
+          if (message.requestId) {
+            dispatch(removePendingRequest(message.requestId));
+          }
+
           dispatch(setUser({
             userId: message.userId.toString(),
             userName: message.userName,
           }));
-          // Also set sections from the profile message
-          dispatch(setCanonicalSections(message.sections));
+          // Update sections list (will auto-fetch patrols if section is selected)
+          dispatch(updateSectionsList(message.sections));
           break;
 
         case 'section-list-change':
-          // Update sections list
+          // Update sections list (will auto-fetch patrols if section is selected)
           console.log('[useWorkerBootstrap] Section list changed, sections count:', message.sections.length);
-          dispatch(setCanonicalSections(message.sections));
+          dispatch(updateSectionsList(message.sections));
           break;
 
         case 'patrols-change':
           // Update patrols for a specific section
           console.log('[useWorkerBootstrap] Patrols changed for section:', message.sectionId);
+
+          // If this is a response to a tracked request, remove it from pending
+          if (message.requestId) {
+            const pendingRequest = store.getState().pendingRequests.requests[message.requestId];
+            if (pendingRequest) {
+              console.log('[useWorkerBootstrap] Completing pending request:', message.requestId);
+              dispatch(removePendingRequest(message.requestId));
+            }
+          }
+
+          // Update patrol data (sets loading state to 'ready')
           dispatch(setCanonicalPatrols({
             sectionId: message.sectionId,
             patrols: message.scores,
@@ -85,6 +106,37 @@ export function useWorkerBootstrap(): Worker | null {
           dispatch(setGlobalError('You have logged out or changed accounts in another tab. Please reload this page.'));
           break;
 
+        case 'service-error':
+          // Service error - correlate with pending request if possible
+          console.error('[useWorkerBootstrap] Service error:', message.function, message.error);
+
+          // If this is a response to a tracked request, handle it appropriately
+          // Note: Worker may send BOTH PatrolsChangeMessage (cached) AND ServiceErrorMessage (refresh failed)
+          // in that order. If PatrolsChangeMessage arrived first, pending request is already removed,
+          // so we won't find it here. This is correct - data is loaded (from cache), just stale.
+          if (message.requestId) {
+            const pendingRequest = store.getState().pendingRequests.requests[message.requestId];
+            if (pendingRequest) {
+              console.log('[useWorkerBootstrap] Error for pending request:', message.requestId, pendingRequest.type);
+              dispatch(removePendingRequest(message.requestId));
+
+              // If this was a refresh request with no cached data, set error state on the section
+              if (pendingRequest.type === 'refresh' && pendingRequest.sectionId) {
+                dispatch(setPatrolsError({
+                  sectionId: pendingRequest.sectionId,
+                  error: message.error,
+                }));
+              }
+            }
+          }
+
+          // Always show error dialog for user feedback (warning if data was cached)
+          dispatch(showErrorDialog({
+            title: message.function,
+            message: message.error,
+          }));
+          break;
+
         default:
           console.warn('[useWorkerBootstrap] Unhandled message type:', (message as any).type);
       }
@@ -92,7 +144,14 @@ export function useWorkerBootstrap(): Worker | null {
 
     // Request initial profile
     console.log('[useWorkerBootstrap] Requesting profile...');
-    worker.sendGetProfileRequest();
+    const requestId = worker.sendGetProfileRequest();
+
+    // Track the pending request
+    dispatch(addPendingRequest({
+      requestId,
+      type: 'get-profile',
+      timestamp: Date.now(),
+    }));
   }, [dispatch]);
 
   return workerRef.current;

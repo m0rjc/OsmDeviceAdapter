@@ -7,6 +7,8 @@ import {NetworkError, OsmAdapterApiService, type SessionStatus} from "./server/s
 import * as clients from "./client";
 import {OpenPatrolPointsStore, PatrolPointsStore, Patrol as StoredPatrol} from "./store/store";
 import type {ScoreDelta} from "../types/model";
+import {newServiceErrorMessage} from "../types/messages";
+import {reduceError} from "../types/reduceError.ts";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -35,13 +37,13 @@ self.addEventListener('message', (event) => {
     const message = event.data as messages.ClientMessage;
     switch (message.type) {
         case 'get-profile':
-            getProfile(client);
+            getProfile(client, message.requestId);
             break;
         case 'refresh':
-            refreshScores(client, message.userId, message.sectionId);
+            refreshScores(client, message.requestId, message.userId, message.sectionId);
             break;
         case 'submit-scores':
-            submitScores(client, message.userId, message.sectionId, message.deltas);
+            submitScores(client, message.requestId, message.userId, message.sectionId, message.deltas);
             break;
         default:
             const unrecognized = message as any;
@@ -55,11 +57,12 @@ self.addEventListener('message', (event) => {
  * @param server
  * @param client
  * @param userId
+ * @param requestId - Optional correlation ID from the originating request
  */
-async function requireLoggedInUser(server: OsmAdapterApiService, client: Client, userId: number): Promise<SessionStatus>  {
+async function requireLoggedInUser(server: OsmAdapterApiService, client: Client, userId: number, requestId?: string): Promise<SessionStatus>  {
     const session = await server.fetchSession();
     if(!session.isAuthenticated) {
-        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl()));
+        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
         return session;
     }
     if (session.userId != userId) {
@@ -78,13 +81,16 @@ async function requireLoggedInUser(server: OsmAdapterApiService, client: Client,
  * changed. This is published after the UserProfileMessage sent to the calling
  * client. The first client will expect both messages because its call will
  * initialize the section list for the first time. The section list is
- * stored in browser storage until explicitly cleared. * @param client
+ * stored in browser storage until explicitly cleared.
+ *
+ * @param client - The client requesting the profile
+ * @param requestId - Correlation ID to match request with response
  */
-export async function getProfile(client: Client) {
+export async function getProfile(client: Client, requestId: string) {
     const server = new OsmAdapterApiService();
     const session = await server.fetchSession();
     if(!session.isAuthenticated) {
-        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl()));
+        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
         return session;
     }
 
@@ -92,7 +98,7 @@ export async function getProfile(client: Client) {
     try {
         const sections = await server.fetchSections()
         const changed = await store.setCanonicalSectionList(sections);
-        client.postMessage(messages.newUserProfileMessage(session.userId, session.userName, sections));
+        client.postMessage(messages.newUserProfileMessage(session.userId, session.userName, sections, requestId));
         if (changed) {
             await clients.sendMessage(messages.newSectionListChangeMessage(sections));
         }
@@ -102,16 +108,24 @@ export async function getProfile(client: Client) {
 }
 
 /**
- * Refresh the scores for the specified section from the server.
- * This synchronizes the canonical list of patrols with the server's list and adjusts the
- * committed score values.
- * @param client
- * @param userId
- * @param sectionId
+ * Request to refresh the patrol scores from the server.
+ * This can also be used to perform the initial load of scores when the UI switches section.
+ *
+ * The worker will respond asynchronously with a PatrolsChangeMessage (includes requestId).
+ * If the server is unreachable, cached data is sent first (with requestId), followed by
+ * a ServiceErrorMessage (with requestId) to indicate the refresh failed.
+ *
+ * If the user is not logged in, then AuthenticationRequiredMessage is given (with requestId).
+ * If the wrong user is logged in, then WrongUserMessage is given.
+ *
+ * @param client - The client requesting the refresh
+ * @param requestId - Correlation ID to match request with response
+ * @param userId - Expected user ID
+ * @param sectionId - Section ID to refresh
  */
-export async function refreshScores(client: Client, userId: number, sectionId: number) {
+export async function refreshScores(client: Client, requestId: string, userId: number, sectionId: number) {
     const server = new OsmAdapterApiService();
-    const session = await requireLoggedInUser(server, client, userId);
+    const session = await requireLoggedInUser(server, client, userId, requestId);
     if(!session.isAuthenticated) {
         return;
     }
@@ -120,17 +134,41 @@ export async function refreshScores(client: Client, userId: number, sectionId: n
     try {
         const scores = await server.fetchScores(sectionId);
         const newScores = await store.setCanonicalPatrolList(sectionId, scores);
-        await clients.publishScores(userId, sectionId, newScores);
+        // Send successful response with requestId to the specific client
+        clients.sendScoresToClient(client, userId, sectionId, newScores, requestId);
+    } catch (e) {
+        // If we weren't able to refresh from the server, then send the locally cached scores to the client
+        // if we have them (with requestId so they know it's a response to their request).
+        await sendCachedScoresToClient(client, store, userId, sectionId, requestId);
+        // Then send error message with requestId so client can correlate with the failed request
+        clients.send(client, newServiceErrorMessage('Refresh failed', reduceError(e, "Unable to refresh patrol scores from server."), requestId));
     } finally {
         store.close();
+    }
+}
+
+async function sendCachedScoresToClient(client: Client, store: PatrolPointsStore, userId: number, sectionId: number, requestId?: string) {
+    try {
+        const scores : StoredPatrol[] = await store.getScoresForSection(sectionId);
+        if(scores.length > 0) {
+            clients.sendScoresToClient(client, userId, sectionId, scores, requestId);
+        }
+    } catch (e) {
+        // We've already sent an error message to the client, so just log the error here.
     }
 }
 
 /**
  * Add pending score changes to the store and trigger a sync.
  * This is called when the user makes changes in the UI.
+ *
+ * @param client - The client submitting the scores
+ * @param requestId - Correlation ID to match request with response
+ * @param userId - User ID
+ * @param sectionId - Section ID
+ * @param deltas - Score changes to apply
  */
-export async function submitScores(client: Client, userId: number, sectionId: number, deltas: ScoreDelta[]) {
+export async function submitScores(client: Client, requestId: string, userId: number, sectionId: number, deltas: ScoreDelta[]) {
     const store: PatrolPointsStore = await OpenPatrolPointsStore(userId);
     try {
         // Add pending changes to the store.
@@ -141,6 +179,7 @@ export async function submitScores(client: Client, userId: number, sectionId: nu
         }
 
         // Publish the optimistic update immediately to all clients
+        // Note: This is an unsolicited broadcast, so no requestId
         const updatedScores = await store.getScoresForSection(sectionId);
         await clients.publishScores(userId, sectionId, updatedScores);
 
@@ -148,7 +187,7 @@ export async function submitScores(client: Client, userId: number, sectionId: nu
         // If the user is not logged in, then requireLoggedInUser will send a message to the client
         // requesting them to log in again.
         const server = new OsmAdapterApiService();
-        if (! (await requireLoggedInUser(server, client, userId)).isAuthenticated) {
+        if (! (await requireLoggedInUser(server, client, userId, requestId)).isAuthenticated) {
             return;
         }
 

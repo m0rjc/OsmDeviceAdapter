@@ -3,6 +3,15 @@ import type { Section as ModelSection } from '../../types/model';
 import type { RootState } from './store';
 
 /**
+ * Loading state for async patrol data.
+ */
+export type PatrolsLoadingState =
+  | 'uninitialized'  // No data, no request sent
+  | 'loading'        // Request in flight
+  | 'ready'          // Data loaded successfully
+  | 'error';         // Load failed
+
+/**
  * UI representation of a patrol combining server state with local user input.
  *
  * TODO: We should bring the error information through to here from the SW so we can
@@ -28,6 +37,12 @@ export interface UIPatrol {
  * This allows lazy loading - we can display the section list without
  * fetching scores for all sections upfront.
  *
+ * Loading states prevent duplicate requests and provide better UX:
+ * - 'uninitialized': No data, no request sent yet
+ * - 'loading': Request in flight, avoid duplicate fetches
+ * - 'ready': Data loaded successfully
+ * - 'error': Load failed, can retry
+ *
  * TODO: We'll store last refresh time in here, but we need that supported from the SW code. Future story.
  */
 export interface UISection {
@@ -36,6 +51,10 @@ export interface UISection {
   groupName: string;
   /** Patrol scores (undefined until loaded from server) */
   patrols?: UIPatrol[];
+  /** Loading state for patrol data */
+  patrolsLoadingState: PatrolsLoadingState;
+  /** Error message if loading failed */
+  patrolsError?: string;
 }
 
 /**
@@ -88,7 +107,7 @@ const appSlice = createSlice({
       for (const modelSection of action.payload) {
         const existing = existingSectionsMap.get(modelSection.id);
         if (existing) {
-          // Update existing section but preserve patrols
+          // Update existing section but preserve patrols and loading state
           newSections.push({
             ...existing,
             name: modelSection.name,
@@ -100,6 +119,7 @@ const appSlice = createSlice({
             id: modelSection.id,
             name: modelSection.name,
             groupName: modelSection.groupName,
+            patrolsLoadingState: 'uninitialized',
           });
         }
       }
@@ -124,6 +144,7 @@ const appSlice = createSlice({
      * - Updates existing patrols (name, committedScore, pendingScore)
      * - Removes patrols not in the new list
      * - PRESERVES userEntry for existing patrols (won't wipe in-progress edits)
+     * - Sets loading state to 'ready'
      *
      * This is critical for handling server updates while user is editing.
      * For example, if background sync completes while user is entering scores,
@@ -173,6 +194,35 @@ const appSlice = createSlice({
       });
 
       section.patrols = newPatrols;
+      section.patrolsLoadingState = 'ready';
+      section.patrolsError = undefined;
+    },
+
+    /**
+     * Set patrol loading state to 'loading' for a section.
+     * Called when we start fetching patrol data.
+     */
+    setPatrolsLoading: (state, action: PayloadAction<{ sectionId: number }>) => {
+      const section = state.sections.find(s => s.id === action.payload.sectionId);
+      if (section) {
+        section.patrolsLoadingState = 'loading';
+        section.patrolsError = undefined;
+      }
+    },
+
+    /**
+     * Set patrol loading state to 'error' for a section.
+     * Called when patrol fetch fails.
+     */
+    setPatrolsError: (
+      state,
+      action: PayloadAction<{ sectionId: number; error: string }>
+    ) => {
+      const section = state.sections.find(s => s.id === action.payload.sectionId);
+      if (section) {
+        section.patrolsLoadingState = 'error';
+        section.patrolsError = action.payload.error;
+      }
     },
 
     /**
@@ -287,6 +337,8 @@ const appSlice = createSlice({
 export const {
   setCanonicalSections,
   setCanonicalPatrols,
+  setPatrolsLoading,
+  setPatrolsError,
   setUserEntry,
   clearUserEntry,
   clearAllUserEntries,
@@ -356,5 +408,26 @@ export const selectPatrolById = (sectionId: number, patrolId: string) =>
       return section.patrols.find(p => p.id === patrolId) || null;
     }
   );
+
+// Loading state selectors
+export const selectPatrolsLoadingStateForSelectedSection = createSelector(
+  [selectSelectedSection],
+  (section) => section?.patrolsLoadingState || 'uninitialized'
+);
+
+export const selectIsPatrolsLoading = createSelector(
+  [selectPatrolsLoadingStateForSelectedSection],
+  (state) => state === 'loading'
+);
+
+export const selectPatrolsError = createSelector(
+  [selectSelectedSection],
+  (section) => section?.patrolsError || null
+);
+
+export const selectCanRetryPatrolsLoad = createSelector(
+  [selectPatrolsLoadingStateForSelectedSection],
+  (state) => state === 'error'
+);
 
 export default appSlice.reducer;

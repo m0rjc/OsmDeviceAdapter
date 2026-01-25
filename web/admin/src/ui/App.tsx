@@ -2,7 +2,7 @@ import { useWorkerBootstrap } from './hooks';
 import { useAppSelector } from './state/hooks';
 import { selectIsAuthenticated, selectUserName } from './state/userSlice';
 import { selectGlobalError, selectSections, selectSelectedSectionId } from './state/appSlice';
-import { LoginPage, MessageCard } from './components';
+import { LoginPage, MessageCard, ErrorDialog } from './components';
 
 /**
  * Main application component using Redux and worker-based architecture.
@@ -26,50 +26,62 @@ export function App() {
   // Show global error if present (e.g., session mismatch)
   if (globalError) {
     return (
-      <div className="app">
-        <main className="main">
-          <MessageCard
-            title="Session Error"
-            message={globalError}
-            action={{
-              label: 'Reload Page',
-              onClick: () => window.location.reload(),
-            }}
-            className="error-state"
-          />
-        </main>
-      </div>
+      <>
+        <ErrorDialog />
+        <div className="app">
+          <main className="main">
+            <MessageCard
+              title="Session Error"
+              message={globalError}
+              action={{
+                label: 'Reload Page',
+                onClick: () => window.location.reload(),
+              }}
+              className="error-state"
+            />
+          </main>
+        </div>
+      </>
     );
   }
 
   // Show login page if not authenticated
   if (!isAuthenticated) {
-    return <LoginPage />;
+    return (
+      <>
+        <ErrorDialog />
+        <LoginPage />
+      </>
+    );
   }
 
   // Show authenticated content (temporary bootstrap checkpoint)
   return (
-    <div className="app">
-      <header className="header">
-        <h1>Patrol Scores Admin</h1>
-        <p>Logged in as: {userName}</p>
-      </header>
-      <main className="main">
-        <div className="bootstrap-checkpoint">
-          <h2>Bootstrap Checkpoint</h2>
-          <p>Sections loaded: {sections.length}</p>
-          <p>Selected section ID: {selectedSectionId ?? 'none'}</p>
-          <h3>Sections:</h3>
-          <ul>
-            {sections.map(s => (
-              <li key={s.id}>
-                {s.id === selectedSectionId ? '✓ ' : ''}
-                {s.name} ({s.groupName})
-              </li>
-            ))}
-          </ul>
-        </div>
-      </main>
-    </div>
+    <>
+      <ErrorDialog />
+      <div className="app">
+        <header className="header">
+          <h1>Patrol Scores Admin</h1>
+          <p>Logged in as: {userName}</p>
+        </header>
+        <main className="main">
+          <div className="bootstrap-checkpoint">
+            <h2>Bootstrap Checkpoint</h2>
+            <p>Sections loaded: {sections.length}</p>
+            <p>Selected section ID: {selectedSectionId ?? 'none'}</p>
+            <h3>Sections:</h3>
+            <ul>
+              {sections.map(s => (
+                <li key={s.id}>
+                  {s.id === selectedSectionId ? '✓ ' : ''}
+                  {s.name} ({s.groupName})
+                  {s.patrols !== undefined && ` - ${s.patrols.length} patrols loaded`}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </main>
+      </div>
+    </>
   );
 }

@@ -33,6 +33,9 @@ import { getProfile, refreshScores, submitScores } from './sw';
 const MockOsmAdapterApiService = OsmAdapterApiService as jest.MockedClass<typeof OsmAdapterApiService>;
 const MockOpenPatrolPointsStore = OpenPatrolPointsStore as jest.MockedFunction<typeof OpenPatrolPointsStore>;
 
+// Test correlation ID
+const TEST_REQUEST_ID = 'test-request-id-123';
+
 // Helper to create a mock client
 function createMockClient(): Client {
   return {
@@ -104,13 +107,13 @@ describe('Service Worker Message Handlers', () => {
       mockApiService.fetchSections.mockResolvedValue(sections);
       mockStore.setCanonicalSectionList.mockResolvedValue(false); // No changes
 
-      await getProfile(client);
+      await getProfile(client, TEST_REQUEST_ID);
 
       expect(mockApiService.fetchSession).toHaveBeenCalled();
       expect(mockApiService.fetchSections).toHaveBeenCalled();
       expect(mockStore.setCanonicalSectionList).toHaveBeenCalledWith(sections);
       expect(client.postMessage).toHaveBeenCalledWith(
-        messages.newUserProfileMessage(userId, userName, sections)
+        messages.newUserProfileMessage(userId, userName, sections, TEST_REQUEST_ID)
       );
       expect(mockStore.close).toHaveBeenCalled();
     });
@@ -130,8 +133,8 @@ describe('Service Worker Message Handlers', () => {
       mockApiService.fetchSections.mockResolvedValue(sections);
       mockStore.setCanonicalSectionList.mockResolvedValue(true); // Changed!
 
-      
-      await getProfile(client);
+
+      await getProfile(client, TEST_REQUEST_ID);
 
       expect(clients.sendMessage).toHaveBeenCalledWith(
         messages.newSectionListChangeMessage(sections)
@@ -146,10 +149,10 @@ describe('Service Worker Message Handlers', () => {
         isAuthenticated: false,
       });
 
-      await getProfile(client);
+      await getProfile(client, TEST_REQUEST_ID);
 
       expect(client.postMessage).toHaveBeenCalledWith(
-        messages.newAuthenticationRequiredMessage('/admin/login')
+        messages.newAuthenticationRequiredMessage('/admin/login', TEST_REQUEST_ID)
       );
       expect(mockApiService.fetchSections).not.toHaveBeenCalled();
       // Store is never opened on auth failure, so close() is not called
@@ -163,13 +166,13 @@ describe('Service Worker Message Handlers', () => {
 
       mockApiService.fetchSession.mockRejectedValue(new Error('Network error'));
 
-      await expect(getProfile(client)).rejects.toThrow('Network error');
+      await expect(getProfile(client, TEST_REQUEST_ID)).rejects.toThrow('Network error');
       // Store is never opened when auth check fails
     });
   });
 
   describe('refresh message', () => {
-    it('should refresh scores and publish to clients', async () => {
+    it('should refresh scores and send to specific client with requestId', async () => {
       const client = createMockClient();
       const userId = 123;
       const sectionId = 1;
@@ -191,12 +194,12 @@ describe('Service Worker Message Handlers', () => {
       mockApiService.fetchScores.mockResolvedValue(scores);
       mockStore.setCanonicalPatrolList.mockResolvedValue(storedPatrols);
 
-      
-      await refreshScores(client, userId, sectionId);
+
+      await refreshScores(client, TEST_REQUEST_ID, userId, sectionId);
 
       expect(mockApiService.fetchScores).toHaveBeenCalledWith(sectionId);
       expect(mockStore.setCanonicalPatrolList).toHaveBeenCalledWith(sectionId, scores);
-      expect(clients.publishScores).toHaveBeenCalledWith(userId, sectionId, storedPatrols);
+      expect(clients.sendScoresToClient).toHaveBeenCalledWith(client, userId, sectionId, storedPatrols, TEST_REQUEST_ID);
       expect(mockStore.close).toHaveBeenCalled();
     });
 
@@ -209,17 +212,20 @@ describe('Service Worker Message Handlers', () => {
         isAuthenticated: false,
       });
 
-      
-      await refreshScores(client, userId, sectionId);
+
+      await refreshScores(client, TEST_REQUEST_ID, userId, sectionId);
 
       expect(mockApiService.fetchScores).not.toHaveBeenCalled();
       // Store is never opened on auth failure
     });
 
-    it('should close store even if error occurs', async () => {
+    it('should send cached scores and error message with requestId when refresh fails', async () => {
       const client = createMockClient();
       const userId = 123;
       const sectionId = 1;
+      const cachedScores = [
+        new Patrol(userId, sectionId, '1', 'Red', 10),
+      ];
 
       mockApiService.fetchSession.mockResolvedValue({
         isAuthenticated: true,
@@ -229,15 +235,22 @@ describe('Service Worker Message Handlers', () => {
 
       const fetchError = new NetworkError('Fetch failed');
       mockApiService.fetchScores.mockRejectedValue(fetchError);
+      mockStore.getScoresForSection.mockResolvedValue(cachedScores);
 
-      // The function should still throw the error
-      try {
-        await refreshScores(client, userId, sectionId);
-        // If we get here, the error wasn't thrown - that's a problem but not what we're testing
-      } catch (e) {
-        // Error was thrown as expected
-        expect(e).toBe(fetchError);
-      }
+      await refreshScores(client, TEST_REQUEST_ID, userId, sectionId);
+
+      // Should send cached scores with requestId
+      expect(clients.sendScoresToClient).toHaveBeenCalledWith(client, userId, sectionId, cachedScores, TEST_REQUEST_ID);
+
+      // Should send error message with requestId
+      expect(clients.send).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({
+          type: 'service-error',
+          requestId: TEST_REQUEST_ID,
+          function: 'Refresh failed',
+        })
+      );
 
       // The important thing is that close() is ALWAYS called
       expect(mockStore.close).toHaveBeenCalled();
@@ -290,14 +303,15 @@ describe('Service Worker Message Handlers', () => {
         },
       ]);
 
-      
-      await submitScores(client, userId, sectionId, deltas);
+
+
+      await submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas);
 
       // Should add pending points
       expect(mockStore.addPendingPoints).toHaveBeenCalledWith(sectionId, '1', 5);
       expect(mockStore.addPendingPoints).toHaveBeenCalledWith(sectionId, '2', 3);
 
-      // Should publish optimistic update
+      // Should publish optimistic update (note: no requestId - this is an unsolicited broadcast to all clients)
       expect(clients.publishScores).toHaveBeenCalledWith(userId, sectionId, updatedScores);
 
       // Should sync to server
@@ -319,8 +333,9 @@ describe('Service Worker Message Handlers', () => {
 
       mockStore.getScoresForSection.mockResolvedValue(updatedScores);
 
-      
-      await submitScores(client, userId, sectionId, deltas);
+
+
+      await submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas);
 
       // Should still add pending points
       expect(mockStore.addPendingPoints).toHaveBeenCalledWith(sectionId, '1', 5);
@@ -350,8 +365,9 @@ describe('Service Worker Message Handlers', () => {
       mockApiService.isOffline.mockReturnValue(true);
       mockStore.getScoresForSection.mockResolvedValue(updatedScores);
 
-      
-      await submitScores(client, userId, sectionId, deltas);
+
+
+      await submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas);
 
       // Should add pending points
       expect(mockStore.addPendingPoints).toHaveBeenCalled();
@@ -385,8 +401,9 @@ describe('Service Worker Message Handlers', () => {
       // Network error during sync
       mockApiService.updateScores.mockRejectedValue(new NetworkError('Network failed'));
 
-      
-      await submitScores(client, userId, sectionId, deltas);
+
+
+      await submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas);
 
       // Should release lock even on error
       expect(mockStore.releaseSyncLock).toHaveBeenCalledWith(sectionId, 'lock-123');
@@ -422,8 +439,9 @@ describe('Service Worker Message Handlers', () => {
         new ApiError(500, 'server_error', 'Internal server error')
       );
 
-      
-      await submitScores(client, userId, sectionId, deltas);
+
+
+      await submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas);
 
       // Should mark all as failed for API errors - uses e.message || fallback
       expect(mockStore.markAllPendingAsFailed).toHaveBeenCalledWith(
@@ -491,8 +509,9 @@ describe('Service Worker Message Handlers', () => {
         },
       ]);
 
-      
-      await submitScores(client, userId, sectionId, deltas);
+
+
+      await submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas);
 
       const uow = mockStore.newUnitOfWork();
 
@@ -533,8 +552,9 @@ describe('Service Worker Message Handlers', () => {
         pending: [], // No pending!
       });
 
-      
-      await submitScores(client, userId, sectionId, deltas);
+
+
+      await submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas);
 
       // Should NOT call updateScores when no pending
       expect(mockApiService.updateScores).not.toHaveBeenCalled();

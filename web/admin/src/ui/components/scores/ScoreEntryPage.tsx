@@ -21,10 +21,10 @@ import {
 import { Loading } from '../../../legacy/components/Loading';
 import { ConfirmDialog } from '../../../legacy/components/ConfirmDialog';
 import { useToast } from '../../../legacy/hooks';
+import { MessageCard } from '../MessageCard';
 import { ScoreHeader } from './ScoreHeader';
 import { PatrolList } from './PatrolList';
 import { ScoreActions } from './ScoreActions';
-import { MessageCard } from './MessageCard.tsx';
 
 interface ScoreEntryPageProps {
   /** CSRF token for authenticated API requests */

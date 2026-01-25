@@ -22,8 +22,24 @@ export interface Worker {
      * client. The first client will expect both messages because its call will
      * initialize the section list for the first time. The section list is
      * stored in browser storage until explicitly cleared.
+     *
+     * @returns requestId for correlating the response
      */
-    sendGetProfileRequest():void;
+    sendGetProfileRequest(): string;
+
+    /**
+     * Request to refresh the patrol scores from the server.
+     * This can also be used to perform the initial load of scores when the UI switches section.
+     *
+     * The worker will respond asynchronously with a PatrolsChangeMessage.
+     * This may be cached if the server is unreachable. A ServiceErrorMessage will be sent in this case.
+     *
+     * If the user is not logged in, then AuthenticationRequiredMessage is given.
+     * If the wrong user is logged in, then WrongUserMessage is given.
+     *
+     * @returns requestId for correlating the response
+     */
+    sendRefreshRequest(userId: number, sectionId: number): string;
 }
 
 /**
@@ -98,7 +114,15 @@ class WorkerService implements Worker {
         this.sw.controller?.postMessage(message);
     }
 
-    public sendGetProfileRequest() {
-        this.sendMessage({type: "get-profile"});
+    public sendGetProfileRequest(): string {
+        const requestId = crypto.randomUUID();
+        this.sendMessage({type: "get-profile", requestId});
+        return requestId;
+    }
+
+    public sendRefreshRequest(userId: number, sectionId: number): string {
+        const requestId = crypto.randomUUID();
+        this.sendMessage({type: "refresh", requestId, userId, sectionId});
+        return requestId;
     }
 }

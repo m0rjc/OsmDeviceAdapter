@@ -3,4 +3,3 @@ export { PatrolCard } from './PatrolCard';
 export { PatrolList } from './PatrolList';
 export { ScoreHeader } from './ScoreHeader';
 export { ScoreActions } from './ScoreActions';
-export { MessageCard } from './MessageCard.tsx';
