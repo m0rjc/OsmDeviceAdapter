@@ -24,7 +24,7 @@ jest.mock('./server/server');
 jest.mock('./store/store');
 
 import { OsmAdapterApiService, NetworkError, ApiError } from './server/server';
-import { OpenPatrolPointsStore, PatrolPointsStore, Section, Patrol } from './store/store';
+import { OpenPatrolPointsStore, PatrolPointsStore, Patrol } from './store/store';
 import * as messages from '../types/messages';
 import * as clients from './client';
 import { getProfile, refreshScores, submitScores } from './sw';
@@ -104,7 +104,7 @@ describe('Service Worker Message Handlers', () => {
       mockApiService.fetchSections.mockResolvedValue(sections);
       mockStore.setCanonicalSectionList.mockResolvedValue(false); // No changes
 
-      await getProfile(client, userId);
+      await getProfile(client);
 
       expect(mockApiService.fetchSession).toHaveBeenCalled();
       expect(mockApiService.fetchSections).toHaveBeenCalled();
@@ -131,7 +131,7 @@ describe('Service Worker Message Handlers', () => {
       mockStore.setCanonicalSectionList.mockResolvedValue(true); // Changed!
 
       
-      await getProfile(client, userId);
+      await getProfile(client);
 
       expect(clients.sendMessage).toHaveBeenCalledWith(
         messages.newSectionListChangeMessage(sections)
@@ -141,14 +141,12 @@ describe('Service Worker Message Handlers', () => {
 
     it('should send authentication-required when not logged in', async () => {
       const client = createMockClient();
-      const userId = 123;
 
       mockApiService.fetchSession.mockResolvedValue({
         isAuthenticated: false,
       });
 
-      
-      await getProfile(client, userId);
+      await getProfile(client);
 
       expect(client.postMessage).toHaveBeenCalledWith(
         messages.newAuthenticationRequiredMessage('/admin/login')
@@ -157,34 +155,15 @@ describe('Service Worker Message Handlers', () => {
       // Store is never opened on auth failure, so close() is not called
     });
 
-    it('should send wrong-user when different user logged in', async () => {
-      const client = createMockClient();
-      const requestedUserId = 123;
-      const currentUserId = 456;
-
-      mockApiService.fetchSession.mockResolvedValue({
-        isAuthenticated: true,
-        userId: currentUserId,
-        userName: 'Different User',
-      });
-
-      
-      await getProfile(client, requestedUserId);
-
-      expect(client.postMessage).toHaveBeenCalledWith(
-        messages.newWrongUserMessage(requestedUserId, currentUserId)
-      );
-      expect(mockApiService.fetchSections).not.toHaveBeenCalled();
-      // Store is never opened on wrong user (requireLoggedInUser returns early)
-    });
+    // Note: wrong-user test removed - getProfile no longer takes userId parameter
+    // It now fetches whoever is currently logged in
 
     it('should close store even if error occurs', async () => {
       const client = createMockClient();
-      const userId = 123;
 
       mockApiService.fetchSession.mockRejectedValue(new Error('Network error'));
 
-      await expect(getProfile(client, userId)).rejects.toThrow('Network error');
+      await expect(getProfile(client)).rejects.toThrow('Network error');
       // Store is never opened when auth check fails
     });
   });

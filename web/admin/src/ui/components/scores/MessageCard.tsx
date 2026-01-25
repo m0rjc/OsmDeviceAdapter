@@ -8,6 +8,8 @@ interface EmptyStateProps {
     label: string;
     onClick: () => void;
   };
+  /** Optional CSS class for styling variants (e.g., 'error-state') */
+  className?: string;
 }
 
 /**
@@ -35,9 +37,11 @@ interface EmptyStateProps {
  * />
  * ```
  */
-export function MessageCard({ title, message, action }: EmptyStateProps) {
+export function MessageCard({ title, message, action, className }: EmptyStateProps) {
+  const classNames = ['empty-state', className].filter(Boolean).join(' ');
+
   return (
-    <div className="empty-state">
+    <div className={classNames}>
       <h3>{title}</h3>
       <p>{message}</p>
       {action && (

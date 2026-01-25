@@ -46,11 +46,14 @@ export interface AppState {
   sections: UISection[];
   /** ID of the currently selected section (null if none selected) */
   selectedSectionId: number | null;
+  /** Global error message (e.g., session mismatch) */
+  globalError: string | null;
 }
 
 const initialState: AppState = {
   sections: [],
   selectedSectionId: null,
+  globalError: null,
 };
 
 /**
@@ -106,6 +109,11 @@ const appSlice = createSlice({
       // Clear selection if selected section was deleted
       if (state.selectedSectionId !== null && !newSectionIds.has(state.selectedSectionId)) {
         state.selectedSectionId = null;
+      }
+
+      // Auto-select first section if no section is selected and sections are available
+      if (state.selectedSectionId === null && newSections.length > 0) {
+        state.selectedSectionId = newSections[0].id;
       }
     },
 
@@ -255,6 +263,23 @@ const appSlice = createSlice({
     clearAllData: (state) => {
       state.sections = [];
       state.selectedSectionId = null;
+      state.globalError = null;
+    },
+
+    /**
+     * Set a global error message.
+     *
+     * Used for critical errors like session mismatch that require user action.
+     */
+    setGlobalError: (state, action: PayloadAction<string>) => {
+      state.globalError = action.payload;
+    },
+
+    /**
+     * Clear the global error message.
+     */
+    clearGlobalError: (state) => {
+      state.globalError = null;
     },
   },
 });
@@ -268,11 +293,14 @@ export const {
   selectSection,
   clearSelectedSection,
   clearAllData,
+  setGlobalError,
+  clearGlobalError,
 } = appSlice.actions;
 
 // Basic selectors
 export const selectSections = (state: RootState) => state.app.sections;
 export const selectSelectedSectionId = (state: RootState) => state.app.selectedSectionId;
+export const selectGlobalError = (state: RootState) => state.app.globalError;
 
 // Composed selectors
 export const selectSelectedSection = createSelector(

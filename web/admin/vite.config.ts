@@ -11,7 +11,7 @@ export default defineConfig({
     react(),
     VitePWA({
       strategies: 'injectManifest',
-      srcDir: 'src',
+      srcDir: 'src/worker',
       filename: 'sw.ts',
       registerType: 'prompt',
       includeAssets: ['favicon.svg', 'icons/*.png'],

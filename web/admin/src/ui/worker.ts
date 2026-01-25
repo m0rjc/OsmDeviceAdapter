@@ -26,13 +26,54 @@ export interface Worker {
     sendGetProfileRequest():void;
 }
 
-export function GetWorker() : Worker {
+/**
+ * Worker factory function type.
+ * Can be overridden for testing via setWorkerFactory().
+ */
+type WorkerFactory = () => Worker;
+
+/**
+ * Default worker factory - returns real ServiceWorker-based implementation.
+ */
+const defaultWorkerFactory: WorkerFactory = () => {
     if (navigator.serviceWorker?.controller) {
         return new WorkerService(navigator.serviceWorker);
     }
     // We could fallback to an in-memory implementation if needed.
     // So far this has only been run on clients that support the Service Worker API.
     throw new Error("Service Worker API not supported");
+};
+
+/**
+ * Current worker factory (can be overridden for testing).
+ */
+let currentWorkerFactory: WorkerFactory = defaultWorkerFactory;
+
+/**
+ * Get a worker instance using the current factory.
+ * In production, returns a ServiceWorker-based implementation.
+ * In tests, can return a mock via setWorkerFactory().
+ */
+export function GetWorker(): Worker {
+    return currentWorkerFactory();
+}
+
+/**
+ * Override the worker factory for testing.
+ * Call with no arguments to reset to default factory.
+ *
+ * @example
+ * ```typescript
+ * // In test setup
+ * const mockWorker = { onMessage: jest.fn(), sendGetProfileRequest: jest.fn() };
+ * setWorkerFactory(() => mockWorker);
+ *
+ * // In test teardown
+ * setWorkerFactory(); // Reset to default
+ * ```
+ */
+export function setWorkerFactory(factory?: WorkerFactory): void {
+    currentWorkerFactory = factory || defaultWorkerFactory;
 }
 
 /**
