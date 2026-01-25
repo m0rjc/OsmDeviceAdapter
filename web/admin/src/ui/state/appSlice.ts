@@ -1,9 +1,12 @@
 import { createSlice, type PayloadAction, createSelector } from '@reduxjs/toolkit';
-import type { Section as ModelSection } from '../../worker/types/model';
+import type { Section as ModelSection } from '../../types/model';
 import type { RootState } from './store';
 
 /**
  * UI representation of a patrol combining server state with local user input.
+ *
+ * TODO: We should bring the error information through to here from the SW so we can
+ *       provide a means to show it. (Possibly an icon that can be clicked on or hovered over)
  */
 export interface UIPatrol {
   /** Patrol ID (can be empty string or negative for OSM special patrols) */
@@ -24,6 +27,8 @@ export interface UIPatrol {
  * The patrols array is undefined until scores are loaded for this section.
  * This allows lazy loading - we can display the section list without
  * fetching scores for all sections upfront.
+ *
+ * TODO: We'll store last refresh time in here, but we need that supported from the SW code. Future story.
  */
 export interface UISection {
   id: number;

@@ -1,5 +1,5 @@
 import * as api from './types';
-import * as model from '../types/model';
+import * as model from '../../types/model';
 import type {SessionResponse} from "./types";
 
 /**

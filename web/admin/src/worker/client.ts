@@ -1,5 +1,5 @@
-import * as messages from "./messages"
-import * as model from "./types/model"
+import * as messages from "../types/messages"
+import * as model from "../types/model"
 import * as store from "./store/store"
 
 declare let self: ServiceWorkerGlobalScope;

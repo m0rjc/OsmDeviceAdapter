@@ -25,7 +25,7 @@ jest.mock('./store/store');
 
 import { OsmAdapterApiService, NetworkError, ApiError } from './server/server';
 import { OpenPatrolPointsStore, PatrolPointsStore, Section, Patrol } from './store/store';
-import * as messages from './messages';
+import * as messages from '../types/messages';
 import * as clients from './client';
 import { getProfile, refreshScores, submitScores } from './sw';
 

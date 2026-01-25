@@ -2,11 +2,11 @@
 import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 import { registerRoute } from 'workbox-routing';
 import { NetworkFirst } from 'workbox-strategies';
-import * as messages from './messages'
+import * as messages from '../types/messages'
 import {NetworkError, OsmAdapterApiService, type SessionStatus} from "./server/server";
 import * as clients from "./client";
 import {OpenPatrolPointsStore, PatrolPointsStore, Patrol as StoredPatrol} from "./store/store";
-import type {ScoreDelta} from "./types/model";
+import type {ScoreDelta} from "../types/model";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -35,7 +35,7 @@ self.addEventListener('message', (event) => {
     const message = event.data as messages.ClientMessage;
     switch (message.type) {
         case 'get-profile':
-            getProfile(client, message.userId);
+            getProfile(client);
             break;
         case 'refresh':
             refreshScores(client, message.userId, message.sectionId);
@@ -71,26 +71,31 @@ async function requireLoggedInUser(server: OsmAdapterApiService, client: Client,
 
 /**
  * Fetch the user profile from the server and send it to the client.
- * Synchronize the stored canonical list of sections with the server's list and
- * broadcast a newSectionListChangeMessage if the list has changed.
- * @param client
- * @param userId
+ * If the user is logged in, then a UserProfileMessage is given.
+ * If the user is logged out, then an AuthenticationRequiredMessage is given.
+ *
+ * All clients will receive a SectionListChangeMessage if the section list has
+ * changed. This is published after the UserProfileMessage sent to the calling
+ * client. The first client will expect both messages because its call will
+ * initialize the section list for the first time. The section list is
+ * stored in browser storage until explicitly cleared. * @param client
  */
-export async function getProfile(client: Client, userId: number) {
+export async function getProfile(client: Client) {
     const server = new OsmAdapterApiService();
-    const session : SessionStatus = await requireLoggedInUser(server, client, userId);
-    if (!session.isAuthenticated) {
-        return;
+    const session = await server.fetchSession();
+    if(!session.isAuthenticated) {
+        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl()));
+        return session;
     }
 
-    const store = await OpenPatrolPointsStore(userId);
+    const store = await OpenPatrolPointsStore(session.userId);
     try {
         const sections = await server.fetchSections()
         const changed = await store.setCanonicalSectionList(sections);
+        client.postMessage(messages.newUserProfileMessage(session.userId, session.userName, sections));
         if (changed) {
             await clients.sendMessage(messages.newSectionListChangeMessage(sections));
         }
-        client.postMessage(messages.newUserProfileMessage(userId, session.userName, sections));
     } finally {
         store.close();
     }

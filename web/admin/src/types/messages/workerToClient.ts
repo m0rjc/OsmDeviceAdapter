@@ -1,4 +1,4 @@
-import type {PatrolScore, Section} from "../types/model.ts";
+import type {PatrolScore, Section} from "../model.ts";
 
 /** Message sent to the client to ask the user to reauthenticate. */
 export type AuthenticationRequiredMessage = {

@@ -1,5 +1,5 @@
 import {deleteRecord, getAllFromIndex, inTransaction, put, read} from "./promisDB";
-import * as model from "../types/model"
+import * as model from "../../types/model"
 
 const DB_NAME = 'penguin-patrol-scores';
 const DB_VERSION = 1;
