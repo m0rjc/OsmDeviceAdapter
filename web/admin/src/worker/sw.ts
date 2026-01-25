@@ -8,7 +8,7 @@ import * as clients from "./client";
 import {OpenPatrolPointsStore, PatrolPointsStore, Patrol as StoredPatrol} from "./store/store";
 import type {ScoreDelta} from "../types/model";
 import {newServiceErrorMessage} from "../types/messages";
-import {reduceError} from "../types/reduceError.ts";
+import {reduceError} from "../types/reduceError";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -140,8 +140,13 @@ export async function refreshScores(client: Client, requestId: string, userId: n
         // If we weren't able to refresh from the server, then send the locally cached scores to the client
         // if we have them (with requestId so they know it's a response to their request).
         await sendCachedScoresToClient(client, store, userId, sectionId, requestId);
-        // Then send error message with requestId so client can correlate with the failed request
-        clients.send(client, newServiceErrorMessage('Refresh failed', reduceError(e, "Unable to refresh patrol scores from server."), requestId));
+        // Then send error message with context so client can route error to the specific section
+        clients.send(client, newServiceErrorMessage(
+            'Refresh failed',
+            reduceError(e, "Unable to refresh patrol scores from server."),
+            userId,
+            { requestId, sectionId }
+        ));
     } finally {
         store.close();
     }

@@ -6,7 +6,9 @@ This application uses a **hybrid thunk + listener middleware** architecture for 
 
 ## Core Principles
 
-### 1. Correlation IDs for Request/Response Matching
+### 1. Dual-Purpose Error Identification
+
+**Correlation IDs (requestId) - Request Lifecycle Management**
 
 All worker requests include a unique `requestId` (UUID) that is echoed back in responses:
 
@@ -15,17 +17,44 @@ All worker requests include a unique `requestId` (UUID) that is echoed back in r
 worker.sendRefreshRequest(userId, sectionId) → returns requestId
 
 // Response (success)
-PatrolsChangeMessage { requestId, userId, sectionId, scores }
+PatrolsChangeMessage { requestId?, userId, sectionId, scores }
 
 // Response (error)
-ServiceErrorMessage { requestId, function, error }
+ServiceErrorMessage { requestId?, userId, sectionId?, patrolId?, function, error }
 ```
 
-**Benefits:**
-- Know which section a `ServiceErrorMessage` relates to
+**Correlation ID Benefits:**
+- Track request lifecycle (add to pending, remove from pending)
 - Prevent duplicate requests (check pending requests before sending)
+- Distinguish solicited (requestId present) vs unsolicited (requestId absent) messages
 - Handle rapid UI changes gracefully (user clicks A → B → A)
+- Logging/debugging - trace request/response pairs
 - Future: timeouts and request cancellation
+
+**Contextual Information (userId, sectionId, patrolId) - Error Routing**
+
+Errors include context about what failed:
+
+```typescript
+ServiceErrorMessage {
+  requestId?: string;       // Correlation for pending request cleanup
+  userId: number;           // Mandatory - which user context
+  sectionId?: number;       // Optional - which section failed
+  patrolId?: string;        // Optional - which patrol failed (future)
+  function: string;         // What operation failed
+  error: string;            // Error message
+}
+```
+
+**Context Benefits:**
+- **Self-describing errors** - Don't need to look up pending requests to know what failed
+- **Works for unsolicited errors** - Background sync errors have no requestId but still route correctly
+- **Enables inline error display** - Can show error icon on specific patrol (future)
+- **Resilient** - Works even if pending request tracking is cleared or missed
+
+**The Pattern:**
+1. Use **context (sectionId, patrolId) as PRIMARY** for error routing to UI
+2. Use **correlation (requestId) as SECONDARY** for request lifecycle cleanup
 
 ### 2. Loading State Tracking
 
@@ -166,20 +195,26 @@ case 'patrols-change':
 
 ```typescript
 case 'service-error':
-  // If response includes requestId, look up what failed
+  // FIRST: Use correlation to clean up pending request (if present)
   if (message.requestId) {
     const pendingRequest = state.pendingRequests.requests[message.requestId];
-    if (pendingRequest && pendingRequest.type === 'refresh') {
-      // Set error state on the specific section
-      dispatch(setPatrolsError({
-        sectionId: pendingRequest.sectionId,
-        error: message.error
-      }));
+    if (pendingRequest) {
       dispatch(removePendingRequest(message.requestId));
     }
   }
 
-  // Always show error dialog for user feedback
+  // SECOND: Use context to route error to UI (PRIMARY routing mechanism)
+  // This works for both solicited (with requestId) and unsolicited (background) errors
+  if (message.sectionId) {
+    dispatch(setPatrolsError({
+      sectionId: message.sectionId,
+      error: message.error
+    }));
+  }
+
+  // TODO: If patrolId provided, set error on specific patrol (future enhancement)
+
+  // FINALLY: Always show error dialog for user feedback
   dispatch(showErrorDialog({ title: message.function, message: message.error }));
   break;
 ```
@@ -194,6 +229,40 @@ case 'patrols-change':
   }
   dispatch(setCanonicalPatrols({ sectionId, patrols }));
   break;
+```
+
+### 5. Why Both Correlation AND Context?
+
+**Example 1: Rapid Section Changes**
+```
+User clicks: Section A → Section B → Section A
+Requests sent: reqA1, reqB1, reqA2
+
+If responses arrive: resB1, resA1, resA2
+- Without correlation: Can't tell if resA1 or resA2 should clear "loading"
+- With correlation: Each response matches its request precisely
+```
+
+**Example 2: Background Sync Error**
+```
+Background sync fails for Section 3, Patrol "Red"
+Error has: { sectionId: 3, patrolId: "Red", NO requestId }
+
+- Without context: Can't route error (no requestId to look up)
+- With context: Can show error on Section 3, even inline on Patrol "Red"
+```
+
+**Example 3: Cached Data + Error**
+```
+User refreshes Section 2
+Worker sends: PatrolsChangeMessage (cached) then ServiceErrorMessage
+Both include: requestId="abc-123", sectionId=2
+
+Flow:
+1. PatrolsChangeMessage arrives → removes pending request, shows data
+2. ServiceErrorMessage arrives → no pending request (already removed)
+3. Context (sectionId=2) routes error → shows warning on Section 2
+4. Result: User sees stale data + warning, rather than blank screen
 ```
 
 ## Error Display Strategy
@@ -279,12 +348,15 @@ This would centralize error handling logic and make it easier to add new request
 ## Best Practices
 
 1. **Always use thunks for user actions** - Don't bypass them with direct action dispatch
-2. **Use correlation IDs for all worker requests** - Required for proper error handling
-3. **Check loading state before fetching** - Prevent duplicate requests
-4. **Handle both cached and error responses** - Worker may send both
-5. **Show transient errors in dialogs** - Use ErrorDialog for dismissable warnings
-6. **Show persistent errors in cards** - Use MessageCard for blocking states
-7. **Add comprehensive guards to listeners** - Prevent unwanted side effects
+2. **Use correlation IDs for all worker requests** - Required for request lifecycle management
+3. **Always include context in errors** - userId (mandatory), sectionId/patrolId (when applicable)
+4. **Route errors by context, not correlation** - Context works for both solicited and unsolicited errors
+5. **Check loading state before fetching** - Prevent duplicate requests
+6. **Handle both cached and error responses** - Worker may send both (cached data first, error second)
+7. **Show transient errors in dialogs** - Use ErrorDialog for dismissable warnings
+8. **Show persistent errors in cards** - Use MessageCard for blocking states
+9. **Add comprehensive guards to listeners** - Prevent unwanted side effects
+10. **Future: Enable inline patrol errors** - Use patrolId to show error icon on specific patrol
 
 ## Testing Strategy
 

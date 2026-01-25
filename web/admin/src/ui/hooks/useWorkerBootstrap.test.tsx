@@ -15,7 +15,8 @@ describe('Worker mocking pattern', () => {
     // Create mock worker
     const mockWorker: Worker = {
       onMessage: jest.fn(),
-      sendGetProfileRequest: jest.fn(),
+      sendGetProfileRequest: jest.fn().mockReturnValue('request-id-123'),
+      sendRefreshRequest: jest.fn().mockReturnValue('request-id-456'),
     };
 
     // Override the worker factory to return our mock
@@ -31,6 +32,7 @@ describe('Worker mocking pattern', () => {
     // Example of worker messages that can be sent to test Redux state updates
     const profileMessage: WorkerMessage = {
       type: 'user-profile',
+      requestId: 'req-123',
       userId: 123,
       userName: 'Test User',
       sections: [
@@ -48,6 +50,7 @@ describe('Worker mocking pattern', () => {
 
     const patrolsMessage: WorkerMessage = {
       type: 'patrols-change',
+      requestId: 'req-456', // Optional - may be absent for unsolicited updates
       userId: 123,
       sectionId: 1,
       scores: [
@@ -79,7 +82,8 @@ describe('Worker mocking pattern', () => {
  *
  *   const mockWorker: Worker = {
  *     onMessage: jest.fn(),
- *     sendGetProfileRequest: jest.fn(),
+ *     sendGetProfileRequest: jest.fn().mockReturnValue('req-123'),
+ *     sendRefreshRequest: jest.fn().mockReturnValue('req-456'),
  *   };
  *   setWorkerFactory(() => mockWorker);
  *
@@ -92,6 +96,7 @@ describe('Worker mocking pattern', () => {
  *   // Simulate worker message
  *   const message: WorkerMessage = {
  *     type: 'user-profile',
+ *     requestId: 'req-123',
  *     userId: 123,
  *     userName: 'Test User',
  *     sections: [

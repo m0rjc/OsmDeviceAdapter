@@ -107,28 +107,36 @@ export function useWorkerBootstrap(): Worker | null {
           break;
 
         case 'service-error':
-          // Service error - correlate with pending request if possible
-          console.error('[useWorkerBootstrap] Service error:', message.function, message.error);
+          // Service error - use context (sectionId) for routing, requestId for cleanup
+          console.error('[useWorkerBootstrap] Service error:', message.function, message.error, {
+            userId: message.userId,
+            sectionId: message.sectionId,
+            patrolId: message.patrolId,
+            requestId: message.requestId,
+          });
 
-          // If this is a response to a tracked request, handle it appropriately
+          // If this is a response to a tracked request, remove it from pending
           // Note: Worker may send BOTH PatrolsChangeMessage (cached) AND ServiceErrorMessage (refresh failed)
           // in that order. If PatrolsChangeMessage arrived first, pending request is already removed,
           // so we won't find it here. This is correct - data is loaded (from cache), just stale.
           if (message.requestId) {
             const pendingRequest = store.getState().pendingRequests.requests[message.requestId];
             if (pendingRequest) {
-              console.log('[useWorkerBootstrap] Error for pending request:', message.requestId, pendingRequest.type);
+              console.log('[useWorkerBootstrap] Removing pending request:', message.requestId, pendingRequest.type);
               dispatch(removePendingRequest(message.requestId));
-
-              // If this was a refresh request with no cached data, set error state on the section
-              if (pendingRequest.type === 'refresh' && pendingRequest.sectionId) {
-                dispatch(setPatrolsError({
-                  sectionId: pendingRequest.sectionId,
-                  error: message.error,
-                }));
-              }
             }
           }
+
+          // Route error to specific section if context provided
+          // This works for both solicited (with requestId) and unsolicited (background) errors
+          if (message.sectionId) {
+            dispatch(setPatrolsError({
+              sectionId: message.sectionId,
+              error: message.error,
+            }));
+          }
+
+          // TODO: If patrolId is provided, set error state on specific patrol (future enhancement)
 
           // Always show error dialog for user feedback (warning if data was cached)
           dispatch(showErrorDialog({

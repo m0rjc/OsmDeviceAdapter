@@ -242,12 +242,14 @@ describe('Service Worker Message Handlers', () => {
       // Should send cached scores with requestId
       expect(clients.sendScoresToClient).toHaveBeenCalledWith(client, userId, sectionId, cachedScores, TEST_REQUEST_ID);
 
-      // Should send error message with requestId
+      // Should send error message with requestId and context
       expect(clients.send).toHaveBeenCalledWith(
         client,
         expect.objectContaining({
           type: 'service-error',
           requestId: TEST_REQUEST_ID,
+          userId: userId,
+          sectionId: sectionId,
           function: 'Refresh failed',
         })
       );
@@ -574,9 +576,9 @@ describe('Service Worker Message Handlers', () => {
       // Force an error during addPendingPoints
       mockStore.addPendingPoints.mockRejectedValue(new Error('Database error'));
 
-      
 
-      await expect(submitScores(client, userId, sectionId, deltas)).rejects.toThrow(
+
+      await expect(submitScores(client, TEST_REQUEST_ID, userId, sectionId, deltas)).rejects.toThrow(
         'Database error'
       );
       expect(mockStore.close).toHaveBeenCalled();
