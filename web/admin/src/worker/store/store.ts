@@ -2,15 +2,31 @@ import {deleteRecord, getAllFromIndex, inTransaction, put, read} from "./promisD
 import * as model from "../../types/model"
 
 const DB_NAME = 'penguin-patrol-scores';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const SECTIONS_STORE = 'sections';
 const PATROL_SCORES_STORE = 'patrol_scores';
+const USER_METADATA_STORE = 'user_metadata';
 const INDEX_USERID_SECTIONID = 'userId_sectionId';
 const INDEX_USERID_RETRY_AFTER = 'userId_retryAfter';
 const INDEX_SECTIONS_USERID = 'userId';
 
 /** How long before we allow retry if we get an unexpected server error (milliseconds) */
 const SERVER_ERROR_RETRY_TIME = 1000 * 60 * 5;
+
+/** Stores user-level metadata including revision tracking */
+export class UserMetadata {
+    public readonly userId: number;
+    /** Global revision number for section list changes */
+    public sectionsListRevision: number = 0;
+    /** Last error message from profile/section list fetch (undefined if no error) */
+    public lastError?: string;
+    /** Timestamp of last error (milliseconds, undefined if no error) */
+    public lastErrorTime?: number;
+
+    constructor(userId: number) {
+        this.userId = userId;
+    }
+}
 
 /** Represents a section of patrols for a user */
 export class Section {
@@ -21,6 +37,12 @@ export class Section {
     public groupName: string;
     /** The timestamp of the last successful sync (milliseconds) */
     public lastRefresh: number = 0;
+    /** UI revision number incremented on each state change to detect stale messages */
+    public uiRevision: number = 0;
+    /** Last error message from section refresh (undefined if no error) */
+    public lastError?: string;
+    /** Timestamp of last error (milliseconds, undefined if no error) */
+    public lastErrorTime?: number;
 
     /**
      * @param userId The ID of the user who owns this section
@@ -120,22 +142,32 @@ export function OpenPatrolPointsStore(userId: number): Promise<PatrolPointsStore
 function handleDatabaseInstall(event: IDBVersionChangeEvent) {
     const request = event.target as IDBOpenDBRequest;
     const db = request.result;
-    console.log(`[PatrolPointsStore] Installing database v${DB_VERSION}`);
+    const oldVersion = event.oldVersion;
+    console.log(`[PatrolPointsStore] Upgrading database from v${oldVersion} to v${DB_VERSION}`);
 
-    // Create the sections store with keyPath
-    const sectionsStore = db.createObjectStore(SECTIONS_STORE, { keyPath: 'key' });
-    sectionsStore.createIndex(INDEX_SECTIONS_USERID, 'userId');
+    // Version 1: Initial schema
+    if (oldVersion < 1) {
+        // Create the sections store with keyPath
+        const sectionsStore = db.createObjectStore(SECTIONS_STORE, { keyPath: 'key' });
+        sectionsStore.createIndex(INDEX_SECTIONS_USERID, 'userId');
 
-    // Create the patrol scores store with keyPath
-    const patrolsStore = db.createObjectStore(PATROL_SCORES_STORE, { keyPath: 'key' });
+        // Create the patrol scores store with keyPath
+        const patrolsStore = db.createObjectStore(PATROL_SCORES_STORE, { keyPath: 'key' });
 
-    // Index for getting all scores for a user in a specific section
-    patrolsStore.createIndex(INDEX_USERID_SECTIONID, ['userId', 'sectionId']);
+        // Index for getting all scores for a user in a specific section
+        patrolsStore.createIndex(INDEX_USERID_SECTIONID, ['userId', 'sectionId']);
 
-    // Index for finding entries that need syncing (by userId and retryAfter time)
-    patrolsStore.createIndex(INDEX_USERID_RETRY_AFTER, ['userId', 'retryAfter']);
+        // Index for finding entries that need syncing (by userId and retryAfter time)
+        patrolsStore.createIndex(INDEX_USERID_RETRY_AFTER, ['userId', 'retryAfter']);
 
-    console.log(`[PatrolPointsStore] Created stores: sections, patrol_scores`);
+        console.log(`[PatrolPointsStore] Created stores: sections, patrol_scores`);
+    }
+
+    // Version 2: Add user metadata store for section list revision tracking
+    if (oldVersion < 2) {
+        db.createObjectStore(USER_METADATA_STORE, { keyPath: 'userId' });
+        console.log(`[PatrolPointsStore] Created store: user_metadata`);
+    }
 }
 
 /** Unit of work for batching multiple store operations into a single transaction */
@@ -143,6 +175,7 @@ export class UnitOfWork {
     private operations: Array<(tx: IDBTransaction) => Promise<void>> = [];
     private readonly db: IDBDatabase;
     private readonly userId: number;
+    private modifiedSections: Set<number> = new Set();
 
     constructor(
         db: IDBDatabase,
@@ -154,6 +187,7 @@ export class UnitOfWork {
 
     /** Update the committed score from the server. Clears pendingScoreDelta, error state, and lock. */
     setCommittedScore(sectionId: number, patrolId: string, score: number, patrolName: string): this {
+        this.modifiedSections.add(sectionId);
         this.operations.push(async (tx) => {
             const store = tx.objectStore(PATROL_SCORES_STORE);
             const newState = new Patrol(this.userId, sectionId, patrolId, patrolName, score);
@@ -169,6 +203,7 @@ export class UnitOfWork {
 
     /** Mark the patrol and section as needing retry after a given date. */
     setRetryAfter(sectionId: number, patrolId: string, retryAfter: Date, errorMessage?: string): this {
+        this.modifiedSections.add(sectionId);
         this.operations.push(async (tx) => {
             const store = tx.objectStore(PATROL_SCORES_STORE);
             const key = getPatrolKey(this.userId, sectionId, patrolId);
@@ -187,6 +222,7 @@ export class UnitOfWork {
 
     /** Mark the patrol as permanently failed with an error message. Client should acknowledge and clear. */
     setError(sectionId: number, patrolId: string, errorMessage: string): this {
+        this.modifiedSections.add(sectionId);
         this.operations.push(async (tx) => {
             const store = tx.objectStore(PATROL_SCORES_STORE);
             const key = getPatrolKey(this.userId, sectionId, patrolId);
@@ -209,9 +245,14 @@ export class UnitOfWork {
             return; // Nothing to do
         }
 
-        return inTransaction(this.db, [PATROL_SCORES_STORE], "readwrite", async (tx) => {
+        return inTransaction(this.db, [PATROL_SCORES_STORE, SECTIONS_STORE], "readwrite", async (tx) => {
             for (const operation of this.operations) {
                 await operation(tx);
+            }
+
+            // Bump UI revision for all modified sections
+            for (const sectionId of this.modifiedSections) {
+                await bumpSectionUiRevision(tx, this.userId, sectionId);
             }
         });
     }
@@ -248,6 +289,64 @@ export class PatrolPointsStore {
             const index = store.index(INDEX_SECTIONS_USERID);
             const range = IDBKeyRange.only(this.userId);
             return getAllFromIndex<Section>(index, range);
+        });
+    }
+
+    /**
+     * Set error state for a section and bump its UI revision.
+     * Used when section refresh fails but we want to preserve cached data.
+     * @param sectionId The section ID
+     * @param errorMessage The error message
+     * @returns The new UI revision number
+     */
+    async setSectionError(sectionId: number, errorMessage: string): Promise<number> {
+        return inTransaction<number>(this.db, [SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<number> => {
+            const sectionsStore = tx.objectStore(SECTIONS_STORE);
+            const sectionKey = getSectionKey(this.userId, sectionId);
+            const section = await read<Section>(sectionsStore, sectionKey);
+
+            if (!section) {
+                throw new Error(`Section ${sectionId} not found for user ${this.userId}`);
+            }
+
+            section.lastError = errorMessage;
+            section.lastErrorTime = Date.now();
+            section.uiRevision++;
+            await put(sectionsStore, section);
+
+            return section.uiRevision;
+        });
+    }
+
+    /**
+     * Set error state for user profile/section list and bump sections list revision.
+     * Used when profile fetch or section list fetch fails.
+     * @param errorMessage The error message
+     * @returns Object with the new sectionsListRevision and error info
+     */
+    async setProfileError(errorMessage: string): Promise<{
+        sectionsListRevision: number,
+        lastError: string,
+        lastErrorTime: number
+    }> {
+        return inTransaction(this.db, [USER_METADATA_STORE], "readwrite", async (tx: IDBTransaction) => {
+            const metadataStore = tx.objectStore(USER_METADATA_STORE);
+            let metadata = await read<UserMetadata>(metadataStore, this.userId);
+
+            if (!metadata) {
+                metadata = new UserMetadata(this.userId);
+            }
+
+            metadata.lastError = errorMessage;
+            metadata.lastErrorTime = Date.now();
+            metadata.sectionsListRevision++;
+            await put(metadataStore, metadata);
+
+            return {
+                sectionsListRevision: metadata.sectionsListRevision,
+                lastError: metadata.lastError,
+                lastErrorTime: metadata.lastErrorTime
+            };
         });
     }
 
@@ -300,11 +399,17 @@ export class PatrolPointsStore {
     /**
      * Updates the local list of sections to match the provided list.
      * Sections not in the new list will be deleted along with their patrols.
+     * Clears any profile error state on successful fetch.
      * @param sections The new list of sections
-     * @returns A promise that resolves to true if any sections were added, deleted, or changed.
+     * @returns Object with changed flag, the new sectionsListRevision, and error state (cleared)
      */
-    public setCanonicalSectionList(sections: model.Section[]): Promise<boolean> {
-        return inTransaction<boolean>(this.db, [SECTIONS_STORE, PATROL_SCORES_STORE], "readwrite", async (tx: IDBTransaction): Promise<boolean> => {
+    public setCanonicalSectionList(sections: model.Section[]): Promise<{
+        changed: boolean,
+        sectionsListRevision: number,
+        lastError?: string,
+        lastErrorTime?: number
+    }> {
+        return inTransaction(this.db, [SECTIONS_STORE, PATROL_SCORES_STORE, USER_METADATA_STORE], "readwrite", async (tx: IDBTransaction) => {
             const sectionsStore = tx.objectStore(SECTIONS_STORE);
             const index = sectionsStore.index(INDEX_SECTIONS_USERID);
             const range = IDBKeyRange.only(this.userId);
@@ -335,12 +440,33 @@ export class PatrolPointsStore {
                 }
             }
 
+            // Clear any profile error and get/bump revision
+            const metadataStore = tx.objectStore(USER_METADATA_STORE);
+            let metadata = await read<UserMetadata>(metadataStore, this.userId);
+
+            if (!metadata) {
+                metadata = new UserMetadata(this.userId);
+            }
+
+            // Clear error state on successful fetch
+            metadata.lastError = undefined;
+            metadata.lastErrorTime = undefined;
+
             if (changed) {
+                metadata.sectionsListRevision++;
                 console.log(`[PatrolPointsStore] Updated canonical section list: ${sections.length} sections (changes detected)`);
             } else {
                 console.log(`[PatrolPointsStore] Updated canonical section list: ${sections.length} sections (no changes)`);
             }
-            return changed;
+
+            await put(metadataStore, metadata);
+
+            return {
+                changed,
+                sectionsListRevision: metadata.sectionsListRevision,
+                lastError: undefined,
+                lastErrorTime: undefined
+            };
         });
     }
 
@@ -348,12 +474,18 @@ export class PatrolPointsStore {
      * Updates the local list of patrols for a section to match the provided list.
      * Patrols not in the new list will be deleted.
      * Preserves pending scores for existing patrols.
+     * Clears any error state on successful refresh.
      * @param sectionId The ID of the section to update
      * @param patrols The new list of patrols and their current scores
-     * @returns The updated patrol list (same as calling getScoresForSection immediately after)
+     * @returns Object with the updated patrol list, the section's uiRevision, and error state (cleared)
      */
-    public setCanonicalPatrolList(sectionId: number, patrols: SyncPatrolResult[]): Promise<Patrol[]> {
-        return inTransaction<Patrol[]>(this.db, [PATROL_SCORES_STORE, SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<Patrol[]> => {
+    public setCanonicalPatrolList(sectionId: number, patrols: SyncPatrolResult[]): Promise<{
+        patrols: Patrol[],
+        uiRevision: number,
+        lastError?: string,
+        lastErrorTime?: number
+    }> {
+        return inTransaction(this.db, [PATROL_SCORES_STORE, SECTIONS_STORE], "readwrite", async (tx: IDBTransaction) => {
             const store = tx.objectStore(PATROL_SCORES_STORE);
             const index = store.index(INDEX_USERID_SECTIONID);
             const range = IDBKeyRange.only([this.userId, sectionId]);
@@ -375,26 +507,38 @@ export class PatrolPointsStore {
                 }
             }
 
-            // Update the section's last update timestamp
+            // Update the section's last update timestamp, bump UI revision, and clear error state
             const sectionsStore = tx.objectStore(SECTIONS_STORE);
             const sectionKey = getSectionKey(this.userId, sectionId);
             const section = await read<Section>(sectionsStore, sectionKey);
-            if (section) {
-                section.lastRefresh = Date.now();
-                await put(sectionsStore, section);
+            if (!section) {
+                throw new Error(`Section ${sectionId} not found for user ${this.userId}`);
             }
+
+            section.lastRefresh = Date.now();
+            section.uiRevision++;
+            section.lastError = undefined;  // Clear error on successful refresh
+            section.lastErrorTime = undefined;
+            await put(sectionsStore, section);
+            const uiRevision = section.uiRevision;
 
             console.log(`[PatrolPointsStore] Updated canonical patrol list for section ${sectionId}: ${patrols.length} patrols`);
 
-            // Return the updated patrol list
-            return getAllFromIndex<Patrol>(index, range);
+            // Return the updated patrol list with revision and cleared error state
+            const updatedPatrols = await getAllFromIndex<Patrol>(index, range);
+            return {
+                patrols: updatedPatrols,
+                uiRevision,
+                lastError: undefined,
+                lastErrorTime: undefined
+            };
         });
     }
 
     /** Add points to the store for the given patrol in the given section. The patrol must already exist. */
     async addPendingPoints(sectionId: number, patrolId: string, pointsDelta: number): Promise<number> {
         console.log(`[PatrolPointsStore] Adding points: section=${sectionId}, patrol=${patrolId}, delta=${pointsDelta}`);
-        return inTransaction<number>(this.db, [PATROL_SCORES_STORE], "readwrite", async (tx: IDBTransaction): Promise<number> => {
+        return inTransaction<number>(this.db, [PATROL_SCORES_STORE, SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<number> => {
             const store: IDBObjectStore = tx.objectStore(PATROL_SCORES_STORE);
             const key: string = getPatrolKey(this.userId, sectionId, patrolId);
             const existing: Patrol = await read<Patrol>(store, key);
@@ -409,18 +553,38 @@ export class PatrolPointsStore {
                 throw new Error(`Patrol ${patrolId} does not exist in section ${sectionId}`);
             }
 
+            // Bump section UI revision
+            await bumpSectionUiRevision(tx, this.userId, sectionId);
+
             console.log(`[PatrolPointsStore] New pending delta: ${newPendingDelta}`);
             return newPendingDelta;
         });
     }
 
-    /** Get all scores for the current user and section */
-    async getScoresForSection(sectionId: number): Promise<Patrol[]> {
-        return inTransaction<Patrol[]>(this.db, [PATROL_SCORES_STORE], "readonly", async (tx: IDBTransaction): Promise<Patrol[]> => {
+    /** Get all scores for the current user and section with the current UI revision and error state */
+    async getScoresForSection(sectionId: number): Promise<{
+        patrols: Patrol[],
+        uiRevision: number,
+        lastError?: string,
+        lastErrorTime?: number
+    }> {
+        return inTransaction(this.db, [PATROL_SCORES_STORE, SECTIONS_STORE], "readonly", async (tx: IDBTransaction) => {
             const store = tx.objectStore(PATROL_SCORES_STORE);
             const index = store.index(INDEX_USERID_SECTIONID);
             const range = IDBKeyRange.only([this.userId, sectionId]);
-            return getAllFromIndex<Patrol>(index, range);
+            const patrols = await getAllFromIndex<Patrol>(index, range);
+
+            // Get the section's UI revision and error state
+            const sectionsStore = tx.objectStore(SECTIONS_STORE);
+            const sectionKey = getSectionKey(this.userId, sectionId);
+            const section = await read<Section>(sectionsStore, sectionKey);
+
+            return {
+                patrols,
+                uiRevision: section?.uiRevision ?? 0,
+                lastError: section?.lastError,
+                lastErrorTime: section?.lastErrorTime
+            };
         });
     }
 
@@ -625,11 +789,12 @@ export class PatrolPointsStore {
      * @param errorMessage The error message to set
      */
     async markAllPendingAsFailed(sectionId: number, errorMessage: string): Promise<void> {
-        return inTransaction<void>(this.db, [PATROL_SCORES_STORE], "readwrite", async (tx: IDBTransaction): Promise<void> => {
+        return inTransaction<void>(this.db, [PATROL_SCORES_STORE, SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<void> => {
             const store = tx.objectStore(PATROL_SCORES_STORE);
             const index = store.index(INDEX_USERID_SECTIONID);
             const range = IDBKeyRange.only([this.userId, sectionId]);
 
+            let hadChanges = false;
             await new Promise<void>((resolve, reject) => {
                 const request = index.openCursor(range);
                 request.onerror = () => reject(request.error);
@@ -639,6 +804,7 @@ export class PatrolPointsStore {
                         const patrol = cursor.value as Patrol;
                         // Only mark entries with pending changes
                         if (patrol.pendingScoreDelta !== 0) {
+                            hadChanges = true;
                             patrol.retryAfter = Date.now() + SERVER_ERROR_RETRY_TIME;
                             patrol.errorMessage = errorMessage;
                             await put(store, patrol);
@@ -649,6 +815,10 @@ export class PatrolPointsStore {
                     }
                 };
             });
+
+            if (hadChanges) {
+                await bumpSectionUiRevision(tx, this.userId, sectionId);
+            }
 
             console.log(`[PatrolPointsStore] Marked all pending entries in section ${sectionId} as failed: ${errorMessage}`);
         });
@@ -734,4 +904,47 @@ async function setScoreAndPreservePendingState(patrolStore: IDBObjectStore, user
  */
 function getPatrolKey(userId: number, sectionId: number, patrolId: string): string {
     return `${userId}:${sectionId}:${patrolId}`;
+}
+
+/**
+ * Increment the section's UI revision and return the new value.
+ * This must be called within a transaction that has write access to the sections store.
+ * @param tx The transaction
+ * @param userId The user ID
+ * @param sectionId The section ID
+ * @returns The new UI revision number
+ */
+async function bumpSectionUiRevision(tx: IDBTransaction, userId: number, sectionId: number): Promise<number> {
+    const sectionsStore = tx.objectStore(SECTIONS_STORE);
+    const sectionKey = getSectionKey(userId, sectionId);
+    const section = await read<Section>(sectionsStore, sectionKey);
+
+    if (!section) {
+        throw new Error(`Section ${sectionId} not found for user ${userId}`);
+    }
+
+    section.uiRevision++;
+    await put(sectionsStore, section);
+    return section.uiRevision;
+}
+
+/**
+ * Increment the global sections list revision for a user and return the new value.
+ * This must be called within a transaction that has write access to the user_metadata store.
+ * @param tx The transaction
+ * @param userId The user ID
+ * @returns The new sections list revision number
+ */
+async function bumpSectionsListRevision(tx: IDBTransaction, userId: number): Promise<number> {
+    const metadataStore = tx.objectStore(USER_METADATA_STORE);
+    let metadata = await read<UserMetadata>(metadataStore, userId);
+
+    if (!metadata) {
+        // First time - initialize metadata
+        metadata = new UserMetadata(userId);
+    }
+
+    metadata.sectionsListRevision++;
+    await put(metadataStore, metadata);
+    return metadata.sectionsListRevision;
 }

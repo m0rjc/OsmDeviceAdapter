@@ -7,7 +7,6 @@ import {NetworkError, OsmAdapterApiService, type SessionStatus} from "./server/s
 import * as clients from "./client";
 import {OpenPatrolPointsStore, PatrolPointsStore, Patrol as StoredPatrol} from "./store/store";
 import type {ScoreDelta} from "../types/model";
-import {newServiceErrorMessage} from "../types/messages";
 import {reduceError} from "../types/reduceError";
 
 declare let self: ServiceWorkerGlobalScope;
@@ -88,22 +87,52 @@ async function requireLoggedInUser(server: OsmAdapterApiService, client: Client,
  */
 export async function getProfile(client: Client, requestId: string) {
     const server = new OsmAdapterApiService();
-    const session = await server.fetchSession();
-    if(!session.isAuthenticated) {
-        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
-        return session;
-    }
 
-    const store = await OpenPatrolPointsStore(session.userId);
     try {
-        const sections = await server.fetchSections()
-        const changed = await store.setCanonicalSectionList(sections);
-        client.postMessage(messages.newUserProfileMessage(session.userId, session.userName, sections, requestId));
-        if (changed) {
-            await clients.sendMessage(messages.newSectionListChangeMessage(sections));
+        const session = await server.fetchSession();
+        if(!session.isAuthenticated) {
+            client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
+            return;
         }
-    } finally {
-        store.close();
+
+        const store = await OpenPatrolPointsStore(session.userId);
+        try {
+            const sections = await server.fetchSections()
+            const { changed, sectionsListRevision, lastError, lastErrorTime } = await store.setCanonicalSectionList(sections);
+            client.postMessage(messages.newUserProfileMessage(
+                session.userId,
+                session.userName,
+                sections,
+                sectionsListRevision,
+                requestId,
+                lastError,
+                lastErrorTime
+            ));
+            if (changed) {
+                await clients.sendMessage(messages.newSectionListChangeMessage(sections, sectionsListRevision));
+            }
+        } catch (e) {
+            // Store the error in user metadata and bump sections list revision
+            const errorMessage = reduceError(e, "Unable to fetch section list from server.");
+            const { sectionsListRevision, lastError, lastErrorTime } = await store.setProfileError(errorMessage);
+
+            // Get cached sections (if any) and send with error state
+            const sections = await store.getSections();
+            client.postMessage(messages.newUserProfileMessage(
+                session.userId,
+                session.userName,
+                sections,
+                sectionsListRevision,
+                requestId,
+                lastError,
+                lastErrorTime
+            ));
+        } finally {
+            store.close();
+        }
+    } catch (e) {
+        // fetchSession() failed - we don't have a userId yet, so just send auth required
+        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
     }
 }
 
@@ -133,35 +162,22 @@ export async function refreshScores(client: Client, requestId: string, userId: n
     const store = await OpenPatrolPointsStore(userId);
     try {
         const scores = await server.fetchScores(sectionId);
-        const newScores = await store.setCanonicalPatrolList(sectionId, scores);
-        // Send successful response with requestId to the specific client
-        clients.sendScoresToClient(client, userId, sectionId, newScores, requestId);
+        const { patrols, uiRevision, lastError, lastErrorTime } = await store.setCanonicalPatrolList(sectionId, scores);
+        // Send successful response with requestId to the specific client (error state cleared)
+        clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
     } catch (e) {
-        // If we weren't able to refresh from the server, then send the locally cached scores to the client
-        // if we have them (with requestId so they know it's a response to their request).
-        await sendCachedScoresToClient(client, store, userId, sectionId, requestId);
-        // Then send error message with context so client can route error to the specific section
-        clients.send(client, newServiceErrorMessage(
-            'Refresh failed',
-            reduceError(e, "Unable to refresh patrol scores from server."),
-            userId,
-            { requestId, sectionId }
-        ));
+        // Store the error on the section record and bump its UI revision
+        const errorMessage = reduceError(e, "Unable to refresh patrol scores from server.");
+        await store.setSectionError(sectionId, errorMessage);
+
+        // Get the cached data with the new error state and send it
+        const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+        clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
     } finally {
         store.close();
     }
 }
 
-async function sendCachedScoresToClient(client: Client, store: PatrolPointsStore, userId: number, sectionId: number, requestId?: string) {
-    try {
-        const scores : StoredPatrol[] = await store.getScoresForSection(sectionId);
-        if(scores.length > 0) {
-            clients.sendScoresToClient(client, userId, sectionId, scores, requestId);
-        }
-    } catch (e) {
-        // We've already sent an error message to the client, so just log the error here.
-    }
-}
 
 /**
  * Add pending score changes to the store and trigger a sync.
@@ -185,8 +201,8 @@ export async function submitScores(client: Client, requestId: string, userId: nu
 
         // Publish the optimistic update immediately to all clients
         // Note: This is an unsolicited broadcast, so no requestId
-        const updatedScores = await store.getScoresForSection(sectionId);
-        await clients.publishScores(userId, sectionId, updatedScores);
+        const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+        await clients.publishScores(userId, sectionId, patrols, uiRevision, lastError, lastErrorTime);
 
         // Only perform the sync if the user is still logged in.
         // If the user is not logged in, then requireLoggedInUser will send a message to the client
@@ -271,8 +287,8 @@ async function syncPendingScores(server: OsmAdapterApiService, store: PatrolPoin
 
         // If I did anything, then publish the updated scores to all clients
         if (hasChanges) {
-            const updatedScores = await store.getScoresForSection(sectionId);
-            await clients.publishScores(userId, sectionId, updatedScores);
+            const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+            await clients.publishScores(userId, sectionId, patrols, uiRevision, lastError, lastErrorTime);
         }
     }
 }

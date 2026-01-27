@@ -14,7 +14,15 @@ export async function sendMessage(...messages : messages.WorkerMessage[]){
     );
 }
 
-function createPatrolMessageFromStoreData(userId: number, sectionId: number, scores: store.Patrol[], requestId?: string) {
+function createPatrolMessageFromStoreData(
+    userId: number,
+    sectionId: number,
+    scores: store.Patrol[],
+    uiRevision: number,
+    lastError?: string,
+    lastErrorTime?: number,
+    requestId?: string
+) {
     const message: messages.PatrolsChangeMessage = {
         type: 'patrols-change',
         requestId,
@@ -24,21 +32,42 @@ function createPatrolMessageFromStoreData(userId: number, sectionId: number, sco
             id: s.patrolId,
             name: s.patrolName,
             committedScore: s.committedScore,
-            pendingScore: s.pendingScoreDelta
-        }))
+            pendingScore: s.pendingScoreDelta,
+            retryAfter: s.retryAfter,
+            errorMessage: s.errorMessage
+        })),
+        uiRevision,
+        lastError,
+        lastErrorTime
     }
     return message;
 }
 
 /** Publish the updated scores to all clients (unsolicited update, no requestId). */
-export async function publishScores(userId: number, sectionId: number, scores: store.Patrol[]) {
-    const message = createPatrolMessageFromStoreData(userId, sectionId, scores);
+export async function publishScores(
+    userId: number,
+    sectionId: number,
+    scores: store.Patrol[],
+    uiRevision: number,
+    lastError?: string,
+    lastErrorTime?: number
+) {
+    const message = createPatrolMessageFromStoreData(userId, sectionId, scores, uiRevision, lastError, lastErrorTime);
     return sendMessage(message);
 }
 
 /** Send scores to a specific client in response to a request. */
-export function sendScoresToClient(client: Client, userId: number, sectionId: number, scores: store.Patrol[], requestId?: string):void {
-    client.postMessage(createPatrolMessageFromStoreData(userId, sectionId, scores, requestId));
+export function sendScoresToClient(
+    client: Client,
+    userId: number,
+    sectionId: number,
+    scores: store.Patrol[],
+    uiRevision: number,
+    lastError?: string,
+    lastErrorTime?: number,
+    requestId?: string
+):void {
+    client.postMessage(createPatrolMessageFromStoreData(userId, sectionId, scores, uiRevision, lastError, lastErrorTime, requestId));
 }
 
 /** Send a message to a specific client. This is a typesafe wrapper around client.postMessage */

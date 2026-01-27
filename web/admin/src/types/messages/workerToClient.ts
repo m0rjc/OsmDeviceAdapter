@@ -34,19 +34,35 @@ export type UserProfileMessage = {
     userId: number;
     userName: string;
     sections: Section[];
+    /** Global revision number for the section list - increments when sections added/removed/changed */
+    sectionsListRevision: number;
+    /** Last error from profile/section list fetch (undefined if no error) */
+    lastError?: string;
+    /** Timestamp of last error (milliseconds, undefined if no error) */
+    lastErrorTime?: number;
 }
 
-export function newUserProfileMessage(userId: number, userName: string, sections: Section[], requestId: string) {
-    return { type: 'user-profile', requestId, userId, userName, sections };
+export function newUserProfileMessage(
+    userId: number,
+    userName: string,
+    sections: Section[],
+    sectionsListRevision: number,
+    requestId: string,
+    lastError?: string,
+    lastErrorTime?: number
+) {
+    return { type: 'user-profile', requestId, userId, userName, sections, sectionsListRevision, lastError, lastErrorTime };
 }
 
 export type SectionListChangeMessage = {
     type: 'section-list-change';
     sections: Section[];
+    /** Global revision number for the section list - increments when sections added/removed/changed */
+    sectionsListRevision: number;
 }
 
-export function newSectionListChangeMessage(sections: Section[]): SectionListChangeMessage {
-    return { type: 'section-list-change', sections };
+export function newSectionListChangeMessage(sections: Section[], sectionsListRevision: number): SectionListChangeMessage {
+    return { type: 'section-list-change', sections, sectionsListRevision };
 }
 
 export type PatrolsChangeMessage = {
@@ -58,45 +74,14 @@ export type PatrolsChangeMessage = {
     requestId?: string;
     userId: number;
     sectionId: number;
-    scores: PatrolScore[]
-}
-
-export type ServiceErrorMessage = {
-    type: 'service-error';
-    /** Correlation ID matching the request that triggered this error (optional for general errors) */
-    requestId?: string;
-    /** User ID - allows routing error to correct user context */
-    userId: number;
-    /** Section ID - allows routing error to specific section (optional) */
-    sectionId?: number;
-    /** Patrol ID - allows routing error to specific patrol (optional) */
-    patrolId?: string;
-    /** The function is what we were trying to do, for example load scores. */
-    function: string;
-    /** The error message returned by the service. */
-    error: string;
-}
-
-export function newServiceErrorMessage(
-    functionName: string,
-    error: string,
-    userId: number,
-    options?: {
-        requestId?: string;
-        sectionId?: number;
-        patrolId?: string;
-    }
-): ServiceErrorMessage {
-    return {
-        type: 'service-error',
-        requestId: options?.requestId,
-        userId,
-        sectionId: options?.sectionId,
-        patrolId: options?.patrolId,
-        function: functionName,
-        error
-    };
+    scores: PatrolScore[];
+    /** UI revision number for this section - increments on each patrol state change */
+    uiRevision: number;
+    /** Last error from section refresh (undefined if no error) */
+    lastError?: string;
+    /** Timestamp of last error (milliseconds, undefined if no error) */
+    lastErrorTime?: number;
 }
 
 /** Union of all messages sent to the client. */
-export type WorkerMessage = AuthenticationRequiredMessage | PatrolsChangeMessage | SectionListChangeMessage | UserProfileMessage | ClientIsWrongUserMessage | ServiceErrorMessage ;
+export type WorkerMessage = AuthenticationRequiredMessage | PatrolsChangeMessage | SectionListChangeMessage | UserProfileMessage | ClientIsWrongUserMessage;
