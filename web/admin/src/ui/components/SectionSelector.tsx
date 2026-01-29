@@ -1,8 +1,9 @@
-import { useAppDispatch, useAppSelector } from '../state/hooks';
 import {
-  selectSections,
-  selectSelectedSectionId,
-  selectSection,
+    useAppDispatch,
+    useAppSelector,
+    selectSections,
+    selectSelectedSectionId,
+    setSelectedSection,
 } from '../state';
 
 /**
@@ -23,13 +24,17 @@ export function SectionSelector() {
     return null;
   }
 
+  function onSelectionChange(e: React.ChangeEvent<HTMLSelectElement>):void {
+      dispatch(setSelectedSection(Number(e.target.value)));
+  }
+
   return (
     <div className="section-selector">
       <label htmlFor="section-select">Section</label>
       <select
         id="section-select"
         value={selectedSectionId ?? ''}
-        onChange={e => dispatch(selectSection(Number(e.target.value)))}
+        onChange={onSelectionChange}
       >
         {sections.map(section => (
           <option key={section.id} value={section.id}>

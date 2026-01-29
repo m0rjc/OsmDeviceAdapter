@@ -56,13 +56,14 @@ export function newUserProfileMessage(
 
 export type SectionListChangeMessage = {
     type: 'section-list-change';
+    userId: number;
     sections: Section[];
     /** Global revision number for the section list - increments when sections added/removed/changed */
     sectionsListRevision: number;
 }
 
-export function newSectionListChangeMessage(sections: Section[], sectionsListRevision: number): SectionListChangeMessage {
-    return { type: 'section-list-change', sections, sectionsListRevision };
+export function newSectionListChangeMessage(userId: number, sections: Section[], sectionsListRevision: number): SectionListChangeMessage {
+    return { userId, type: 'section-list-change', sections, sectionsListRevision };
 }
 
 export type PatrolsChangeMessage = {

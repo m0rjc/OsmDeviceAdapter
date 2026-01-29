@@ -1,13 +1,9 @@
-import { PatrolCard } from './PatrolCard';
-import type { UIPatrol } from '../../state';
+import {PatrolCard} from './PatrolCard';
 
 interface PatrolListProps {
-  /** Array of patrols to display */
-  patrols: UIPatrol[];
-  /** Map of patrol IDs to pending sync points from IndexedDB */
-  pendingPointsMap: Map<string, number>;
-  /** Callback when user changes points for any patrol */
-  onPointsChange: (patrolId: string, value: string) => void;
+    /** Array of patrols to display */
+    patrolKeys: string[];
+    sectionError?: string;
 }
 
 /**
@@ -16,29 +12,24 @@ interface PatrolListProps {
  * Displays an empty state message if no patrols are available.
  * Otherwise renders a PatrolCard for each patrol in the array.
  */
-export function PatrolList({ patrols, pendingPointsMap, onPointsChange }: PatrolListProps) {
-  if (patrols.length === 0) {
-    return (
-      <div className="empty-state">
-        <h3>No Patrols Found</h3>
-        <p>This section doesn't have any patrols configured.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="patrol-cards">
-      {patrols.map(patrol => {
-        const pendingPoints = pendingPointsMap.get(patrol.id) || 0;
+export function PatrolList({patrolKeys, sectionError}: PatrolListProps) {
+    if (patrolKeys.length === 0) {
         return (
-          <PatrolCard
-            key={patrol.id}
-            patrol={patrol}
-            pendingPoints={pendingPoints}
-            onPointsChange={onPointsChange}
-          />
+            <div className="empty-state">
+                <h3>No Patrols Found</h3>
+                <p>{sectionError || 'This section doesn\'t have any patrols configured.'}</p>
+            </div>
         );
-      })}
-    </div>
-  );
+    }
+
+    return (
+        <div className="patrol-cards">
+            {patrolKeys.map(patrol =>
+                <PatrolCard
+                    key={patrol}
+                    patrolId={patrol}
+                />
+            )}
+        </div>
+    );
 }

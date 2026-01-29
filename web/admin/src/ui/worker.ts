@@ -40,6 +40,23 @@ export interface Worker {
      * @returns requestId for correlating the response
      */
     sendRefreshRequest(userId: number, sectionId: number): string;
+
+    /**
+     * Submit score changes to the worker for syncing to the server.
+     * This is a fire-and-forget operation with optimistic updates.
+     *
+     * The worker will:
+     * 1. Immediately add pending points to IndexedDB
+     * 2. Broadcast an optimistic update to all clients (PatrolsChangeMessage)
+     * 3. Attempt to sync to server if online
+     * 4. Handle retries/errors automatically via background sync
+     *
+     * @param userId The user ID
+     * @param sectionId The section ID
+     * @param deltas Array of score changes to submit
+     * @returns requestId for correlating any error responses
+     */
+    sendSubmitScoresRequest(userId: number, sectionId: number, deltas: Array<{patrolId: string, score: number}>): string;
 }
 
 /**
@@ -123,6 +140,12 @@ class WorkerService implements Worker {
     public sendRefreshRequest(userId: number, sectionId: number): string {
         const requestId = crypto.randomUUID();
         this.sendMessage({type: "refresh", requestId, userId, sectionId});
+        return requestId;
+    }
+
+    public sendSubmitScoresRequest(userId: number, sectionId: number, deltas: Array<{patrolId: string, score: number}>): string {
+        const requestId = crypto.randomUUID();
+        this.sendMessage({type: "submit-scores", requestId, userId, sectionId, deltas});
         return requestId;
     }
 }

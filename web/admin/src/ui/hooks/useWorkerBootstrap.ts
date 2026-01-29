@@ -1,13 +1,16 @@
-import { useEffect, useRef } from 'react';
-import { useAppDispatch } from '../state/hooks';
-import { setUser } from '../state/userSlice';
-import { setCanonicalPatrols, setGlobalError, setPatrolsError } from '../state/appSlice';
-import { showErrorDialog } from '../state/dialogSlice';
-import { removePendingRequest, addPendingRequest } from '../state/pendingRequestsSlice';
-import { updateSectionsList, handleWrongUser } from '../state/workerThunks';
-import { store } from '../state/store';
-import { GetWorker, type Worker } from '../worker';
-import type { WorkerMessage } from '../../types/messages';
+import {useEffect, useRef} from 'react';
+import {
+    clearUser,
+    handlePatrolsChange,
+    handleSectionListChange,
+    handleUserProfileMessage,
+    handleWrongUser,
+    setGlobalError,
+    useAppDispatch
+} from '../state';
+import {GetWorker, type Worker} from '../worker';
+import type {WorkerMessage} from '../../types/messages';
+import {reduceError} from "../../types/reduceError.ts";
 
 /**
  * Bootstrap hook to initialize worker communication and load initial user state.
@@ -21,164 +24,72 @@ import type { WorkerMessage } from '../../types/messages';
  * Returns the worker instance for use by other components.
  */
 export function useWorkerBootstrap(): Worker | null {
-  const dispatch = useAppDispatch();
-  const workerRef = useRef<Worker | null>(null);
-  const hasBootstrappedRef = useRef(false);
+    const dispatch = useAppDispatch();
+    const workerRef = useRef<Worker | null>(null);
+    const hasBootstrappedRef = useRef(false);
 
-  useEffect(() => {
-    // Only bootstrap once
-    if (hasBootstrappedRef.current) {
-      return;
-    }
-    hasBootstrappedRef.current = true;
+    useEffect(() => {
+        // Only bootstrap once
+        if (hasBootstrappedRef.current) {
+            return;
+        }
+        hasBootstrappedRef.current = true;
 
-    // Get worker instance
-    let worker: Worker;
-    try {
-      worker = GetWorker();
-      workerRef.current = worker;
-    } catch (error) {
-      console.error('[useWorkerBootstrap] Failed to get worker:', error);
-      // FIXME: Show error message
-      return;
-    }
+        // Get worker instance
+        let worker: Worker;
+        try {
+            worker = GetWorker();
+            workerRef.current = worker;
+        } catch (error) {
+            dispatch(setGlobalError(reduceError(error, "Unable to initialize worker.")));
+            return;
+        }
 
-    // Set up message handler
-    worker.onMessage = (message: WorkerMessage) => {
-      console.log('[useWorkerBootstrap] Received message:', message.type);
+        // Set up message handler
+        worker.onMessage = (message: WorkerMessage) => {
+            console.log('[useWorkerBootstrap] Received message:', message.type);
 
-      switch (message.type) {
-        case 'authentication-required':
-          // Clear user state and redirect to login
-          console.log('[useWorkerBootstrap] Authentication required, redirecting to:', message.loginUrl);
-          dispatch(clearUser());
-          window.location.href = message.loginUrl;
-          break;
+            switch (message.type) {
+                case 'authentication-required':
+                    // Clear user state and redirect to login
+                    console.log('[useWorkerBootstrap] Authentication required, redirecting to:', message.loginUrl);
+                    dispatch(clearUser());
+                    window.location.href = message.loginUrl;
+                    break;
 
-        case 'user-profile':
-          // Set user profile in Redux
-          console.log('[useWorkerBootstrap] User profile received:', message.userId, message.userName);
+                case 'user-profile':
+                    // Set user profile in Redux
+                    console.log('[useWorkerBootstrap] User profile received:', message.userId, message.userName);
+                    dispatch(handleUserProfileMessage(message));
+                    break;
 
-          // Remove pending request if this was a response to our request
-          if (message.requestId) {
-            dispatch(removePendingRequest(message.requestId));
-          }
+                case 'section-list-change':
+                    // Update sections list (will auto-fetch patrols if section is selected)
+                    console.log('[useWorkerBootstrap] Section list changed, sections count:', message.sections.length);
+                    dispatch(handleSectionListChange(message));
+                    break;
 
-          dispatch(setUser({
-            userId: message.userId.toString(),
-            userName: message.userName,
-          }));
-          // Update sections list (will auto-fetch patrols if section is selected)
-          dispatch(updateSectionsList(message.sections));
-          break;
+                case 'patrols-change':
+                    // Update patrols for a specific section
+                    console.log('[useWorkerBootstrap] Patrols changed for section:', message.sectionId);
+                    dispatch(handlePatrolsChange(message));
+                    break;
 
-        case 'section-list-change':
-          // Update sections list (will auto-fetch patrols if section is selected)
-          console.log('[useWorkerBootstrap] Section list changed, sections count:', message.sections.length);
-          dispatch(updateSectionsList(message.sections));
-          break;
+                case 'wrong-user':
+                    // User mismatch - clear state and show error message
+                    console.warn('[useWorkerBootstrap] Wrong user detected:', message.requestedUserId, 'vs', message.currentUserId);
+                    dispatch(handleWrongUser());
+                    break;
 
-        case 'patrols-change':
-          // Update patrols for a specific section
-          console.log('[useWorkerBootstrap] Patrols changed for section:', message.sectionId);
-
-          // Validate user context - data must be for current user
-          const patrolsState = store.getState();
-          const patrolsUserId = patrolsState.user.userId;
-          if (patrolsUserId && message.userId.toString() !== patrolsUserId) {
-            // User mismatch in patrols data - treat like wrong-user
-            console.warn('[useWorkerBootstrap] Patrols userId mismatch:', message.userId, 'vs', patrolsUserId);
-            dispatch(handleWrongUser());
-            break;
-          }
-
-          // If this is a response to a tracked request, remove it from pending
-          if (message.requestId) {
-            const pendingRequest = patrolsState.pendingRequests.requests[message.requestId];
-            if (pendingRequest) {
-              console.log('[useWorkerBootstrap] Completing pending request:', message.requestId);
-              dispatch(removePendingRequest(message.requestId));
+                default:
+                    console.warn('[useWorkerBootstrap] Unhandled message type:', (message as any).type);
             }
-          }
+        };
 
-          // Update patrol data (sets loading state to 'ready')
-          dispatch(setCanonicalPatrols({
-            sectionId: message.sectionId,
-            patrols: message.scores,
-          }));
-          break;
+        // Request initial profile
+        console.log('[useWorkerBootstrap] Requesting profile...');
+        worker.sendGetProfileRequest();
+    }, [dispatch]);
 
-        case 'wrong-user':
-          // User mismatch - clear state and show error message
-          console.warn('[useWorkerBootstrap] Wrong user detected:', message.requestedUserId, 'vs', message.currentUserId);
-          dispatch(handleWrongUser());
-          break;
-
-        case 'service-error':
-          // Service error - use context (sectionId) for routing, requestId for cleanup
-          console.error('[useWorkerBootstrap] Service error:', message.function, message.error, {
-            userId: message.userId,
-            sectionId: message.sectionId,
-            patrolId: message.patrolId,
-            requestId: message.requestId,
-          });
-
-          // FIRST: Validate user context - error must be for current user
-          const currentState = store.getState();
-          const currentUserId = currentState.user.userId;
-          if (currentUserId && message.userId.toString() !== currentUserId) {
-            // User mismatch in error - treat like wrong-user
-            console.warn('[useWorkerBootstrap] Service error userId mismatch:', message.userId, 'vs', currentUserId);
-            dispatch(handleWrongUser());
-            break;
-          }
-
-          // If this is a response to a tracked request, remove it from pending
-          // Note: Worker may send BOTH PatrolsChangeMessage (cached) AND ServiceErrorMessage (refresh failed)
-          // in that order. If PatrolsChangeMessage arrived first, pending request is already removed,
-          // so we won't find it here. This is correct - data is loaded (from cache), just stale.
-          if (message.requestId) {
-            const pendingRequest = currentState.pendingRequests.requests[message.requestId];
-            if (pendingRequest) {
-              console.log('[useWorkerBootstrap] Removing pending request:', message.requestId, pendingRequest.type);
-              dispatch(removePendingRequest(message.requestId));
-            }
-          }
-
-          // Route error to specific section if context provided
-          // This works for both solicited (with requestId) and unsolicited (background) errors
-          if (message.sectionId) {
-            dispatch(setPatrolsError({
-              sectionId: message.sectionId,
-              error: message.error,
-            }));
-          }
-
-          // TODO: If patrolId is provided, set error state on specific patrol (future enhancement)
-
-          // Always show error dialog for user feedback (warning if data was cached)
-          dispatch(showErrorDialog({
-            title: message.function,
-            message: message.error,
-          }));
-          break;
-
-        default:
-          console.warn('[useWorkerBootstrap] Unhandled message type:', (message as any).type);
-      }
-    };
-
-    // Request initial profile
-    console.log('[useWorkerBootstrap] Requesting profile...');
-    const requestId = worker.sendGetProfileRequest();
-
-    // Track the pending request
-    dispatch(addPendingRequest({
-      requestId,
-      type: 'get-profile',
-      timestamp: Date.now(),
-    }));
-  }, [dispatch]);
-
-  return workerRef.current;
+    return workerRef.current;
 }

@@ -109,7 +109,7 @@ export async function getProfile(client: Client, requestId: string) {
                 lastErrorTime
             ));
             if (changed) {
-                await clients.sendMessage(messages.newSectionListChangeMessage(sections, sectionsListRevision));
+                await clients.sendMessage(messages.newSectionListChangeMessage(session.userId, sections, sectionsListRevision));
             }
         } catch (e) {
             // Store the error in user metadata and bump sections list revision

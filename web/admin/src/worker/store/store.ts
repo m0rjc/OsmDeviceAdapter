@@ -928,23 +928,3 @@ async function bumpSectionUiRevision(tx: IDBTransaction, userId: number, section
     return section.uiRevision;
 }
 
-/**
- * Increment the global sections list revision for a user and return the new value.
- * This must be called within a transaction that has write access to the user_metadata store.
- * @param tx The transaction
- * @param userId The user ID
- * @returns The new sections list revision number
- */
-async function bumpSectionsListRevision(tx: IDBTransaction, userId: number): Promise<number> {
-    const metadataStore = tx.objectStore(USER_METADATA_STORE);
-    let metadata = await read<UserMetadata>(metadataStore, userId);
-
-    if (!metadata) {
-        // First time - initialize metadata
-        metadata = new UserMetadata(userId);
-    }
-
-    metadata.sectionsListRevision++;
-    await put(metadataStore, metadata);
-    return metadata.sectionsListRevision;
-}

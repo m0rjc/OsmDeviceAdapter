@@ -78,7 +78,7 @@ describe('PatrolPointsStore', () => {
       await store.setCanonicalSectionList([sections[1]])
 
       // Patrols for section-1 should be gone
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols).toHaveLength(0)
     })
   })
@@ -97,7 +97,7 @@ describe('PatrolPointsStore', () => {
         { id: "2", name: 'Blue', score: 20 },
       ])
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols).toHaveLength(2)
       expect(patrols.find(p => p.patrolId === "1")?.committedScore).toBe(10)
       expect(patrols.find(p => p.patrolId === "1")?.pendingScoreDelta).toBe(0)
@@ -112,7 +112,7 @@ describe('PatrolPointsStore', () => {
         { id: "1", name: 'Red Team', score: 15 },
       ])
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].patrolName).toBe('Red Team')
       expect(patrols[0].committedScore).toBe(15)
     })
@@ -127,7 +127,7 @@ describe('PatrolPointsStore', () => {
         { id: "1", name: 'Red', score: 10 },
       ])
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols).toHaveLength(1)
       expect(patrols[0].patrolId).toBe("1")
     })
@@ -141,7 +141,7 @@ describe('PatrolPointsStore', () => {
       await store.addPendingPoints(1, "1", 5)
 
       // Update the canonical list (but don't change this patrol)
-      const patrols = await store.setCanonicalPatrolList(1, [
+      const { patrols } = await store.setCanonicalPatrolList(1, [
         { id: "1", name: 'Red', score: 10 },
       ])
 
@@ -176,7 +176,7 @@ describe('PatrolPointsStore', () => {
 
       expect(delta).toBe(5)
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].committedScore).toBe(10)
       expect(patrols[0].pendingScoreDelta).toBe(5)
     })
@@ -187,7 +187,7 @@ describe('PatrolPointsStore', () => {
 
       expect(delta).toBe(8)
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].pendingScoreDelta).toBe(8)
     })
 
@@ -197,7 +197,7 @@ describe('PatrolPointsStore', () => {
 
       expect(delta).toBe(3)
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].pendingScoreDelta).toBe(3)
     })
 
@@ -214,7 +214,7 @@ describe('PatrolPointsStore', () => {
       uow.setCommittedScore(1, "1", 15, 'Red')
       await uow.commit()
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].committedScore).toBe(15)
       expect(patrols[0].pendingScoreDelta).toBe(0)
     })
@@ -224,7 +224,7 @@ describe('PatrolPointsStore', () => {
       uow.setCommittedScore(1, "1", 12, 'Red Team')
       await uow.commit()
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].patrolName).toBe('Red Team')
       expect(patrols[0].committedScore).toBe(12)
     })
@@ -248,7 +248,7 @@ describe('PatrolPointsStore', () => {
       uow.setRetryAfter(1, "1", retryTime, 'Temporary error')
       await uow.commit()
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].retryAfter).toBe(retryTime.getTime())
       expect(patrols[0].errorMessage).toBe('Temporary error')
       expect(patrols[0].pendingScoreDelta).toBe(5) // Should preserve pending delta
@@ -261,7 +261,7 @@ describe('PatrolPointsStore', () => {
       uow.setError(1, "1", 'Permanent failure')
       await uow.commit()
 
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
       expect(patrols[0].retryAfter).toBe(-1)
       expect(patrols[0].errorMessage).toBe('Permanent failure')
     })
@@ -446,8 +446,8 @@ describe('PatrolPointsStore', () => {
         { id: "1", name: 'User 2 Patrol', score: 20 }
       ])
 
-      const user1Patrols = await user1Store.getScoresForSection(1)
-      const user2Patrols = await user2Store.getScoresForSection(1)
+      const { patrols: user1Patrols } = await user1Store.getScoresForSection(1)
+      const { patrols: user2Patrols } = await user2Store.getScoresForSection(1)
 
       expect(user1Patrols[0].patrolName).toBe('User 1 Patrol')
       expect(user2Patrols[0].patrolName).toBe('User 2 Patrol')
@@ -490,7 +490,7 @@ describe('PatrolPointsStore', () => {
       await store.deleteUserData()
 
       const sections = await store.getSections()
-      const patrols = await store.getScoresForSection(1)
+      const { patrols } = await store.getScoresForSection(1)
 
       expect(sections).toHaveLength(0)
       expect(patrols).toHaveLength(0)

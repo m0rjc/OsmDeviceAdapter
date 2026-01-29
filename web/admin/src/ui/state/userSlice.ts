@@ -1,12 +1,12 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { RootState } from './store';
+import type { RootState } from './rootReducer';
 
 /**
  * User authentication state.
  */
 export interface UserState {
   /** OSM user ID (null when not authenticated) */
-  userId: string | null;
+  userId: number | null;
   /** User's display name (null when not authenticated) */
   userName: string | null;
 }
@@ -20,7 +20,7 @@ const userSlice = createSlice({
   name: 'user',
   initialState,
   reducers: {
-    setUser: (state, action: PayloadAction<{ userId: string; userName: string }>) => {
+    setUser: (state, action: PayloadAction<{ userId: number; userName: string }>) => {
       state.userId = action.payload.userId;
       state.userName = action.payload.userName;
     },

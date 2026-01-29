@@ -17,6 +17,7 @@ describe('Worker mocking pattern', () => {
       onMessage: jest.fn(),
       sendGetProfileRequest: jest.fn().mockReturnValue('request-id-123'),
       sendRefreshRequest: jest.fn().mockReturnValue('request-id-456'),
+      sendSubmitScoresRequest: jest.fn().mockReturnValue('request-id-789'),
     };
 
     // Override the worker factory to return our mock

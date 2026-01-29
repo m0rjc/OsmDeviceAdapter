@@ -1,10 +1,126 @@
-import { createAsyncThunk } from '@reduxjs/toolkit';
-import { GetWorker } from '../worker';
-import { setCanonicalSections, selectSection as selectSectionAction, setPatrolsLoading, clearAllData, setGlobalError } from './appSlice';
-import { clearUser } from './userSlice';
-import { addPendingRequest, clearAllPendingRequests } from './pendingRequestsSlice';
-import type { RootState } from './store';
-import type { Section } from '../../types/model';
+import {createAsyncThunk} from '@reduxjs/toolkit';
+import {
+    GetWorker,
+    type PatrolsChangeMessage,
+    type SectionListChangeMessage,
+    type UserProfileMessage,
+    type Worker
+} from '../worker';
+import {clearUser, setUser} from './userSlice';
+import * as uiSlice from './uiSlice';
+import type {RootState} from './rootReducer';
+import {selectChangesForCurrentSection, selectSelectedSection} from "./rootReducer";
+import {
+    setCanonicalPatrols,
+    setCanonicalSectionList,
+    setSectionError,
+    setSectionState,
+    type UISection
+} from "./patrolsSlice.ts";
+import {setGlobalError, showErrorDialog} from "./dialogSlice.ts";
+
+export const handleUserProfileMessage = createAsyncThunk<
+    void,
+    UserProfileMessage,
+    { state: RootState }>(
+    'worker/handleUserProfileMessage',
+    async (message: UserProfileMessage, {dispatch, getState}) => {
+        dispatch(setUser(message));
+
+        const currentVersion = getState().patrols.sectionIdListVersion;
+        if (currentVersion >= message.sectionsListRevision) {
+            console.warn('[handleUserProfileMessage] Ignoring outdated profile message:', message.sectionsListRevision, currentVersion);
+            return;
+        }
+        dispatch(setCanonicalSectionList({version: message.sectionsListRevision, sections: message.sections}));
+
+        // Load patrols for the selected section if we have one
+        const state: RootState = getState() as RootState;
+        const selectedSection: UISection | null = selectSelectedSection(state);
+        if (selectedSection?.state === 'uninitialized') {
+            dispatch(fetchPatrolScoresForSection(selectedSection.id));
+        }
+
+        // Show an error dialog if we have an error
+        if (message.lastError) {
+            dispatch(showErrorDialog({title: 'Error fetching section list', message: message.lastError}))
+        }
+    }
+);
+
+
+/**
+ * Respond to a section list change message from the worker.
+ * We can only respond if we have a current user. We must ignore an unsolicited message
+ * that arrives before we have loaded the current user profile.
+ */
+export const handleSectionListChange = createAsyncThunk<
+    void,
+    SectionListChangeMessage,
+    { state: RootState }
+>(
+    'worker/handleSectionListChange',
+    async (message, {dispatch, getState}) => {
+        var state = getState();
+        const userId = state.user.userId;
+        if (userId == null) {
+            return;
+        }
+        if (message.userId !== userId) {
+            console.warn('Message received for unexpected userID');
+            return;
+        }
+        if (message.sectionsListRevision <= state.patrols.sectionIdListVersion) {
+            // We can see double messages if the worker broadcasts a list change message in response
+            // to first load. So we ignore this.
+            return;
+        }
+        dispatch(setCanonicalSectionList({version: message.sectionsListRevision, sections: message.sections}));
+
+        // Check if we need to fetch patrols for the selected section.
+        // We don't expect this in an unsolicited message.
+        // TODO: Put up a dialog explaining why the patrol list has changed under their feet (patrol disappeared).
+        state = getState();
+        const selectedSection: UISection | null = selectSelectedSection(state);
+        if (selectedSection?.state === 'uninitialized') {
+            dispatch(fetchPatrolScoresForSection(selectedSection.id));
+        }
+    }
+);
+
+
+/**
+ * Thunk to select a section and auto-fetch patrols if needed.
+ *
+ * This thunk:
+ * 1. Updates the selected section ID
+ * 2. Checks if patrols are loaded for this section
+ * 3. If not loaded, triggers patrol fetch
+ *
+ * Use this instead of directly dispatching selectSection when the user
+ * manually selects a section from the UI.
+ *
+ * @param sectionId - The section ID to select
+ */
+export const setSelectedSection = createAsyncThunk<
+    void,
+    number,
+    { state: RootState }
+>(
+    'worker/selectSection',
+    async (sectionId, {dispatch, getState}) => {
+        // Update the selected section
+        dispatch(uiSlice.setSelectedSectionId(sectionId));
+
+        // Check if we need to fetch patrols for this section
+        const state = getState();
+        const selectedSection = selectSelectedSection(state);
+        if (selectedSection?.state === 'uninitialized') {
+            console.log('[selectSection] Auto-fetching patrols for section:', sectionId);
+            dispatch(fetchPatrolScoresForSection(sectionId));
+        }
+    }
+);
 
 /**
  * Thunk to fetch patrol scores from the worker.
@@ -21,114 +137,64 @@ import type { Section } from '../../types/model';
  *
  * @param sectionId - The section ID to fetch scores for
  */
-export const fetchPatrolScores = createAsyncThunk<
-  void,
-  number,
-  { state: RootState }
+const fetchPatrolScoresForSection = createAsyncThunk<
+    void,
+    number,
+    { state: RootState }
 >(
-  'worker/fetchPatrolScores',
-  async (sectionId, { getState, dispatch }) => {
-    const state = getState();
-    const userId = state.user.userId;
+    'worker/fetchPatrolScores',
+    async (sectionId, {getState, dispatch}) => {
+        const state = getState();
+        const userId = state.user.userId;
 
-    if (!userId) {
-      throw new Error('User not authenticated');
+        if (!userId) {
+            // TODO: Error dialog
+            throw new Error('User not authenticated');
+        }
+
+        dispatch(setSectionState({sectionId, stateName: 'loading'}));
+
+        const worker: Worker = GetWorker();
+        worker.sendRefreshRequest(userId, sectionId);
+
+
+        // Note: This thunk completes immediately after sending the message.
+        // The actual response (PatrolsChangeMessage or ServiceErrorMessage)
+        // will arrive asynchronously through the worker's onMessage handler.
     }
-
-    const worker = GetWorker();
-
-    // Send request and get correlation ID
-    const requestId = worker.sendRefreshRequest(Number(userId), sectionId);
-
-    // Track the pending request
-    dispatch(addPendingRequest({
-      requestId,
-      type: 'refresh',
-      sectionId,
-      userId: Number(userId),
-      timestamp: Date.now(),
-    }));
-
-    // Set UI loading state
-    dispatch(setPatrolsLoading({ sectionId }));
-
-    // Note: This thunk completes immediately after sending the message.
-    // The actual response (PatrolsChangeMessage or ServiceErrorMessage)
-    // will arrive asynchronously through the worker's onMessage handler.
-  }
 );
 
-/**
- * Thunk to update the section list and auto-fetch patrols if needed.
- *
- * This thunk:
- * 1. Updates the canonical section list (which may auto-select first section)
- * 2. Checks if a section is now selected
- * 3. If selected and patrols aren't loaded yet, triggers patrol fetch
- *
- * This centralizes the "section change -> load patrols" logic in one place.
- *
- * @param sections - The new section list from the worker
- */
-export const updateSectionsList = createAsyncThunk<
-  void,
-  Section[],
-  { state: RootState }
+export const handlePatrolsChange = createAsyncThunk<
+    void,
+    PatrolsChangeMessage,
+    { state: RootState }
 >(
-  'worker/updateSectionsList',
-  async (sections, { dispatch, getState }) => {
-    // Update the canonical section list (may auto-select first section)
-    dispatch(setCanonicalSections(sections));
+    'worker/handlePatrolsChange',
+    async (message: PatrolsChangeMessage, {dispatch, getState}) => {
+        const state: RootState = getState();
+        const userId: number | null = state.user.userId;
 
-    // Check if we need to fetch patrols for the selected section
-    const state = getState();
-    const selectedSectionId = state.app.selectedSectionId;
+        if (userId !== message.userId) {
+            console.warn('Message received for unexpected userID');
+            return;
+        }
 
-    if (selectedSectionId !== null) {
-      const selectedSection = state.app.sections.find(s => s.id === selectedSectionId);
+        dispatch(setCanonicalPatrols({
+            version: message.uiRevision,
+            patrols: message.scores,
+            sectionId: message.sectionId
+        }));
 
-      // If section is selected but patrols aren't loaded yet, fetch them
-      if (selectedSection && selectedSection.patrols === undefined) {
-        console.log('[updateSectionsList] Auto-fetching patrols for section:', selectedSectionId);
-        dispatch(fetchPatrolScores(selectedSectionId));
-      }
+        if (message.lastError) {
+            dispatch(showErrorDialog({title: 'Error fetching patrol scores', message: message.lastError}))
+            dispatch(setSectionError({
+                sectionId: message.sectionId,
+                error: message.lastError,
+                version: message.uiRevision
+            }));
+        }
     }
-  }
-);
-
-/**
- * Thunk to select a section and auto-fetch patrols if needed.
- *
- * This thunk:
- * 1. Updates the selected section ID
- * 2. Checks if patrols are loaded for this section
- * 3. If not loaded, triggers patrol fetch
- *
- * Use this instead of directly dispatching selectSection when the user
- * manually selects a section from the UI.
- *
- * @param sectionId - The section ID to select
- */
-export const selectSection = createAsyncThunk<
-  void,
-  number,
-  { state: RootState }
->(
-  'worker/selectSection',
-  async (sectionId, { dispatch, getState }) => {
-    // Update the selected section
-    dispatch(selectSectionAction(sectionId));
-
-    // Check if we need to fetch patrols for this section
-    const state = getState();
-    const selectedSection = state.app.sections.find(s => s.id === sectionId);
-
-    if (selectedSection && selectedSection.patrols === undefined) {
-      console.log('[selectSection] Auto-fetching patrols for section:', sectionId);
-      dispatch(fetchPatrolScores(sectionId));
-    }
-  }
-);
+)
 
 /**
  * Thunk to handle wrong user scenarios.
@@ -146,11 +212,67 @@ export const selectSection = createAsyncThunk<
  * in different message handlers.
  */
 export const handleWrongUser = createAsyncThunk<void, void, { state: RootState }>(
-  'worker/handleWrongUser',
-  async (_, { dispatch }) => {
-    dispatch(clearUser());
-    dispatch(clearAllData());
-    dispatch(clearAllPendingRequests());
-    dispatch(setGlobalError('You have logged out or changed accounts in another tab. Please reload this page.'));
-  }
+    'worker/handleWrongUser',
+    async (_, {dispatch}) => {
+        dispatch(clearUser());
+        // dispatch(clearAllData());
+        // dispatch(clearAllPendingRequests());
+        dispatch(setGlobalError('You have logged out or changed accounts in another tab. Please reload this page.'));
+    }
+);
+
+/**
+ * Thunk to submit score changes to the worker.
+ *
+ * This thunk:
+ * 1. Collects user changes from state
+ * 2. Sends submit-scores message to worker
+ * 3. Clears user entries from UI state (optimistic update)
+ *
+ * The worker will:
+ * - Add pending points to IndexedDB
+ * - Broadcast optimistic update to all clients (PatrolsChangeMessage)
+ * - Sync to server if online
+ * - Handle retries/errors automatically
+ *
+ * This is a fire-and-forget operation. The UI receives updates via
+ * PatrolsChangeMessage broadcasts from the worker.
+ */
+export const submitScoreChanges = createAsyncThunk<
+    void,
+    void,
+    { state: RootState }
+>(
+    'worker/submitScores',
+    async (_, {getState}) => {
+        const state = getState();
+        const userId = state.user.userId;
+        const selectedSection = selectSelectedSection(state);
+        const changes = selectChangesForCurrentSection(state);
+
+        if (!userId) {
+            throw new Error('User not authenticated');
+        }
+
+        if (!selectedSection) {
+            throw new Error('No section selected');
+        }
+
+        if (changes.length === 0) {
+            return; // Nothing to submit
+        }
+
+        const worker: Worker = GetWorker();
+        worker.sendSubmitScoresRequest(
+            userId,
+            selectedSection.id,
+            changes.map(c => ({
+                patrolId: c.patrolId,
+                score: c.score
+            }))
+        );
+
+        // Note: User entry clearing will be handled by the component after successful submit
+        // since we want to show a success message before clearing
+    }
 );

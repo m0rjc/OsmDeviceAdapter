@@ -2,13 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '../../state/hooks';
 import {
   selectSelectedSection,
-  selectPatrolsForSelectedSection,
-  selectArePatrolsLoadedForSelectedSection,
-  selectHasUnsavedEdits,
-  setCanonicalPatrols,
-  setUserEntry,
-  clearAllUserEntries,
+  selectSelectedPatrolKeys,
+  selectChangesForCurrentSection,
 } from '../../state';
+import { setCanonicalPatrols } from '../../state/patrolsSlice';
+import { setPatrolScore } from '../../state/uiSlice';
 import {
   fetchScores,
   updateScores,

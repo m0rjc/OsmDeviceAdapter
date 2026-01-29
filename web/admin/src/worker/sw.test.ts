@@ -75,6 +75,9 @@ describe('Service Worker Message Handlers', () => {
       setCanonicalSectionList: jest.fn(),
       setCanonicalPatrolList: jest.fn(),
       getScoresForSection: jest.fn(),
+      setSectionError: jest.fn(),
+      setProfileError: jest.fn(),
+      getSections: jest.fn(),
       addPendingPoints: jest.fn(),
       acquirePendingForSync: jest.fn(),
       releaseSyncLock: jest.fn(),
@@ -105,7 +108,12 @@ describe('Service Worker Message Handlers', () => {
       });
 
       mockApiService.fetchSections.mockResolvedValue(sections);
-      mockStore.setCanonicalSectionList.mockResolvedValue(false); // No changes
+      mockStore.setCanonicalSectionList.mockResolvedValue({
+        changed: false,
+        sectionsListRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
 
       await getProfile(client, TEST_REQUEST_ID);
 
@@ -113,7 +121,7 @@ describe('Service Worker Message Handlers', () => {
       expect(mockApiService.fetchSections).toHaveBeenCalled();
       expect(mockStore.setCanonicalSectionList).toHaveBeenCalledWith(sections);
       expect(client.postMessage).toHaveBeenCalledWith(
-        messages.newUserProfileMessage(userId, userName, sections, TEST_REQUEST_ID)
+        messages.newUserProfileMessage(userId, userName, sections, 1, TEST_REQUEST_ID, undefined, undefined)
       );
       expect(mockStore.close).toHaveBeenCalled();
     });
@@ -131,13 +139,18 @@ describe('Service Worker Message Handlers', () => {
       });
 
       mockApiService.fetchSections.mockResolvedValue(sections);
-      mockStore.setCanonicalSectionList.mockResolvedValue(true); // Changed!
+      mockStore.setCanonicalSectionList.mockResolvedValue({
+        changed: true,
+        sectionsListRevision: 2,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
 
 
       await getProfile(client, TEST_REQUEST_ID);
 
       expect(clients.sendMessage).toHaveBeenCalledWith(
-        messages.newSectionListChangeMessage(sections)
+        messages.newSectionListChangeMessage(userId, sections, 2)
       );
       expect(mockStore.close).toHaveBeenCalled();
     });
@@ -161,12 +174,17 @@ describe('Service Worker Message Handlers', () => {
     // Note: wrong-user test removed - getProfile no longer takes userId parameter
     // It now fetches whoever is currently logged in
 
-    it('should close store even if error occurs', async () => {
+    it('should send authentication required when fetchSession fails', async () => {
       const client = createMockClient();
 
       mockApiService.fetchSession.mockRejectedValue(new Error('Network error'));
 
-      await expect(getProfile(client, TEST_REQUEST_ID)).rejects.toThrow('Network error');
+      await getProfile(client, TEST_REQUEST_ID);
+
+      // Should send authentication required message when session check fails
+      expect(client.postMessage).toHaveBeenCalledWith(
+        messages.newAuthenticationRequiredMessage('/admin/login', TEST_REQUEST_ID)
+      );
       // Store is never opened when auth check fails
     });
   });
@@ -192,14 +210,19 @@ describe('Service Worker Message Handlers', () => {
       });
 
       mockApiService.fetchScores.mockResolvedValue(scores);
-      mockStore.setCanonicalPatrolList.mockResolvedValue(storedPatrols);
+      mockStore.setCanonicalPatrolList.mockResolvedValue({
+        patrols: storedPatrols,
+        uiRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
 
 
       await refreshScores(client, TEST_REQUEST_ID, userId, sectionId);
 
       expect(mockApiService.fetchScores).toHaveBeenCalledWith(sectionId);
       expect(mockStore.setCanonicalPatrolList).toHaveBeenCalledWith(sectionId, scores);
-      expect(clients.sendScoresToClient).toHaveBeenCalledWith(client, userId, sectionId, storedPatrols, TEST_REQUEST_ID);
+      expect(clients.sendScoresToClient).toHaveBeenCalledWith(client, userId, sectionId, storedPatrols, 1, undefined, undefined, TEST_REQUEST_ID);
       expect(mockStore.close).toHaveBeenCalled();
     });
 
@@ -235,23 +258,26 @@ describe('Service Worker Message Handlers', () => {
 
       const fetchError = new NetworkError('Fetch failed');
       mockApiService.fetchScores.mockRejectedValue(fetchError);
-      mockStore.getScoresForSection.mockResolvedValue(cachedScores);
+      mockStore.setSectionError.mockResolvedValue(2);
+      mockStore.getScoresForSection.mockResolvedValue({
+        patrols: cachedScores,
+        uiRevision: 2,
+        lastError: 'Unable to refresh patrol scores from server.',
+        lastErrorTime: Date.now()
+      });
 
       await refreshScores(client, TEST_REQUEST_ID, userId, sectionId);
 
-      // Should send cached scores with requestId
-      expect(clients.sendScoresToClient).toHaveBeenCalledWith(client, userId, sectionId, cachedScores, TEST_REQUEST_ID);
-
-      // Should send error message with requestId and context
-      expect(clients.send).toHaveBeenCalledWith(
+      // Should send cached scores with requestId and error state
+      expect(clients.sendScoresToClient).toHaveBeenCalledWith(
         client,
-        expect.objectContaining({
-          type: 'service-error',
-          requestId: TEST_REQUEST_ID,
-          userId: userId,
-          sectionId: sectionId,
-          function: 'Refresh failed',
-        })
+        userId,
+        sectionId,
+        cachedScores,
+        2,
+        'Unable to refresh patrol scores from server.',
+        expect.any(Number),
+        TEST_REQUEST_ID
       );
 
       // The important thing is that close() is ALWAYS called
@@ -282,7 +308,12 @@ describe('Service Worker Message Handlers', () => {
         userName: 'Test User',
       });
 
-      mockStore.getScoresForSection.mockResolvedValue(updatedScores);
+      mockStore.getScoresForSection.mockResolvedValue({
+        patrols: updatedScores,
+        uiRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
       mockStore.acquirePendingForSync.mockResolvedValue({
         lockId: 'lock-123',
         pending: updatedScores,
@@ -314,7 +345,7 @@ describe('Service Worker Message Handlers', () => {
       expect(mockStore.addPendingPoints).toHaveBeenCalledWith(sectionId, '2', 3);
 
       // Should publish optimistic update (note: no requestId - this is an unsolicited broadcast to all clients)
-      expect(clients.publishScores).toHaveBeenCalledWith(userId, sectionId, updatedScores);
+      expect(clients.publishScores).toHaveBeenCalledWith(userId, sectionId, updatedScores, 1, undefined, undefined);
 
       // Should sync to server
       expect(mockApiService.updateScores).toHaveBeenCalled();
@@ -333,7 +364,12 @@ describe('Service Worker Message Handlers', () => {
         isAuthenticated: false,
       });
 
-      mockStore.getScoresForSection.mockResolvedValue(updatedScores);
+      mockStore.getScoresForSection.mockResolvedValue({
+        patrols: updatedScores,
+        uiRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
 
 
 
@@ -343,7 +379,7 @@ describe('Service Worker Message Handlers', () => {
       expect(mockStore.addPendingPoints).toHaveBeenCalledWith(sectionId, '1', 5);
 
       // Should publish optimistic update
-      expect(clients.publishScores).toHaveBeenCalledWith(userId, sectionId, updatedScores);
+      expect(clients.publishScores).toHaveBeenCalledWith(userId, sectionId, updatedScores, 1, undefined, undefined);
 
       // Should NOT sync to server
       expect(mockApiService.updateScores).not.toHaveBeenCalled();
@@ -365,7 +401,12 @@ describe('Service Worker Message Handlers', () => {
       });
 
       mockApiService.isOffline.mockReturnValue(true);
-      mockStore.getScoresForSection.mockResolvedValue(updatedScores);
+      mockStore.getScoresForSection.mockResolvedValue({
+        patrols: updatedScores,
+        uiRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
 
 
 
@@ -394,7 +435,12 @@ describe('Service Worker Message Handlers', () => {
         userName: 'Test User',
       });
 
-      mockStore.getScoresForSection.mockResolvedValue(updatedScores);
+      mockStore.getScoresForSection.mockResolvedValue({
+        patrols: updatedScores,
+        uiRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
       mockStore.acquirePendingForSync.mockResolvedValue({
         lockId: 'lock-123',
         pending: updatedScores,
@@ -430,7 +476,12 @@ describe('Service Worker Message Handlers', () => {
         userName: 'Test User',
       });
 
-      mockStore.getScoresForSection.mockResolvedValue(updatedScores);
+      mockStore.getScoresForSection.mockResolvedValue({
+        patrols: updatedScores,
+        uiRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
       mockStore.acquirePendingForSync.mockResolvedValue({
         lockId: 'lock-123',
         pending: updatedScores,
@@ -478,7 +529,19 @@ describe('Service Worker Message Handlers', () => {
         userName: 'Test User',
       });
 
-      mockStore.getScoresForSection.mockResolvedValue(updatedScores);
+      mockStore.getScoresForSection
+        .mockResolvedValueOnce({
+          patrols: updatedScores,
+          uiRevision: 1,
+          lastError: undefined,
+          lastErrorTime: undefined
+        })
+        .mockResolvedValueOnce({
+          patrols: updatedScores,
+          uiRevision: 2,
+          lastError: undefined,
+          lastErrorTime: undefined
+        });
       mockStore.acquirePendingForSync.mockResolvedValue({
         lockId: 'lock-123',
         pending: updatedScores,
@@ -548,7 +611,12 @@ describe('Service Worker Message Handlers', () => {
         userName: 'Test User',
       });
 
-      mockStore.getScoresForSection.mockResolvedValue(updatedScores);
+      mockStore.getScoresForSection.mockResolvedValue({
+        patrols: updatedScores,
+        uiRevision: 1,
+        lastError: undefined,
+        lastErrorTime: undefined
+      });
       mockStore.acquirePendingForSync.mockResolvedValue({
         lockId: 'lock-123',
         pending: [], // No pending!
