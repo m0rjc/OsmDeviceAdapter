@@ -1,7 +1,7 @@
 import { useWorkerBootstrap } from './hooks';
 import {makeSelectPatrolById, selectUserScoreForPatrolKey, useAppSelector} from './state';
-import { selectIsAuthenticated, selectUserName, selectGlobalError, selectSections, selectSelectedSection } from './state';
-import { LoginPage, MessageCard, ErrorDialog } from './components';
+import { selectIsAuthenticated, selectIsLoading, selectUserName, selectGlobalError, selectSections, selectSelectedSection } from './state';
+import { LoginPage, MessageCard, ErrorDialog, LoadingBanner } from './components';
 import {type ReactElement, useMemo} from "react";
 
 /**
@@ -17,13 +17,15 @@ export function App() {
   // Bootstrap worker and set up message handlers
   useWorkerBootstrap();
 
+  const isLoading = useAppSelector(selectIsLoading);
   const isAuthenticated = useAppSelector(selectIsAuthenticated);
   const userName = useAppSelector(selectUserName);
   const globalError = useAppSelector(selectGlobalError);
   const sections = useAppSelector(selectSections);
   const selectedSection = useAppSelector(selectSelectedSection);
 
-  // Show global error if present (e.g., session mismatch)
+  // Show global error if present (e.g., worker initialization failure, session mismatch)
+  // This takes priority over loading state
   if (globalError) {
     return (
       <>
@@ -43,6 +45,11 @@ export function App() {
         </div>
       </>
     );
+  }
+
+  // Show loading banner while fetching user profile
+  if (isLoading) {
+    return <LoadingBanner />;
   }
 
   // Show login page if not authenticated

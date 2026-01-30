@@ -1,5 +1,4 @@
 import {createEntityAdapter, createSlice, type EntityAdapter, type PayloadAction} from "@reduxjs/toolkit";
-import {type AppSelector, type RootState} from "./rootReducer.ts";
 import {patrolKeyBelongsToSection} from "./patrolsSlice.ts";
 
 export type UserScoreEntry = {
@@ -50,21 +49,20 @@ const uiSlice = createSlice({
 export const {setSelectedSectionId, setPatrolScore, clearUserEntriesForSection} = uiSlice.actions;
 export type UiState = ReturnType<typeof uiSlice.reducer>;
 
+// Slice-relative selectors (take UiState, not RootState)
+
 /**
  * Selects the currently selected section ID.
- * @param state
+ * @param state UI state slice
  */
-export const selectSelectedSectionId : AppSelector<number|null> = (state:RootState):number|null => state.ui.selectedSectionId;
+export const selectSelectedSectionId = (state: UiState): number | null => state.selectedSectionId;
 
 /**
  * Selects the user's score for a patrol.
- * @param state root state
+ * @param state UI state slice
  * @param patrolKey patrol key (sectionId:patrolId)
  */
-export const selectUserScoreForPatrolKey : (state:RootState, patrolKey: string) => number =
-    (state: RootState, patrolKey: string):number => entityAdapter.getSelectors().selectById(state.ui, patrolKey)?.score ?? 0;
-
-export const selectUserScoreForPatrolKeyFromUiState : (state:UiState, patrolKey: string) => number =
-    (state : UiState, patrolKey: string):number => entityAdapter.getSelectors().selectById(state, patrolKey)?.score ?? 0;
+export const selectUserScoreForPatrolKey = (state: UiState, patrolKey: string): number =>
+    entityAdapter.getSelectors().selectById(state, patrolKey)?.score ?? 0;
 
 export default uiSlice.reducer;

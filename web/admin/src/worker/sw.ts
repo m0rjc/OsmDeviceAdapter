@@ -164,6 +164,7 @@ export async function refreshScores(client: Client, requestId: string, userId: n
         const scores = await server.fetchScores(sectionId);
         const { patrols, uiRevision, lastError, lastErrorTime } = await store.setCanonicalPatrolList(sectionId, scores);
         // Send successful response with requestId to the specific client (error state cleared)
+        console.debug(`[ServiceWorker] Refreshing scores for section ${sectionId} succeeded`);
         clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
     } catch (e) {
         // Store the error on the section record and bump its UI revision
@@ -171,6 +172,7 @@ export async function refreshScores(client: Client, requestId: string, userId: n
         await store.setSectionError(sectionId, errorMessage);
 
         // Get the cached data with the new error state and send it
+        console.warn(`[ServiceWorker] Refreshing scores for section ${sectionId} failed. Trying cached data:`);
         const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
         clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
     } finally {

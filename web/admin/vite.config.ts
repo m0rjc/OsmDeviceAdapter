@@ -29,5 +29,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    sourcemap: true,  // Enable source maps for production builds
+  },
+  // Explicitly enable source maps in dev mode (default, but explicit)
+  server: {
+    sourcemapIgnoreList: () => false,  // Don't ignore any files in source maps
   },
 })

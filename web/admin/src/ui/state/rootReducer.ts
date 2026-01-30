@@ -1,13 +1,12 @@
 import {combineReducers, createSelector} from '@reduxjs/toolkit';
+import * as patrols from './patrolsSlice.ts';
+import * as user from './userSlice';
+import * as dialog from './dialogSlice';
+import * as ui from './uiSlice';
+import patrolsReducer from './patrolsSlice.ts';
 import userReducer from './userSlice';
 import dialogReducer from './dialogSlice';
-import patrolsReducer, {
-    type PatrolsState,
-    type SectionMetadata,
-    selectPatrolFromPatrolState,
-    selectSectionsById
-} from './patrolsSlice.ts';
-import uiReducer, {selectSelectedSectionId, selectUserScoreForPatrolKeyFromUiState, type UiState} from './uiSlice';
+import uiReducer from './uiSlice';
 
 export const rootReducer = combineReducers({
     user: userReducer,
@@ -20,35 +19,93 @@ export type RootState = ReturnType<typeof rootReducer>;
 export type AppSelector<T> = (state: RootState) => T;
 export const createAppSelector = createSelector.withTypes<RootState>();
 
+// Re-export types from slices
+export type {PatrolsState, SectionMetadata, UIPatrol} from './patrolsSlice.ts';
+export type {UserState} from './userSlice';
+export type {DialogState} from './dialogSlice';
+export type {UiState} from './uiSlice';
+
+// Slice state extractors
+const selectPatrolState: AppSelector<patrols.PatrolsState> = (state) => state.patrols;
+const selectUserState: AppSelector<user.UserState> = (state) => state.user;
+const selectDialogState: AppSelector<dialog.DialogState> = (state) => state.dialog;
+const selectUiState: AppSelector<ui.UiState> = (state) => state.ui;
+
+// App-level selectors for user slice
+export const selectUserId = createAppSelector([selectUserState], user.selectUserId);
+export const selectUserName = createAppSelector([selectUserState], user.selectUserName);
+export const selectIsAuthenticated = createAppSelector([selectUserState], user.selectIsAuthenticated);
+export const selectIsLoading = createAppSelector([selectUserState], user.selectIsLoading);
+
+// App-level selectors for dialog slice
+export {selectDialogState};
+export const selectIsErrorDialogOpen = createAppSelector([selectDialogState], dialog.selectIsErrorDialogOpen);
+export const selectErrorTitle = createAppSelector([selectDialogState], dialog.selectErrorTitle);
+export const selectErrorMessage = createAppSelector([selectDialogState], dialog.selectErrorMessage);
+export const selectGlobalError = createAppSelector([selectDialogState], dialog.selectGlobalError);
+
+// App-level selectors for ui slice
+export const selectSelectedSectionId = createAppSelector([selectUiState], ui.selectSelectedSectionId);
+export const selectUserScoreForPatrolKey = (state: RootState, patrolKey: string): number =>
+    ui.selectUserScoreForPatrolKey(state.ui, patrolKey);
+
+
+// App-level selectors for patrols slice
+export const selectSections = createAppSelector(
+    [selectPatrolState],
+    patrols.selectSections
+);
+
 /**
  * Selects the currently selected section.
  */
-export const selectSelectedSection: AppSelector<SectionMetadata | null> = createAppSelector(
-    [selectSelectedSectionId, selectSectionsById],
-    (id: number | null, records: Record<number, SectionMetadata>): SectionMetadata | null => id === null ? null : records[id]);
+export const selectSelectedSection: AppSelector<patrols.SectionMetadata | null> = createAppSelector(
+    [selectPatrolState, selectSelectedSectionId],
+    (state, id) => id !== null ? patrols.selectSectionById(state, id) : null
+);
 
 // The constant EMPTY_KEYS allows REACT to avoid re-rendering the PatrolList component
 // when the patrols array changes from empty to empty.
 const EMPTY_KEYS = [] as Array<string>;
+
 /**
  * Selects the patrol keys for the currently selected section.
  */
 export const selectSelectedPatrolKeys: AppSelector<Array<string>> =
-    createAppSelector([selectSelectedSection], (section: SectionMetadata | null): Array<string> => section?.patrols ?? EMPTY_KEYS);
+    createAppSelector([selectSelectedSection], (section) => section?.patrols ?? EMPTY_KEYS);
 
 export type UserChange = { patrolId: string, name: string, score: number };
 
+/**
+ * A Selector Factory allows memoisation of the selector function. This avoids cache thrashing
+ * when different patrols use the same selector with different patrol IDs.
+ * Inside the patrol card use:
+ *
+ * ```typescript
+ * const selectPatrolById = useMemo(makeSelectPatrolById, []);
+ * const patrol = useSelector(state => selectPatrolById(state, patrolKey));
+ * ```
+ */
+type UIPatrolSelectorFactory = () => UIPatrolSelector;
+type UIPatrolSelector = (state: RootState, patrolKey: string) => patrols.UIPatrol | undefined;
+export const makeSelectPatrolById: UIPatrolSelectorFactory = (): UIPatrolSelector =>
+    createAppSelector([
+            (state: RootState) => state.patrols,
+            (_: RootState, patrolKey: string) => patrolKey
+        ],
+        patrols.selectPatrolById
+    );
 
 export const selectChangesForCurrentSection: AppSelector<Array<UserChange>> =
     createAppSelector([
             selectSelectedSection,
-            (state: RootState): PatrolsState => state.patrols,
-            (state: RootState): UiState => state.ui
+            selectPatrolState,
+            selectUiState
         ],
-        (section: SectionMetadata | null, patrols: PatrolsState, ui: UiState): UserChange[] =>
+        (section, patrolsState, uiState): UserChange[] =>
             section?.patrols.map((p: string): UserChange => ({
                 patrolId: p,
-                name: selectPatrolFromPatrolState(patrols, p)?.name ?? 'unknown',
-                score: selectUserScoreForPatrolKeyFromUiState(ui, p)
+                name: patrols.selectPatrolById(patrolsState, p)?.name ?? 'unknown',
+                score: ui.selectUserScoreForPatrolKey(uiState, p)
             })).filter((s: UserChange): boolean => s.score !== 0) ?? []
     );

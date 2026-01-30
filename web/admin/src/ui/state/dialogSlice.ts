@@ -1,5 +1,4 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { RootState } from './store';
 
 /**
  * Dialog state for displaying error and info dialogs.
@@ -55,11 +54,10 @@ const dialogSlice = createSlice({
 
 export const { showErrorDialog, closeErrorDialog, setGlobalError } = dialogSlice.actions;
 
-// Selectors
-export const selectDialogState = (state: RootState) => state.dialog;
-export const selectIsErrorDialogOpen = (state: RootState) => state.dialog.isErrorDialogOpen;
-export const selectErrorTitle = (state: RootState) => state.dialog.errorTitle;
-export const selectErrorMessage = (state: RootState) => state.dialog.errorMessage;
-export const selectGlobalError = (state: RootState) => state.dialog.globalError;
+// Slice-relative selectors (take DialogState, not RootState)
+export const selectIsErrorDialogOpen = (state: DialogState) => state.isErrorDialogOpen;
+export const selectErrorTitle = (state: DialogState) => state.errorTitle;
+export const selectErrorMessage = (state: DialogState) => state.errorMessage;
+export const selectGlobalError = (state: DialogState) => state.globalError;
 
 export default dialogSlice.reducer;

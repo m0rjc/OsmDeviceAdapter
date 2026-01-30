@@ -5,46 +5,61 @@ export type {RootState, AppDispatch} from './store';
 // Hooks
 export {useAppDispatch, useAppSelector} from './hooks';
 
-// User slice
+// User slice - actions
+export {setUser} from './userSlice';
+
+// User slice - types and selectors (from rootReducer)
+export type {UserState} from './rootReducer';
 export {
-    setUser,
-    clearUser,
     selectUserId,
     selectUserName,
     selectIsAuthenticated,
-} from './userSlice';
-export type {UserState} from './userSlice';
+    selectIsLoading,
+} from './rootReducer';
 
+// Patrols slice - types
 export {
-    selectSections,
-    makeSelectPatrolById
-} from './patrolsSlice'
+    type SectionMetadata,
+    type UIPatrol,
+} from './patrolsSlice';
 
+// Patrols slice - selectors (from rootReducer)
 export {
     selectSelectedSection,
     selectSelectedPatrolKeys,
     selectChangesForCurrentSection,
-} from './rootReducer'
+    selectSections,
+    makeSelectPatrolById,
+} from './rootReducer';
 
+// UI slice - actions
 export {
     setPatrolScore,
     clearUserEntriesForSection,
-    selectSelectedSectionId,
-    selectUserScoreForPatrolKey
-} from './uiSlice'
+} from './uiSlice';
 
-// Dialog slice
+// UI slice - selectors (from rootReducer)
+export {
+    selectSelectedSectionId,
+    selectUserScoreForPatrolKey,
+} from './rootReducer';
+
+// Dialog slice - actions
 export {
     showErrorDialog,
     closeErrorDialog,
     setGlobalError,
+} from './dialogSlice';
+
+// Dialog slice - types and selectors (from rootReducer)
+export type {DialogState} from './rootReducer';
+export {
     selectDialogState,
     selectIsErrorDialogOpen,
     selectErrorTitle,
     selectErrorMessage,
     selectGlobalError,
-} from './dialogSlice';
-export type {DialogState} from './dialogSlice';
+} from './rootReducer';
 
 // Worker thunks
 export {
@@ -54,4 +69,5 @@ export {
     handleUserProfileMessage,
     handleWrongUser,
     submitScoreChanges,
+    refreshCurrentSection,
 } from './workerThunks';

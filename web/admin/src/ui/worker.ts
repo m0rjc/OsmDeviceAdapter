@@ -1,4 +1,5 @@
 import * as messages from '../types/messages'
+
 export * from '../types/messages/workerToClient'
 
 /**
@@ -56,25 +57,42 @@ export interface Worker {
      * @param deltas Array of score changes to submit
      * @returns requestId for correlating any error responses
      */
-    sendSubmitScoresRequest(userId: number, sectionId: number, deltas: Array<{patrolId: string, score: number}>): string;
+    sendSubmitScoresRequest(userId: number, sectionId: number, deltas: Array<{
+        patrolId: string,
+        score: number
+    }>): string;
 }
 
 /**
  * Worker factory function type.
  * Can be overridden for testing via setWorkerFactory().
  */
-type WorkerFactory = () => Worker;
+type WorkerFactory = () => Promise<Worker>;
 
 /**
  * Default worker factory - returns real ServiceWorker-based implementation.
+ * Waits for service worker to be ready before returning.
  */
-const defaultWorkerFactory: WorkerFactory = () => {
-    if (navigator.serviceWorker?.controller) {
-        return new WorkerService(navigator.serviceWorker);
+const defaultWorkerFactory: WorkerFactory = async () => {
+    // Check if Service Worker API is supported
+    if (!navigator.serviceWorker) {
+        throw new Error("Service Worker API not supported");
     }
-    // We could fallback to an in-memory implementation if needed.
-    // So far this has only been run on clients that support the Service Worker API.
-    throw new Error("Service Worker API not supported");
+
+    // Wait for service worker to be ready (registered and activated)
+    await navigator.serviceWorker.ready;
+
+    // Controller should now be available
+    if (!navigator.serviceWorker.controller) {
+        // This can happen if the page was loaded before SW was registered
+        // Reload the page to let the SW take control
+        console.warn('[GetWorker] Service worker ready but no controller, reloading page...');
+        window.location.reload();
+        // Return a dummy worker that will never be used (page is reloading)
+        throw new Error("Reloading page to activate service worker");
+    }
+
+    return new WorkerService(navigator.serviceWorker);
 };
 
 /**
@@ -84,10 +102,12 @@ let currentWorkerFactory: WorkerFactory = defaultWorkerFactory;
 
 /**
  * Get a worker instance using the current factory.
- * In production, returns a ServiceWorker-based implementation.
+ * In production, waits for ServiceWorker to be ready and returns it.
  * In tests, can return a mock via setWorkerFactory().
+ *
+ * @returns Promise that resolves to a Worker instance
  */
-export function GetWorker(): Worker {
+export function GetWorker(): Promise<Worker> {
     return currentWorkerFactory();
 }
 
@@ -99,7 +119,7 @@ export function GetWorker(): Worker {
  * ```typescript
  * // In test setup
  * const mockWorker = { onMessage: jest.fn(), sendGetProfileRequest: jest.fn() };
- * setWorkerFactory(() => mockWorker);
+ * setWorkerFactory(async () => mockWorker);
  *
  * // In test teardown
  * setWorkerFactory(); // Reset to default
@@ -113,22 +133,38 @@ export function setWorkerFactory(factory?: WorkerFactory): void {
  * WorkerService represents the Service Worker API from the point of view of the UI client.
  */
 class WorkerService implements Worker {
-    private sw : ServiceWorkerContainer;
+    private sw: ServiceWorkerContainer;
 
     /**
      * Event handler for messages from the worker.
      */
-    public onMessage: (message: messages.WorkerMessage) => void = () => {};
+    public onMessage: (message: messages.WorkerMessage) => void = () => {
+    };
 
-    constructor(sw : ServiceWorkerContainer) {
+    constructor(sw: ServiceWorkerContainer) {
         this.sw = sw;
         sw.addEventListener('message', (event) => {
+            console.debug(`[WorkerMessage] Message Received`, {
+                messageType: event.data.type,
+                requestId: event.data.requestId,
+            });
             this.onMessage(event.data);
         });
     }
-    
+
     private sendMessage(message: messages.ClientMessage) {
-        this.sw.controller?.postMessage(message);
+        if (this.sw.controller) {
+            console.debug(`[SendMessage] Sending message to controller:`, {
+                messageType: message.type,
+                requestId: message.requestId
+            });
+            this.sw.controller.postMessage(message);
+        } else {
+            console.error(`[SendMessage]  No controller, unable to send message`, {
+                messageType: message.type,
+                requestId: message.requestId
+            });
+        }
     }
 
     public sendGetProfileRequest(): string {
@@ -143,7 +179,10 @@ class WorkerService implements Worker {
         return requestId;
     }
 
-    public sendSubmitScoresRequest(userId: number, sectionId: number, deltas: Array<{patrolId: string, score: number}>): string {
+    public sendSubmitScoresRequest(userId: number, sectionId: number, deltas: Array<{
+        patrolId: string,
+        score: number
+    }>): string {
         const requestId = crypto.randomUUID();
         this.sendMessage({type: "submit-scores", requestId, userId, sectionId, deltas});
         return requestId;

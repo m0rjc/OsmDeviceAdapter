@@ -20,8 +20,8 @@ describe('Worker mocking pattern', () => {
       sendSubmitScoresRequest: jest.fn().mockReturnValue('request-id-789'),
     };
 
-    // Override the worker factory to return our mock
-    setWorkerFactory(() => mockWorker);
+    // Override the worker factory to return our mock (now async)
+    setWorkerFactory(async () => mockWorker);
 
     // Reset to default factory
     setWorkerFactory();
@@ -39,14 +39,17 @@ describe('Worker mocking pattern', () => {
       sections: [
         { id: 1, name: 'Beavers', groupName: 'Test Group' },
       ],
+      sectionsListRevision: 1,
     };
 
     const sectionsMessage: WorkerMessage = {
       type: 'section-list-change',
+      userId: 123,
       sections: [
         { id: 1, name: 'Beavers', groupName: 'Test Group' },
         { id: 2, name: 'Cubs', groupName: 'Test Group' },
       ],
+      sectionsListRevision: 2,
     };
 
     const patrolsMessage: WorkerMessage = {
@@ -54,6 +57,7 @@ describe('Worker mocking pattern', () => {
       requestId: 'req-456', // Optional - may be absent for unsolicited updates
       userId: 123,
       sectionId: 1,
+      uiRevision: 1,
       scores: [
         { id: '1', name: 'Red Patrol', committedScore: 10, pendingScore: 0 },
       ],
@@ -86,7 +90,7 @@ describe('Worker mocking pattern', () => {
  *     sendGetProfileRequest: jest.fn().mockReturnValue('req-123'),
  *     sendRefreshRequest: jest.fn().mockReturnValue('req-456'),
  *   };
- *   setWorkerFactory(() => mockWorker);
+ *   setWorkerFactory(async () => mockWorker);
  *
  *   const wrapper = ({ children }: { children: React.ReactNode }) => (
  *     <Provider store={store}>{children}</Provider>

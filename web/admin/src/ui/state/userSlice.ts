@@ -1,10 +1,11 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { RootState } from './rootReducer';
 
 /**
  * User authentication state.
  */
 export interface UserState {
+  /** Whether we are waiting for the user profile to load */
+  loading: boolean;
   /** OSM user ID (null when not authenticated) */
   userId: number | null;
   /** User's display name (null when not authenticated) */
@@ -12,6 +13,7 @@ export interface UserState {
 }
 
 const initialState: UserState = {
+  loading: true, // Start as loading since we immediately request profile on bootstrap
   userId: null,
   userName: null,
 };
@@ -23,19 +25,22 @@ const userSlice = createSlice({
     setUser: (state, action: PayloadAction<{ userId: number; userName: string }>) => {
       state.userId = action.payload.userId;
       state.userName = action.payload.userName;
+      state.loading = false;
     },
-    clearUser: (state) => {
+    setUnauthenticated: (state) => {
       state.userId = null;
       state.userName = null;
+      state.loading = false;
     },
   },
 });
 
-export const { setUser, clearUser } = userSlice.actions;
+export const { setUser, setUnauthenticated } = userSlice.actions;
 
-// Selectors
-export const selectUserId = (state: RootState) => state.user.userId;
-export const selectUserName = (state: RootState) => state.user.userName;
-export const selectIsAuthenticated = (state: RootState) => state.user.userId !== null;
+// Slice-relative selectors (take UserState, not RootState)
+export const selectUserId = (state: UserState) => state.userId;
+export const selectUserName = (state: UserState) => state.userName;
+export const selectIsAuthenticated = (state: UserState) => state.userId !== null;
+export const selectIsLoading = (state: UserState) => state.loading;
 
 export default userSlice.reducer;

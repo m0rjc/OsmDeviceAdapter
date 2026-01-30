@@ -1,4 +1,4 @@
-import {createAsyncThunk} from '@reduxjs/toolkit';
+import {createAsyncThunk, type GetThunkAPI} from '@reduxjs/toolkit';
 import {
     GetWorker,
     type PatrolsChangeMessage,
@@ -6,23 +6,75 @@ import {
     type UserProfileMessage,
     type Worker
 } from '../worker';
-import {clearUser, setUser} from './userSlice';
+import {setUnauthenticated, setUser} from './userSlice';
 import * as uiSlice from './uiSlice';
+import {selectSelectedSectionId} from './uiSlice';
 import type {RootState} from './rootReducer';
 import {selectChangesForCurrentSection, selectSelectedSection} from "./rootReducer";
 import {
+    type SectionMetadata,
     setCanonicalPatrols,
     setCanonicalSectionList,
     setSectionError,
-    setSectionState,
-    type UISection
+    setSectionListLoadError,
+    setSectionState
 } from "./patrolsSlice.ts";
 import {setGlobalError, showErrorDialog} from "./dialogSlice.ts";
+import type {AppDispatch} from "./store.ts";
+
+type AppThunkConfig = {
+    state: RootState;
+    dispatch: AppDispatch;
+};
+
+type ThunkApiBasics = Pick<GetThunkAPI<AppThunkConfig>, 'getState' | 'dispatch'>;
+
+/**
+ * Change the selected section if needed.
+ * This does not trigger a fetch of patrol scores.
+ * @param getState
+ * @param dispatch
+ */
+function setDefaultSectionIfNeeded({getState, dispatch}: ThunkApiBasics): boolean {
+    const state: RootState = getState();
+    const selectedSectionId: number | null = selectSelectedSectionId(state.ui);
+    const availableSectionIds: number[] = state.patrols.sectionIds; //TODO: Encapsulate in slice
+
+    const hasSections = availableSectionIds.length > 0;
+    const sectionDisappeared = selectedSectionId !== null && !availableSectionIds.includes(selectedSectionId);
+    const sectionWasNull = selectedSectionId === null && availableSectionIds.length > 0;
+
+    let changed = false;
+    if (hasSections && (sectionDisappeared || sectionWasNull)) {
+        dispatch(dispatch(uiSlice.setSelectedSectionId(availableSectionIds[0])));
+        changed = true;
+    }
+
+    if (sectionDisappeared && !hasSections) {
+        dispatch(dispatch(uiSlice.setSelectedSectionId(null)));
+        changed = true;
+    }
+
+    return changed;
+}
+
+/**
+ * Fetch patrol scores if needed for the currently selected section.
+ * @param getState
+ * @param dispatch
+ */
+function loadPatrolsIfNeeded({getState, dispatch}: ThunkApiBasics) {
+    const selectedSection: SectionMetadata | null = selectSelectedSection(getState());
+    if (selectedSection?.state === 'uninitialized') {
+        dispatch(fetchPatrolScoresForSection(selectedSection.id));
+    }
+}
+
 
 export const handleUserProfileMessage = createAsyncThunk<
     void,
     UserProfileMessage,
-    { state: RootState }>(
+    AppThunkConfig>(
     'worker/handleUserProfileMessage',
     async (message: UserProfileMessage, {dispatch, getState}) => {
         dispatch(setUser(message));
@@ -34,16 +86,13 @@ export const handleUserProfileMessage = createAsyncThunk<
         }
         dispatch(setCanonicalSectionList({version: message.sectionsListRevision, sections: message.sections}));
 
-        // Load patrols for the selected section if we have one
-        const state: RootState = getState() as RootState;
-        const selectedSection: UISection | null = selectSelectedSection(state);
-        if (selectedSection?.state === 'uninitialized') {
-            dispatch(fetchPatrolScoresForSection(selectedSection.id));
-        }
+        setDefaultSectionIfNeeded({getState, dispatch});
+        loadPatrolsIfNeeded({getState, dispatch});
 
         // Show an error dialog if we have an error
         if (message.lastError) {
             dispatch(showErrorDialog({title: 'Error fetching section list', message: message.lastError}))
+            dispatch(setSectionListLoadError({version: message.sectionsListRevision, error: message.lastError}))
         }
     }
 );
@@ -57,7 +106,7 @@ export const handleUserProfileMessage = createAsyncThunk<
 export const handleSectionListChange = createAsyncThunk<
     void,
     SectionListChangeMessage,
-    { state: RootState }
+    AppThunkConfig
 >(
     'worker/handleSectionListChange',
     async (message, {dispatch, getState}) => {
@@ -80,11 +129,8 @@ export const handleSectionListChange = createAsyncThunk<
         // Check if we need to fetch patrols for the selected section.
         // We don't expect this in an unsolicited message.
         // TODO: Put up a dialog explaining why the patrol list has changed under their feet (patrol disappeared).
-        state = getState();
-        const selectedSection: UISection | null = selectSelectedSection(state);
-        if (selectedSection?.state === 'uninitialized') {
-            dispatch(fetchPatrolScoresForSection(selectedSection.id));
-        }
+        setDefaultSectionIfNeeded({getState, dispatch});
+        loadPatrolsIfNeeded({getState, dispatch});
     }
 );
 
@@ -105,7 +151,7 @@ export const handleSectionListChange = createAsyncThunk<
 export const setSelectedSection = createAsyncThunk<
     void,
     number,
-    { state: RootState }
+    AppThunkConfig
 >(
     'worker/selectSection',
     async (sectionId, {dispatch, getState}) => {
@@ -113,17 +159,12 @@ export const setSelectedSection = createAsyncThunk<
         dispatch(uiSlice.setSelectedSectionId(sectionId));
 
         // Check if we need to fetch patrols for this section
-        const state = getState();
-        const selectedSection = selectSelectedSection(state);
-        if (selectedSection?.state === 'uninitialized') {
-            console.log('[selectSection] Auto-fetching patrols for section:', sectionId);
-            dispatch(fetchPatrolScoresForSection(sectionId));
-        }
+        loadPatrolsIfNeeded({getState, dispatch});
     }
 );
 
 /**
- * Thunk to fetch patrol scores from the worker.
+ * Thunk to fetch patrol scores from the worker for a specific section.
  *
  * This thunk:
  * 1. Generates a requestId and tracks the pending request
@@ -137,10 +178,10 @@ export const setSelectedSection = createAsyncThunk<
  *
  * @param sectionId - The section ID to fetch scores for
  */
-const fetchPatrolScoresForSection = createAsyncThunk<
+export const fetchPatrolScoresForSection = createAsyncThunk<
     void,
     number,
-    { state: RootState }
+    AppThunkConfig
 >(
     'worker/fetchPatrolScores',
     async (sectionId, {getState, dispatch}) => {
@@ -148,15 +189,13 @@ const fetchPatrolScoresForSection = createAsyncThunk<
         const userId = state.user.userId;
 
         if (!userId) {
-            // TODO: Error dialog
             throw new Error('User not authenticated');
         }
 
         dispatch(setSectionState({sectionId, stateName: 'loading'}));
 
-        const worker: Worker = GetWorker();
+        const worker: Worker = await GetWorker();
         worker.sendRefreshRequest(userId, sectionId);
-
 
         // Note: This thunk completes immediately after sending the message.
         // The actual response (PatrolsChangeMessage or ServiceErrorMessage)
@@ -164,10 +203,37 @@ const fetchPatrolScoresForSection = createAsyncThunk<
     }
 );
 
+/**
+ * Thunk to refresh patrol scores for the currently selected section.
+ *
+ * Convenience wrapper around fetchPatrolScoresForSection that uses
+ * the currently selected section from state.
+ */
+export const refreshCurrentSection = createAsyncThunk<
+    void,
+    void,
+    AppThunkConfig
+>(
+    'worker/refreshCurrentSection',
+    async (_, {getState, dispatch}) => {
+        const state = getState();
+        const selectedSection = selectSelectedSection(state);
+
+        if (!selectedSection) {
+            throw new Error('No section selected');
+        }
+
+        dispatch(fetchPatrolScoresForSection(selectedSection.id));
+    }
+);
+
+/**
+ * Thunk to handle a patrols change message from the worker.
+ */
 export const handlePatrolsChange = createAsyncThunk<
     void,
     PatrolsChangeMessage,
-    { state: RootState }
+    AppThunkConfig
 >(
     'worker/handlePatrolsChange',
     async (message: PatrolsChangeMessage, {dispatch, getState}) => {
@@ -211,10 +277,10 @@ export const handlePatrolsChange = createAsyncThunk<
  * This is a centralized action to maintain DRY when handling user mismatches
  * in different message handlers.
  */
-export const handleWrongUser = createAsyncThunk<void, void, { state: RootState }>(
+export const handleWrongUser = createAsyncThunk<void, void, AppThunkConfig>(
     'worker/handleWrongUser',
     async (_, {dispatch}) => {
-        dispatch(clearUser());
+        dispatch(setUnauthenticated());
         // dispatch(clearAllData());
         // dispatch(clearAllPendingRequests());
         dispatch(setGlobalError('You have logged out or changed accounts in another tab. Please reload this page.'));
@@ -241,7 +307,7 @@ export const handleWrongUser = createAsyncThunk<void, void, { state: RootState }
 export const submitScoreChanges = createAsyncThunk<
     void,
     void,
-    { state: RootState }
+    AppThunkConfig
 >(
     'worker/submitScores',
     async (_, {getState}) => {
@@ -262,7 +328,7 @@ export const submitScoreChanges = createAsyncThunk<
             return; // Nothing to submit
         }
 
-        const worker: Worker = GetWorker();
+        const worker: Worker = await GetWorker();
         worker.sendSubmitScoresRequest(
             userId,
             selectedSection.id,
@@ -274,5 +340,6 @@ export const submitScoreChanges = createAsyncThunk<
 
         // Note: User entry clearing will be handled by the component after successful submit
         // since we want to show a success message before clearing
+        // TODO: Consider risk of double-submit. Review this.
     }
 );
