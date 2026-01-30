@@ -1,7 +1,7 @@
-import { useWorkerBootstrap } from './hooks';
+import { useWorkerBootstrap, useServiceWorkerUpdates } from './hooks';
 import {makeSelectPatrolById, selectUserScoreForPatrolKey, useAppSelector} from './state';
 import { selectIsAuthenticated, selectIsLoading, selectUserName, selectGlobalError, selectSections, selectSelectedSection } from './state';
-import { LoginPage, MessageCard, ErrorDialog, LoadingBanner } from './components';
+import { LoginPage, MessageCard, ErrorDialog, LoadingBanner, UpdatePrompt } from './components';
 import {type ReactElement, useMemo} from "react";
 
 /**
@@ -17,6 +17,9 @@ export function App() {
   // Bootstrap worker and set up message handlers
   useWorkerBootstrap();
 
+  // Set up PWA lifecycle for service worker updates
+  useServiceWorkerUpdates();
+
   const isLoading = useAppSelector(selectIsLoading);
   const isAuthenticated = useAppSelector(selectIsAuthenticated);
   const userName = useAppSelector(selectUserName);
@@ -29,6 +32,7 @@ export function App() {
   if (globalError) {
     return (
       <>
+        <UpdatePrompt />
         <ErrorDialog />
         <div className="app">
           <main className="main">
@@ -49,13 +53,19 @@ export function App() {
 
   // Show loading banner while fetching user profile
   if (isLoading) {
-    return <LoadingBanner />;
+    return (
+      <>
+        <UpdatePrompt />
+        <LoadingBanner />
+      </>
+    );
   }
 
   // Show login page if not authenticated
   if (!isAuthenticated) {
     return (
       <>
+        <UpdatePrompt />
         <ErrorDialog />
         <LoginPage />
       </>
@@ -65,6 +75,7 @@ export function App() {
   // Show authenticated content (temporary bootstrap checkpoint)
   return (
     <>
+      <UpdatePrompt />
       <ErrorDialog />
       <div className="app">
         <header className="header">

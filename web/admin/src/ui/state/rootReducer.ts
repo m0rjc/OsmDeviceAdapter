@@ -3,16 +3,19 @@ import * as patrols from './patrolsSlice.ts';
 import * as user from './userSlice';
 import * as dialog from './dialogSlice';
 import * as ui from './uiSlice';
+import * as app from './appSlice';
 import patrolsReducer from './patrolsSlice.ts';
 import userReducer from './userSlice';
 import dialogReducer from './dialogSlice';
 import uiReducer from './uiSlice';
+import appReducer from './appSlice';
 
 export const rootReducer = combineReducers({
     user: userReducer,
     dialog: dialogReducer,
     patrols: patrolsReducer,
     ui: uiReducer,
+    app: appReducer,
 })
 
 export type RootState = ReturnType<typeof rootReducer>;
@@ -24,12 +27,14 @@ export type {PatrolsState, SectionMetadata, UIPatrol} from './patrolsSlice.ts';
 export type {UserState} from './userSlice';
 export type {DialogState} from './dialogSlice';
 export type {UiState} from './uiSlice';
+export type {AppState} from './appSlice';
 
 // Slice state extractors
 const selectPatrolState: AppSelector<patrols.PatrolsState> = (state) => state.patrols;
 const selectUserState: AppSelector<user.UserState> = (state) => state.user;
 const selectDialogState: AppSelector<dialog.DialogState> = (state) => state.dialog;
 const selectUiState: AppSelector<ui.UiState> = (state) => state.ui;
+const selectAppState: AppSelector<app.AppState> = (state) => state.app;
 
 // App-level selectors for user slice
 export const selectUserId = createAppSelector([selectUserState], user.selectUserId);
@@ -109,3 +114,7 @@ export const selectChangesForCurrentSection: AppSelector<Array<UserChange>> =
                 score: ui.selectUserScoreForPatrolKey(uiState, p)
             })).filter((s: UserChange): boolean => s.score !== 0) ?? []
     );
+
+// App-level selectors for app slice (PWA lifecycle)
+export const selectShouldShowUpdatePrompt = createAppSelector([selectAppState], app.selectShouldShowUpdatePrompt);
+export const selectUpdateAvailable = createAppSelector([selectAppState], app.selectUpdateAvailable);

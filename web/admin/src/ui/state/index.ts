@@ -71,3 +71,16 @@ export {
     submitScoreChanges,
     refreshCurrentSection,
 } from './workerThunks';
+
+// App slice - actions
+export {
+    setUpdateAvailable,
+    dismissUpdate,
+} from './appSlice';
+
+// App slice - types and selectors (from rootReducer)
+export type {AppState} from './rootReducer';
+export {
+    selectShouldShowUpdatePrompt,
+    selectUpdateAvailable,
+} from './rootReducer';
