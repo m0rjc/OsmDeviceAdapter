@@ -10,7 +10,7 @@ import {
     useAppSelector
 } from '../../state';
 import {ConfirmDialog, Loading} from '../../../legacy/components';
-import {useToast} from '../../../legacy/hooks';
+import {useToast} from '../../hooks';
 import {MessageCard} from '../MessageCard';
 import {ScoreHeader} from './ScoreHeader';
 import {PatrolList} from './PatrolList';

@@ -34,5 +34,12 @@ export default defineConfig({
   // Explicitly enable source maps in dev mode (default, but explicit)
   server: {
     sourcemapIgnoreList: () => false,  // Don't ignore any files in source maps
+    proxy: {
+      // Proxy API requests to the mock server (or real server)
+      '/api': {
+        target: process.env.VITE_API_URL || 'http://localhost:8081',
+        changeOrigin: true,
+      },
+    },
   },
 })

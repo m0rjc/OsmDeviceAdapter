@@ -61,6 +61,29 @@ go test -run TestSpecificFunction ./internal/osm
 go test -cover ./...
 ```
 
+### Frontend Development
+```bash
+# Run complete dev environment (mock API + Vite dev server)
+make dev  # Opens at http://localhost:5173/admin/
+
+# Run only the mock API server (if running Vite separately)
+make mock-server  # Runs on port 8081
+
+# Run only the Vite dev server (if mock server already running)
+make ui-dev  # Runs on port 5173
+```
+
+The `make dev` command starts both:
+- Mock admin API server on http://localhost:8081
+- Vite dev server on http://localhost:5173/admin/
+
+The mock server provides a pre-authenticated session with two scout troops (sections), each with 3 patrols. No OAuth setup required - perfect for rapid frontend development.
+
+To use the real backend instead of the mock, set `VITE_API_URL` when running Vite:
+```bash
+VITE_API_URL=http://localhost:8080 npm run dev
+```
+
 ## Code Architecture
 
 ### Two-Tier OAuth Bridge

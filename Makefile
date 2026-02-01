@@ -1,4 +1,4 @@
-.PHONY: build build-server run test check-main-branch docker-build docker-push docker-build-dev docker-push-dev k8s-deploy helm-install helm-upgrade helm-uninstall helm-install-dev helm-upgrade-dev helm-uninstall-dev helm-template-dev helm-lint helm-template helm-values helm-package helm-secrets-install helm-secrets-upgrade helm-secrets-install-dev helm-secrets-upgrade-dev helm-secrets-uninstall-dev helm-secrets-lint helm-secrets-template monitoring-deploy clean ui-build ui-dev ui-clean
+.PHONY: build build-server run test check-main-branch docker-build docker-push docker-build-dev docker-push-dev k8s-deploy helm-install helm-upgrade helm-uninstall helm-install-dev helm-upgrade-dev helm-uninstall-dev helm-template-dev helm-lint helm-template helm-values helm-package helm-secrets-install helm-secrets-upgrade helm-secrets-install-dev helm-secrets-upgrade-dev helm-secrets-uninstall-dev helm-secrets-lint helm-secrets-template monitoring-deploy clean ui-build ui-dev ui-clean mock-server dev
 
 # Variables - Production (Live)
 APP_NAME=osm-device-adapter
@@ -33,17 +33,38 @@ check-main-branch:
 		exit 1; \
 	fi
 
+# Build timestamp for versioning
+BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+LDFLAGS=-ldflags "-X github.com/m0rjc/OsmDeviceAdapter/internal/admin.buildTime=$(BUILD_TIME)"
+
 # Build the full application (frontend + backend)
 build: ui-build
-	go build -o bin/server ./cmd/server
+	go build $(LDFLAGS) -o bin/server ./cmd/server
 
 # Build only the Go backend (faster for backend-only changes)
 build-server:
-	go build -o bin/server ./cmd/server
+	go build $(LDFLAGS) -o bin/server ./cmd/server
 
 # Run the application locally
 run:
-	go run ./cmd/server
+	go run $(LDFLAGS) ./cmd/server
+
+# Run the mock admin server for frontend development (port 8081)
+mock-server:
+	@echo "Starting mock admin server on port 8081..."
+	@echo "Use with frontend dev server: cd web/admin && npm run dev"
+	go run ./cmd/mock-admin-server
+
+# Run both mock server and Vite dev server together
+dev:
+	@echo "Starting development environment..."
+	@echo "  - Mock API server on http://localhost:8081"
+	@echo "  - Vite dev server on http://localhost:5173/admin/"
+	@echo ""
+	@echo "Press Ctrl+C to stop both servers"
+	@trap 'kill 0' EXIT; \
+	go run ./cmd/mock-admin-server & \
+	cd web/admin && npm run dev
 
 # Run tests
 test:
@@ -51,7 +72,7 @@ test:
 
 # Build Docker image
 docker-build:
-	docker build -t $(IMAGE) .
+	docker build --build-arg BUILD_TIME=$(BUILD_TIME) -t $(IMAGE) .
 
 # Push Docker image to registry
 docker-push: check-main-branch docker-build
@@ -59,7 +80,7 @@ docker-push: check-main-branch docker-build
 
 # Build Docker image for dev
 docker-build-dev:
-	docker build -t $(IMAGE_DEV) .
+	docker build --build-arg BUILD_TIME=$(BUILD_TIME) -t $(IMAGE_DEV) .
 
 # Push Docker image to registry (dev)
 docker-push-dev: docker-build-dev

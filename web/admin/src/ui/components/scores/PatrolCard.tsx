@@ -64,7 +64,7 @@ export function PatrolCard({patrolId}: PatrolCardProps) {
                         min={-1000}
                         max={1000}
                         value={userEntry === 0 ? '' : userEntry}
-                        onChange={e => onPointsChange(patrol.id, e.target.value)}
+                        onChange={e => onPointsChange(patrol.key, e.target.value)}
                         placeholder="0"
                         className={
                             userEntry > 0

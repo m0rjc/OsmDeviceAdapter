@@ -26,8 +26,11 @@ COPY . .
 # Copy frontend build output from previous stage
 COPY --from=frontend-builder /app/web/admin/dist ./web/admin/dist
 
-# Build the application binaries
-RUN GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/bin/server ./cmd/server
+# Build the application binaries with build time injection
+ARG BUILD_TIME
+RUN GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags "-X github.com/m0rjc/OsmDeviceAdapter/internal/admin.buildTime=${BUILD_TIME:-unknown}" \
+    -o /app/bin/server ./cmd/server
 RUN GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/bin/cleanup ./cmd/cleanup
 
 # Stage 3: Runtime
