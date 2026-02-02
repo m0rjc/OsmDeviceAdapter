@@ -4,7 +4,7 @@ import * as user from './userSlice';
 import * as dialog from './dialogSlice';
 import * as ui from './uiSlice';
 import * as app from './appSlice';
-import patrolsReducer from './patrolsSlice.ts';
+import patrolsReducer, {selectPatrolById, type UIPatrol} from './patrolsSlice.ts';
 import userReducer from './userSlice';
 import dialogReducer from './dialogSlice';
 import uiReducer from './uiSlice';
@@ -101,6 +101,9 @@ export const makeSelectPatrolById: UIPatrolSelectorFactory = (): UIPatrolSelecto
         patrols.selectPatrolById
     );
 
+/**
+ * Select the list of user changes for the currently selected section.
+ */
 export const selectChangesForCurrentSection: AppSelector<Array<UserChange>> =
     createAppSelector([
             selectSelectedSection,
@@ -108,10 +111,13 @@ export const selectChangesForCurrentSection: AppSelector<Array<UserChange>> =
             selectUiState
         ],
         (section, patrolsState, uiState): UserChange[] =>
-            section?.patrols.map((p: string): UserChange => ({
-                patrolId: p,
-                name: patrols.selectPatrolById(patrolsState, p)?.name ?? 'unknown',
-                score: ui.selectUserScoreForPatrolKey(uiState, p)
+            section?.patrols
+                .map( (key:string) : UIPatrol|undefined => selectPatrolById(patrolsState,key))
+                .filter((p: patrols.UIPatrol | undefined): p is patrols.UIPatrol => p !== undefined)
+                .map((p: UIPatrol): UserChange => ({
+                patrolId: p.id,
+                name: p.name,
+                score: ui.selectUserScoreForPatrolKey(uiState, p.key)
             })).filter((s: UserChange): boolean => s.score !== 0) ?? []
     );
 

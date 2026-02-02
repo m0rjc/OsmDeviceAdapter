@@ -4,10 +4,12 @@
 jest.mock('workbox-precaching', () => ({
   precacheAndRoute: jest.fn(),
   cleanupOutdatedCaches: jest.fn(),
+  createHandlerBoundToURL: jest.fn(),
 }));
 
 jest.mock('workbox-routing', () => ({
   registerRoute: jest.fn(),
+  NavigationRoute: jest.fn(),
 }));
 
 jest.mock('workbox-strategies', () => ({
@@ -44,6 +46,14 @@ function createMockClient(): Client {
   } as any;
 }
 
+// Helper to set up authenticated API service mock
+function setupAuthenticatedMock(mockService: any, userId: number, userName: string, csrfToken: string = 'test-csrf-token') {
+  Object.defineProperty(mockService, 'isAuthenticated', { value: true, configurable: true });
+  Object.defineProperty(mockService, 'userId', { value: userId, configurable: true });
+  Object.defineProperty(mockService, 'user', { value: { osmUserId: userId, name: userName }, configurable: true });
+  mockService.getCsrfToken.mockReturnValue(csrfToken);
+}
+
 describe('Service Worker Message Handlers', () => {
   let mockApiService: jest.Mocked<OsmAdapterApiService>;
   let mockStore: jest.Mocked<PatrolPointsStore>;
@@ -62,8 +72,12 @@ describe('Service Worker Message Handlers', () => {
 
     // Mock OsmAdapterApiService instance
     mockApiService = {
+      isAuthenticated: false,
+      userId: null,
+      user: null,
       fetchSession: jest.fn(),
       getLoginUrl: jest.fn().mockReturnValue('/admin/login'),
+      getCsrfToken: jest.fn().mockReturnValue(null),
       fetchSections: jest.fn(),
       fetchScores: jest.fn(),
       updateScores: jest.fn(),
@@ -72,6 +86,14 @@ describe('Service Worker Message Handlers', () => {
 
     // Mock PatrolPointsStore instance
     mockStore = {
+      getUserMetadata: jest.fn().mockResolvedValue({
+        userId: 0,
+        csrfToken: undefined,
+        userName: undefined,
+        sectionsListRevision: 0,
+      }),
+      setUserMetadata: jest.fn().mockResolvedValue(undefined),
+      clearUserAuth: jest.fn().mockResolvedValue(undefined),
       setCanonicalSectionList: jest.fn(),
       setCanonicalPatrolList: jest.fn(),
       getScoresForSection: jest.fn(),
@@ -106,6 +128,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName,
       });
+      setupAuthenticatedMock(mockApiService, userId, userName);
 
       mockApiService.fetchSections.mockResolvedValue(sections);
       mockStore.setCanonicalSectionList.mockResolvedValue({
@@ -137,6 +160,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName,
       });
+      setupAuthenticatedMock(mockApiService, userId, userName);
 
       mockApiService.fetchSections.mockResolvedValue(sections);
       mockStore.setCanonicalSectionList.mockResolvedValue({
@@ -208,6 +232,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       mockApiService.fetchScores.mockResolvedValue(scores);
       mockStore.setCanonicalPatrolList.mockResolvedValue({
@@ -255,6 +280,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       const fetchError = new NetworkError('Fetch failed');
       mockApiService.fetchScores.mockRejectedValue(fetchError);
@@ -307,6 +333,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       mockStore.getScoresForSection.mockResolvedValue({
         patrols: updatedScores,
@@ -399,6 +426,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       mockApiService.isOffline.mockReturnValue(true);
       mockStore.getScoresForSection.mockResolvedValue({
@@ -434,6 +462,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       mockStore.getScoresForSection.mockResolvedValue({
         patrols: updatedScores,
@@ -475,6 +504,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       mockStore.getScoresForSection.mockResolvedValue({
         patrols: updatedScores,
@@ -528,6 +558,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       mockStore.getScoresForSection
         .mockResolvedValueOnce({
@@ -610,6 +641,7 @@ describe('Service Worker Message Handlers', () => {
         userId,
         userName: 'Test User',
       });
+      setupAuthenticatedMock(mockApiService, userId, 'Test User');
 
       mockStore.getScoresForSection.mockResolvedValue({
         patrols: updatedScores,

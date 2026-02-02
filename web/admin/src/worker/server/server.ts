@@ -79,33 +79,56 @@ export type PatrolScoreUpdateResult = PatrolScoreUpdateResultSuccess | PatrolSco
 /**
  * OsmAdapterApiService represents a connection to the OSMAdapter server.
  * This service is designed to be used within a service worker context.
- * Service workers are stateless, so the pattern is:
  *
- * 1. Construct this service.
- * 2. Fetch the current session with fetchSession().
- * 3. Check that the session is valid with isAuthenticated. If not then ask the user to login
- * 4. Use the other methods to interact with the server.
+ * Usage pattern:
+ * 1. For authenticated operations: construct with userId, userName, and csrfToken from IndexedDB
+ * 2. For bootstrap/re-authentication: construct without args, call fetchSession(), then persist to IndexedDB
+ * 3. Use the API methods to interact with the server
  */
 export class OsmAdapterApiService {
-  private currentSession: SessionResponse | null = null;
+  private _userId: number | null;
+  private _userName: string | null;
+  private _csrfToken: string | null;
 
-  private get csrfToken(): string | null {
-    return this.currentSession?.csrfToken ?? null;
+  /**
+   * @param userId - OSM user ID (optional, required for authenticated operations)
+   * @param userName - User's display name (optional, for display purposes)
+   * @param csrfToken - CSRF token for state-changing requests (optional, fetched if not provided)
+   */
+  constructor(userId?: number, userName?: string, csrfToken?: string) {
+    this._userId = userId ?? null;
+    this._userName = userName ?? null;
+    this._csrfToken = csrfToken ?? null;
   }
 
-  /** Is the user authenticated? Only valid after a successful fetchSession() call. */
+  private get csrfToken(): string | null {
+    return this._csrfToken;
+  }
+
+  /** Get the CSRF token for persistence (e.g., to IndexedDB) */
+  public getCsrfToken(): string | null {
+    return this._csrfToken;
+  }
+
+  /** Is the user authenticated? */
   public get isAuthenticated(): boolean {
-    return this.currentSession?.authenticated ?? false;
+    return this._userId !== null;
   }
 
   /** The current user if authenticated, otherwise null. */
   public get user(): OsmUser | null {
-    return this.currentSession?.user ?? null;
+    if (!this.isAuthenticated || !this._userId) {
+      return null;
+    }
+    return {
+      osmUserId: this._userId,
+      name: this._userName ?? ''
+    };
   }
 
   /** The current OSM user ID if authenticated, otherwise null. */
-  public get userId() : number | null {
-    return this.user?.osmUserId ?? null;
+  public get userId(): number | null {
+    return this._userId;
   }
 
   public isOffline(): boolean {
@@ -118,7 +141,7 @@ export class OsmAdapterApiService {
    * @throws {ApiError} for API errors
    */
   private async fetchAndHandle<T>(url: string, init?: RequestInit): Promise<T> {
-    let response : Response;
+    let response: Response;
     try {
       response = await fetch(url, init);
     } catch (error) {
@@ -126,9 +149,11 @@ export class OsmAdapterApiService {
     }
 
     if (!response.ok) {
-      // Handle authentication errors
+      // Handle authentication errors - clear session state
       if (response.status === 401 || response.status === 403) {
-        this.currentSession = null;
+        this._userId = null;
+        this._userName = null;
+        this._csrfToken = null;
       }
 
       let errorData: api.ErrorResponse;
@@ -144,24 +169,37 @@ export class OsmAdapterApiService {
 
   /**
    * Fetch the current session information and update this class' authentication state.
+   * Call this during bootstrap or re-authentication, then persist the returned values to IndexedDB.
+   * @returns SessionStatus with userId, userName, and csrfToken (if authenticated)
    * @throws {NetworkError} for network/offline errors
    * @throws {ApiError} for API errors
    */
   async fetchSession(): Promise<SessionStatus> {
-    this.currentSession = await this.fetchAndHandle<api.SessionResponse>('/api/admin/session', {
+    const sessionResponse = await this.fetchAndHandle<api.SessionResponse>('/api/admin/session', {
       credentials: 'same-origin',
     });
 
-    if(this.currentSession.authenticated){
+    if (sessionResponse.authenticated && sessionResponse.user) {
+      // Update internal state
+      this._userId = sessionResponse.user.osmUserId;
+      this._userName = sessionResponse.user.name;
+      this._csrfToken = sessionResponse.csrfToken ?? null;
+
       return {
         isAuthenticated: true,
-        userId: this.currentSession.user?.osmUserId!,
-        userName: this.currentSession.user?.name!
-      }
+        userId: sessionResponse.user.osmUserId,
+        userName: sessionResponse.user.name
+      };
     }
+
+    // Clear state on unauthenticated response
+    this._userId = null;
+    this._userName = null;
+    this._csrfToken = null;
+
     return {
       isAuthenticated: false
-    }
+    };
   }
 
   /**
@@ -187,7 +225,10 @@ export class OsmAdapterApiService {
     });
 
     if (response.ok || response.status === 401) {
-      this.currentSession = null;
+      // Clear authentication state
+      this._userId = null;
+      this._userName = null;
+      this._csrfToken = null;
       return true;
     }
 
@@ -237,7 +278,7 @@ export class OsmAdapterApiService {
         'Content-Type': 'application/json',
         'X-CSRF-Token': this.csrfToken || '',
       },
-      body: JSON.stringify(apiUpdates),
+      body: JSON.stringify({ updates: apiUpdates }),
     });
 
     // Convert the response to our internal types with proper date parsing

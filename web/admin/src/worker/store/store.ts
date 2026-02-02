@@ -16,6 +16,10 @@ const SERVER_ERROR_RETRY_TIME = 1000 * 60 * 5;
 /** Stores user-level metadata including revision tracking */
 export class UserMetadata {
     public readonly userId: number;
+    /** User's display name */
+    public userName?: string;
+    /** CSRF token for authenticated requests */
+    public csrfToken?: string;
     /** Global revision number for section list changes */
     public sectionsListRevision: number = 0;
     /** Last error message from profile/section list fetch (undefined if no error) */
@@ -23,8 +27,10 @@ export class UserMetadata {
     /** Timestamp of last error (milliseconds, undefined if no error) */
     public lastErrorTime?: number;
 
-    constructor(userId: number) {
+    constructor(userId: number, userName?: string, csrfToken?: string) {
         this.userId = userId;
+        this.userName = userName;
+        this.csrfToken = csrfToken;
     }
 }
 
@@ -280,6 +286,63 @@ export class PatrolPointsStore {
     /** Create a new unit of work for batching multiple operations into a single transaction */
     newUnitOfWork(): UnitOfWork {
         return new UnitOfWork(this.db, this.userId);
+    }
+
+    /**
+     * Get user metadata including CSRF token and userName.
+     * Returns a default UserMetadata if not found (first time user).
+     */
+    async getUserMetadata(): Promise<UserMetadata> {
+        return inTransaction<UserMetadata>(this.db, [USER_METADATA_STORE], "readonly", async (tx: IDBTransaction): Promise<UserMetadata> => {
+            const metadataStore = tx.objectStore(USER_METADATA_STORE);
+            let metadata = await read<UserMetadata>(metadataStore, this.userId);
+
+            if (!metadata) {
+                // Return a default instance for first-time users
+                metadata = new UserMetadata(this.userId);
+            }
+
+            return metadata;
+        });
+    }
+
+    /**
+     * Set user metadata (userName, csrfToken).
+     * This should be called after successful authentication to persist session info.
+     */
+    async setUserMetadata(userName: string, csrfToken: string): Promise<void> {
+        return inTransaction<void>(this.db, [USER_METADATA_STORE], "readwrite", async (tx: IDBTransaction): Promise<void> => {
+            const metadataStore = tx.objectStore(USER_METADATA_STORE);
+            let metadata = await read<UserMetadata>(metadataStore, this.userId);
+
+            if (!metadata) {
+                metadata = new UserMetadata(this.userId, userName, csrfToken);
+            } else {
+                metadata.userName = userName;
+                metadata.csrfToken = csrfToken;
+            }
+
+            await put(metadataStore, metadata);
+            console.log(`[PatrolPointsStore] Updated user metadata for user ${this.userId}`);
+        });
+    }
+
+    /**
+     * Clear user metadata (called on logout or session expiry).
+     * Preserves sectionsListRevision and error state but clears auth tokens.
+     */
+    async clearUserAuth(): Promise<void> {
+        return inTransaction<void>(this.db, [USER_METADATA_STORE], "readwrite", async (tx: IDBTransaction): Promise<void> => {
+            const metadataStore = tx.objectStore(USER_METADATA_STORE);
+            let metadata = await read<UserMetadata>(metadataStore, this.userId);
+
+            if (metadata) {
+                metadata.userName = undefined;
+                metadata.csrfToken = undefined;
+                await put(metadataStore, metadata);
+                console.log(`[PatrolPointsStore] Cleared user auth for user ${this.userId}`);
+            }
+        });
     }
 
     /** Get all sections for the current user */
@@ -716,6 +779,16 @@ export class PatrolPointsStore {
                         const cursor = request.result;
                         if (cursor) {
                             const patrol = cursor.value as Patrol;
+
+                            console.log(`[PatrolPointsStore] Acquiring lock for patrol ${patrol.patrolId} in section ${sectionId}`, {
+                                'pendingScoreDelta': patrol.pendingScoreDelta,
+                                'lockTimeout': patrol.lockTimeout,
+                                'retryAfter': patrol.retryAfter,
+                                'now': now,
+                                'lockTimeout <= now': patrol.lockTimeout <= now,
+                                'retryAfter <= now': patrol.retryAfter <= now
+                            });
+
                             // Check if this patrol should be synced now:
                             // - Has pending changes
                             // - Not locked (or lock expired)

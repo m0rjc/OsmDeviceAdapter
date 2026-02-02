@@ -16,10 +16,34 @@ describe('OsmAdapterApiService', () => {
   });
 
   describe('Initial State', () => {
-    it('should start unauthenticated', () => {
+    it('should start unauthenticated when constructed without parameters', () => {
       expect(service.isAuthenticated).toBe(false);
       expect(service.user).toBeNull();
       expect(service.userId).toBeNull();
+      expect(service.getCsrfToken()).toBeNull();
+    });
+
+    it('should be authenticated when constructed with userId and csrfToken', () => {
+      const authenticatedService = new OsmAdapterApiService(123, 'Test User', 'test-csrf-token');
+
+      expect(authenticatedService.isAuthenticated).toBe(true);
+      expect(authenticatedService.userId).toBe(123);
+      expect(authenticatedService.user).toEqual({
+        osmUserId: 123,
+        name: 'Test User'
+      });
+      expect(authenticatedService.getCsrfToken()).toBe('test-csrf-token');
+    });
+
+    it('should handle missing userName in constructor', () => {
+      const serviceWithoutName = new OsmAdapterApiService(123, undefined, 'test-csrf-token');
+
+      expect(serviceWithoutName.isAuthenticated).toBe(true);
+      expect(serviceWithoutName.userId).toBe(123);
+      expect(serviceWithoutName.user).toEqual({
+        osmUserId: 123,
+        name: ''
+      });
     });
   });
 
@@ -56,6 +80,7 @@ describe('OsmAdapterApiService', () => {
         name: 'Test User',
       });
       expect(service.userId).toBe(123);
+      expect(service.getCsrfToken()).toBe('test-csrf-token');
     });
 
     it('should fetch unauthenticated session', async () => {
@@ -435,10 +460,12 @@ describe('OsmAdapterApiService', () => {
           'Content-Type': 'application/json',
           'X-CSRF-Token': 'test-csrf-token',
         },
-        body: JSON.stringify([
-          { patrolId: '1', points: 5 },
-          { patrolId: '2', points: 3 },
-        ]),
+        body: JSON.stringify({
+          updates: [
+            { patrolId: '1', points: 5 },
+            { patrolId: '2', points: 3 },
+          ],
+        }),
       });
 
       expect(results).toEqual([
@@ -631,7 +658,7 @@ describe('OsmAdapterApiService', () => {
           'Content-Type': 'application/json',
           'X-CSRF-Token': '',
         },
-        body: JSON.stringify([{ patrolId: '1', points: 5 }]),
+        body: JSON.stringify({ updates: [{ patrolId: '1', points: 5 }] }),
       });
     });
 

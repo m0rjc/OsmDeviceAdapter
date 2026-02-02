@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
-import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
-import { registerRoute } from 'workbox-routing';
+import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching';
+import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { NetworkFirst } from 'workbox-strategies';
 import * as messages from '../types/messages'
 import {NetworkError, OsmAdapterApiService, type SessionStatus} from "./server/server";
@@ -19,6 +19,37 @@ cleanupOutdatedCaches();
 self.addEventListener('activate', () => {
     self.clients.claim();
 });
+
+// Serve index.html for all navigation requests (SPA routing)
+// Exclude server-side OAuth endpoints that must hit the Go backend
+// In dev mode, the precache is empty, so we need to fetch index.html directly
+const navigationHandler = async (options: any) => {
+    try {
+        // Try to get from precache first (works in production builds)
+        const precacheController = (self as any).__WB_MANIFEST?.length > 0
+            ? createHandlerBoundToURL('index.html')
+            : null;
+
+        if (precacheController) {
+            return precacheController(options);
+        }
+    } catch (e) {
+        // Precache not available, fall through to fetch
+    }
+
+    // Fallback for dev mode: fetch index.html directly
+    return fetch('/admin/');
+};
+
+const navigationRoute = new NavigationRoute(navigationHandler, {
+    allowlist: [/^\/admin/],
+    denylist: [
+        /^\/admin\/login/,
+        /^\/admin\/callback/,
+        /^\/admin\/logout/,
+    ],
+});
+registerRoute(navigationRoute);
 
 // Network-first for API calls
 registerRoute(
@@ -51,24 +82,104 @@ self.addEventListener('message', (event) => {
 });
 
 /**
- * Require the specified user to be logged in.
- * Sends message to client if not logged in.
- * @param server
- * @param client
- * @param userId
- * @param requestId - Optional correlation ID from the originating request
+ * Get or create an authenticated API service instance.
+ *
+ * This function implements the CSRF token caching strategy:
+ * 1. If userId is provided: try to load cached credentials from IndexedDB
+ * 2. If no cached credentials or no userId: fetch session from server
+ * 3. If session fetched successfully: persist to IndexedDB for future use
+ *
+ * @param userId - Expected user ID (optional for bootstrap)
+ * @returns OsmAdapterApiService instance with authentication state
  */
-async function requireLoggedInUser(server: OsmAdapterApiService, client: Client, userId: number, requestId?: string): Promise<SessionStatus>  {
+async function getAuthenticatedService(userId?: number): Promise<OsmAdapterApiService> {
+    // Try to get cached credentials if we have a userId
+    if (userId) {
+        try {
+            const store = await OpenPatrolPointsStore(userId);
+            try {
+                const metadata = await store.getUserMetadata();
+                if (metadata.csrfToken && metadata.userName) {
+                    // Use cached credentials
+                    console.debug(`[ServiceWorker] Using cached CSRF token for user ${userId}`);
+                    return new OsmAdapterApiService(userId, metadata.userName, metadata.csrfToken);
+                }
+            } finally {
+                store.close();
+            }
+        } catch (e) {
+            console.warn(`[ServiceWorker] Failed to load cached credentials for user ${userId}, will fetch session`, e);
+        }
+    }
+
+    // No cached credentials - fetch session from server
+    console.debug(`[ServiceWorker] Fetching session from server`);
+    const server = new OsmAdapterApiService();
     const session = await server.fetchSession();
-    if(!session.isAuthenticated) {
-        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
-        return session;
+
+    // If authenticated, persist the credentials for future use
+    if (session.isAuthenticated && session.userId) {
+        try {
+            const store = await OpenPatrolPointsStore(session.userId);
+            try {
+                const csrfToken = server.getCsrfToken();
+                if (csrfToken) {
+                    await store.setUserMetadata(session.userName, csrfToken);
+                    console.debug(`[ServiceWorker] Persisted CSRF token for user ${session.userId}`);
+                }
+            } finally {
+                store.close();
+            }
+        } catch (e) {
+            console.warn(`[ServiceWorker] Failed to persist credentials for user ${session.userId}`, e);
+            // Non-fatal - we can still proceed with the session
+        }
     }
-    if (session.userId != userId) {
-        client.postMessage(messages.newWrongUserMessage(userId, session.userId));
-        return {isAuthenticated: false };
+
+    return server;
+}
+
+/**
+ * Require the specified user to be logged in.
+ * Sends message to client if not logged in or wrong user.
+ *
+ * @param client - The client to send error messages to
+ * @param userId - Expected user ID
+ * @param requestId - Optional correlation ID from the originating request
+ * @returns Authenticated service instance, or null if authentication failed
+ */
+async function requireLoggedInUser(client: Client, userId: number, requestId?: string): Promise<OsmAdapterApiService | null> {
+    try {
+        const server = await getAuthenticatedService(userId);
+
+        if (!server.isAuthenticated) {
+            client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
+            return null;
+        }
+
+        if (server.userId !== userId) {
+            client.postMessage(messages.newWrongUserMessage(userId, server.userId!));
+            // Clear the invalid cached credentials
+            try {
+                const store = await OpenPatrolPointsStore(userId);
+                try {
+                    await store.clearUserAuth();
+                } finally {
+                    store.close();
+                }
+            } catch (e) {
+                console.warn(`[ServiceWorker] Failed to clear cached credentials for user ${userId}`, e);
+            }
+            return null;
+        }
+
+        return server;
+    } catch (e) {
+        // Network error or other failure - send auth required
+        const loginUrl = new OsmAdapterApiService().getLoginUrl();
+        client.postMessage(messages.newAuthenticationRequiredMessage(loginUrl, requestId));
+        return null;
     }
-    return session;
 }
 
 /**
@@ -86,22 +197,25 @@ async function requireLoggedInUser(server: OsmAdapterApiService, client: Client,
  * @param requestId - Correlation ID to match request with response
  */
 export async function getProfile(client: Client, requestId: string) {
-    const server = new OsmAdapterApiService();
-
     try {
-        const session = await server.fetchSession();
-        if(!session.isAuthenticated) {
+        // Bootstrap authentication - no userId hint available
+        const server = await getAuthenticatedService();
+
+        if (!server.isAuthenticated || !server.userId) {
             client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
             return;
         }
 
-        const store = await OpenPatrolPointsStore(session.userId);
+        const userId = server.userId;
+        const userName = server.user?.name ?? '';
+
+        const store = await OpenPatrolPointsStore(userId);
         try {
-            const sections = await server.fetchSections()
+            const sections = await server.fetchSections();
             const { changed, sectionsListRevision, lastError, lastErrorTime } = await store.setCanonicalSectionList(sections);
             client.postMessage(messages.newUserProfileMessage(
-                session.userId,
-                session.userName,
+                userId,
+                userName,
                 sections,
                 sectionsListRevision,
                 requestId,
@@ -109,7 +223,7 @@ export async function getProfile(client: Client, requestId: string) {
                 lastErrorTime
             ));
             if (changed) {
-                await clients.sendMessage(messages.newSectionListChangeMessage(session.userId, sections, sectionsListRevision));
+                await clients.sendMessage(messages.newSectionListChangeMessage(userId, sections, sectionsListRevision));
             }
         } catch (e) {
             // Store the error in user metadata and bump sections list revision
@@ -119,8 +233,8 @@ export async function getProfile(client: Client, requestId: string) {
             // Get cached sections (if any) and send with error state
             const sections = await store.getSections();
             client.postMessage(messages.newUserProfileMessage(
-                session.userId,
-                session.userName,
+                userId,
+                userName,
                 sections,
                 sectionsListRevision,
                 requestId,
@@ -131,8 +245,9 @@ export async function getProfile(client: Client, requestId: string) {
             store.close();
         }
     } catch (e) {
-        // fetchSession() failed - we don't have a userId yet, so just send auth required
-        client.postMessage(messages.newAuthenticationRequiredMessage(server.getLoginUrl(), requestId));
+        // Failed to authenticate - send auth required
+        const loginUrl = new OsmAdapterApiService().getLoginUrl();
+        client.postMessage(messages.newAuthenticationRequiredMessage(loginUrl, requestId));
     }
 }
 
@@ -153,9 +268,8 @@ export async function getProfile(client: Client, requestId: string) {
  * @param sectionId - Section ID to refresh
  */
 export async function refreshScores(client: Client, requestId: string, userId: number, sectionId: number) {
-    const server = new OsmAdapterApiService();
-    const session = await requireLoggedInUser(server, client, userId, requestId);
-    if(!session.isAuthenticated) {
+    const server = await requireLoggedInUser(client, userId, requestId);
+    if (!server) {
         return;
     }
 
@@ -209,13 +323,13 @@ export async function submitScores(client: Client, requestId: string, userId: nu
         // Only perform the sync if the user is still logged in.
         // If the user is not logged in, then requireLoggedInUser will send a message to the client
         // requesting them to log in again.
-        const server = new OsmAdapterApiService();
-        if (! (await requireLoggedInUser(server, client, userId, requestId)).isAuthenticated) {
+        const server = await requireLoggedInUser(client, userId, requestId);
+        if (!server) {
             return;
         }
 
         // Perform a sync process for this {user,section} to commit the changes to the server.
-        if(!server.isOffline()) {
+        if (!server.isOffline()) {
             await syncPendingScores(server, store, userId, sectionId);
         }
     } finally {
