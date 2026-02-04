@@ -50,6 +50,15 @@ export class Section {
     /** Timestamp of last error (milliseconds, undefined if no error) */
     public lastErrorTime?: number;
 
+    /** Sync lock timeout (0 = unlocked, positive = locked until timestamp in ms) */
+    public syncLockTimeout: number = 0;
+    /** Sync lock ID (UUID of lock holder, undefined if unlocked) */
+    public syncLockId?: string;
+    /** Timestamp of last sync attempt (milliseconds, for client-side rate limiting) */
+    public lastSyncAttempt: number = 0;
+    /** Calculated next retry time (milliseconds, for auto-retry scheduling) */
+    public nextRetryTime: number = 0;
+
     /**
      * @param userId The ID of the user who owns this section
      * @param id The unique ID of the section
@@ -894,6 +903,205 @@ export class PatrolPointsStore {
             }
 
             console.log(`[PatrolPointsStore] Marked all pending entries in section ${sectionId} as failed: ${errorMessage}`);
+        });
+    }
+
+    /**
+     * Atomically acquire a section-level sync lock for cross-tab coordination.
+     * Returns null if lock is already held (by another tab or process).
+     * @param sectionId The section to lock
+     * @param lockDurationMs Lock duration in milliseconds (default 60s)
+     * @returns Lock ID if acquired, null if already locked
+     */
+    async acquireSectionSyncLock(sectionId: number, lockDurationMs: number = 60000): Promise<string | null> {
+        const lockId = crypto.randomUUID();
+        const lockExpiry = Date.now() + lockDurationMs;
+
+        return inTransaction<string | null>(this.db, [SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<string | null> => {
+            const sectionsStore = tx.objectStore(SECTIONS_STORE);
+            const sectionKey = getSectionKey(this.userId, sectionId);
+            const section = await read<Section>(sectionsStore, sectionKey);
+
+            if (!section) {
+                throw new Error(`Section ${sectionId} not found for user ${this.userId}`);
+            }
+
+            const now = Date.now();
+
+            // Check if lock is already held and not expired
+            if (section.syncLockTimeout > now) {
+                console.log(`[PatrolPointsStore] Section ${sectionId} sync lock held by ${section.syncLockId} until ${new Date(section.syncLockTimeout).toISOString()}`);
+                return null;
+            }
+
+            // Acquire lock
+            section.syncLockTimeout = lockExpiry;
+            section.syncLockId = lockId;
+            section.uiRevision++; // Bump revision so other tabs see lock state
+            await put(sectionsStore, section);
+
+            console.log(`[PatrolPointsStore] Acquired section ${sectionId} sync lock ${lockId} until ${new Date(lockExpiry).toISOString()}`);
+            return lockId;
+        });
+    }
+
+    /**
+     * Release the section-level sync lock.
+     * Only the lock holder (matching lockId) can release.
+     * @param sectionId The section to unlock
+     * @param lockId The lock ID that was returned from acquireSectionSyncLock
+     */
+    async releaseSectionSyncLock(sectionId: number, lockId: string): Promise<void> {
+        return inTransaction<void>(this.db, [SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<void> => {
+            const sectionsStore = tx.objectStore(SECTIONS_STORE);
+            const sectionKey = getSectionKey(this.userId, sectionId);
+            const section = await read<Section>(sectionsStore, sectionKey);
+
+            if (!section) {
+                throw new Error(`Section ${sectionId} not found for user ${this.userId}`);
+            }
+
+            // Only unlock if this lockId matches
+            if (section.syncLockId === lockId) {
+                section.syncLockTimeout = 0;
+                section.syncLockId = undefined;
+                section.uiRevision++;
+                await put(sectionsStore, section);
+                console.log(`[PatrolPointsStore] Released section ${sectionId} sync lock ${lockId}`);
+            } else {
+                console.warn(`[PatrolPointsStore] Cannot release section ${sectionId} lock: lockId mismatch (held by ${section.syncLockId}, requested ${lockId})`);
+            }
+        });
+    }
+
+    /**
+     * Calculate the next optimal sync time for a section with 30s batching window.
+     * Returns the timestamp when the next sync should occur, or null if no pending entries.
+     * Batching: if soonest retry is 10s away and next is 15s away, returns 15s to batch both.
+     * @param sectionId The section to check
+     * @returns Timestamp in milliseconds when next sync should occur, or null if no pending
+     */
+    async getNextSyncTime(sectionId: number): Promise<number | null> {
+        const BATCHING_WINDOW_MS = 30000; // 30 seconds
+
+        return inTransaction<number | null>(this.db, [PATROL_SCORES_STORE], "readonly", async (tx: IDBTransaction): Promise<number | null> => {
+            const store = tx.objectStore(PATROL_SCORES_STORE);
+            const index = store.index(INDEX_USERID_SECTIONID);
+            const range = IDBKeyRange.only([this.userId, sectionId]);
+            const now = Date.now();
+
+            const retryTimes: number[] = [];
+
+            await new Promise<void>((resolve, reject) => {
+                const request = index.openCursor(range);
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => {
+                    const cursor = request.result;
+                    if (cursor) {
+                        const patrol = cursor.value as Patrol;
+                        // Only consider entries with pending changes and non-permanent errors
+                        if (patrol.pendingScoreDelta !== 0 && patrol.retryAfter >= 0) {
+                            retryTimes.push(patrol.retryAfter);
+                        }
+                        cursor.continue();
+                    } else {
+                        resolve();
+                    }
+                };
+            });
+
+            if (retryTimes.length === 0) {
+                return null;
+            }
+
+            // Sort retry times
+            retryTimes.sort((a, b) => a - b);
+
+            // Find the latest retry time within the batching window of the soonest
+            const soonest = retryTimes[0];
+            const batchDeadline = Math.max(soonest, now) + BATCHING_WINDOW_MS;
+
+            // Find last retry time that falls within the batch window
+            let batchedTime = soonest;
+            for (const retryTime of retryTimes) {
+                if (retryTime <= batchDeadline) {
+                    batchedTime = retryTime;
+                } else {
+                    break; // Times are sorted, so we can stop
+                }
+            }
+
+            return Math.max(batchedTime, now);
+        });
+    }
+
+    /**
+     * Clear permanent errors (retryAfter = -1) for all pending entries in a section.
+     * Resets retryAfter to 0 (ready now) for force sync scenarios.
+     * @param sectionId The section to clear errors for
+     * @returns Number of entries cleared
+     */
+    async clearPermanentErrors(sectionId: number): Promise<number> {
+        return inTransaction<number>(this.db, [PATROL_SCORES_STORE, SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<number> => {
+            const store = tx.objectStore(PATROL_SCORES_STORE);
+            const index = store.index(INDEX_USERID_SECTIONID);
+            const range = IDBKeyRange.only([this.userId, sectionId]);
+
+            let clearedCount = 0;
+
+            await new Promise<void>((resolve, reject) => {
+                const request = index.openCursor(range);
+                request.onerror = () => reject(request.error);
+                request.onsuccess = async () => {
+                    const cursor = request.result;
+                    if (cursor) {
+                        const patrol = cursor.value as Patrol;
+                        // Clear permanent errors only (preserve temporary errors with future timestamps)
+                        if (patrol.pendingScoreDelta !== 0 && patrol.retryAfter === -1) {
+                            patrol.retryAfter = 0; // Ready to retry now
+                            patrol.errorMessage = undefined; // Clear error message
+                            await put(store, patrol);
+                            clearedCount++;
+                        }
+                        cursor.continue();
+                    } else {
+                        resolve();
+                    }
+                };
+            });
+
+            if (clearedCount > 0) {
+                await bumpSectionUiRevision(tx, this.userId, sectionId);
+            }
+
+            console.log(`[PatrolPointsStore] Cleared ${clearedCount} permanent errors in section ${sectionId}`);
+            return clearedCount;
+        });
+    }
+
+    /**
+     * Update section sync timing metadata after a sync operation.
+     * Recalculates nextRetryTime and updates lastSyncAttempt.
+     * @param sectionId The section that was just synced
+     */
+    async updateSectionSyncTiming(sectionId: number): Promise<void> {
+        const nextRetryTime = await this.getNextSyncTime(sectionId);
+
+        return inTransaction<void>(this.db, [SECTIONS_STORE], "readwrite", async (tx: IDBTransaction): Promise<void> => {
+            const sectionsStore = tx.objectStore(SECTIONS_STORE);
+            const sectionKey = getSectionKey(this.userId, sectionId);
+            const section = await read<Section>(sectionsStore, sectionKey);
+
+            if (!section) {
+                throw new Error(`Section ${sectionId} not found for user ${this.userId}`);
+            }
+
+            section.lastSyncAttempt = Date.now();
+            section.nextRetryTime = nextRetryTime ?? 0;
+            section.uiRevision++;
+            await put(sectionsStore, section);
+
+            console.log(`[PatrolPointsStore] Updated section ${sectionId} sync timing: nextRetryTime=${nextRetryTime ? new Date(nextRetryTime).toISOString() : 'none'}`);
         });
     }
 }

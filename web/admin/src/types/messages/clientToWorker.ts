@@ -35,4 +35,22 @@ export type SubmitScoresMessage = {
     deltas:ScoreDelta[];
 }
 
-export type ClientMessage = RefreshRequestMessage | SubmitScoresMessage | GetProfileMessage;
+/** Request to sync pending scores now (respects retry timers and permanent errors) */
+export type SyncNowMessage = {
+    type: "sync-now";
+    /** Correlation ID to match request with response */
+    requestId: string;
+    userId: number;
+    sectionId: number;
+};
+
+/** Request to forcefully sync pending scores (clears permanent errors, preserves rate limits) */
+export type ForceSyncMessage = {
+    type: "force-sync";
+    /** Correlation ID to match request with response */
+    requestId: string;
+    userId: number;
+    sectionId: number;
+};
+
+export type ClientMessage = RefreshRequestMessage | SubmitScoresMessage | GetProfileMessage | SyncNowMessage | ForceSyncMessage;

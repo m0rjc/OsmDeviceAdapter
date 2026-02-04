@@ -248,7 +248,11 @@ export const handlePatrolsChange = createAsyncThunk<
         dispatch(setCanonicalPatrols({
             version: message.uiRevision,
             patrols: message.scores,
-            sectionId: message.sectionId
+            sectionId: message.sectionId,
+            nextRetryTime: message.nextRetryTime,
+            pendingCount: message.pendingCount,
+            readyCount: message.readyCount,
+            syncInProgress: message.syncInProgress
         }));
 
         if (message.lastError) {
@@ -341,5 +345,63 @@ export const submitScoreChanges = createAsyncThunk<
         // Note: User entry clearing will be handled by the component after successful submit
         // since we want to show a success message before clearing
         // TODO: Consider risk of double-submit. Review this.
+    }
+);
+
+/**
+ * Thunk to sync pending scores now.
+ * Respects retry timers and permanent errors.
+ * Triggered by user clicking "Sync Now" button or automatic retry timer.
+ */
+export const syncNow = createAsyncThunk<
+    void,
+    void,
+    AppThunkConfig
+>(
+    'worker/syncNow',
+    async (_, {getState}) => {
+        const state = getState();
+        const userId = state.user.userId;
+        const selectedSection = selectSelectedSection(state);
+
+        if (!userId) {
+            throw new Error('User not authenticated');
+        }
+
+        if (!selectedSection) {
+            throw new Error('No section selected');
+        }
+
+        const worker: Worker = await GetWorker();
+        worker.sendSyncNowRequest(userId, selectedSection.id);
+    }
+);
+
+/**
+ * Thunk to force sync pending scores.
+ * Clears permanent errors but preserves rate limit backoffs.
+ * Triggered by user clicking "Force Sync" button after confirmation.
+ */
+export const forceSync = createAsyncThunk<
+    void,
+    void,
+    AppThunkConfig
+>(
+    'worker/forceSync',
+    async (_, {getState}) => {
+        const state = getState();
+        const userId = state.user.userId;
+        const selectedSection = selectSelectedSection(state);
+
+        if (!userId) {
+            throw new Error('User not authenticated');
+        }
+
+        if (!selectedSection) {
+            throw new Error('No section selected');
+        }
+
+        const worker: Worker = await GetWorker();
+        worker.sendForceSyncRequest(userId, selectedSection.id);
     }
 );

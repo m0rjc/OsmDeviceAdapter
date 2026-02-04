@@ -6,6 +6,7 @@ import {
     useAppSelector
 } from '../../state';
 import {useMemo} from "react";
+import {PatrolErrorIcon} from './PatrolErrorIcon';
 
 interface PatrolCardProps {
     patrolId: string;
@@ -31,6 +32,12 @@ export function PatrolCard({patrolId}: PatrolCardProps) {
     const totalScore = patrol.committedScore + patrol.pendingScore + userEntry;
     const hasNetChange = (userEntry + patrol.pendingScore) !== 0;
 
+    // Show error icon if there's an error message and pending changes (but not if ready to retry)
+    const shouldShowErrorIcon =
+        patrol.errorMessage &&
+        patrol.pendingScore !== 0 &&
+        patrol.retryAfter !== 0;
+
     const dispatch = useAppDispatch();
 
     function onPointsChange(patrolId: string, value: string) {
@@ -43,6 +50,12 @@ export function PatrolCard({patrolId}: PatrolCardProps) {
             <div className="patrol-card-header">
         <span className="patrol-name">
           {patrol.name}
+            {shouldShowErrorIcon && (
+                <PatrolErrorIcon
+                    errorMessage={patrol.errorMessage}
+                    retryAfter={patrol.retryAfter}
+                />
+            )}
             {patrol.pendingScore !== 0 && (
                 <span className="patrol-pending-badge" title="Pending sync">
               {patrol.pendingScore > 0 ? '+' : ''}{patrol.pendingScore}

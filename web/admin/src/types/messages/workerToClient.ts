@@ -82,6 +82,14 @@ export type PatrolsChangeMessage = {
     lastError?: string;
     /** Timestamp of last error (milliseconds, undefined if no error) */
     lastErrorTime?: number;
+    /** Next retry time (milliseconds), undefined if no pending entries */
+    nextRetryTime?: number;
+    /** Total number of pending entries (with non-zero pendingScoreDelta) */
+    pendingCount: number;
+    /** Number of entries ready to sync now (not locked, retry timer expired, not permanent error) */
+    readyCount: number;
+    /** True if section sync lock is currently held */
+    syncInProgress: boolean;
 }
 
 /** Union of all messages sent to the client. */

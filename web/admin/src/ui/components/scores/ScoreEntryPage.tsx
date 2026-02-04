@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 import {
     clearUserEntriesForSection,
     refreshCurrentSection,
@@ -6,6 +6,8 @@ import {
     selectSelectedPatrolKeys,
     selectSelectedSection,
     submitScoreChanges,
+    syncNow,
+    forceSync,
     useAppDispatch,
     useAppSelector
 } from '../../state';
@@ -15,6 +17,7 @@ import {MessageCard} from '../MessageCard';
 import {ScoreHeader} from './ScoreHeader';
 import {PatrolList} from './PatrolList';
 import {ScoreActions} from './ScoreActions';
+import {SyncStatusBadge} from './SyncStatusBadge';
 
 interface ScoreEntryPageProps {
     /** CSRF token for authenticated API requests (deprecated - worker handles auth) */
@@ -56,6 +59,27 @@ export function ScoreEntryPage({csrfToken: _csrfToken}: ScoreEntryPageProps) {
     // Local UI state
     const [showConfirm, setShowConfirm] = useState(false);
 
+    // Auto-retry timer based on nextRetryTime
+    useEffect(() => {
+        if (!selectedSection?.nextRetryTime) {
+            return;
+        }
+
+        const timeUntilRetry = selectedSection.nextRetryTime - Date.now();
+        if (timeUntilRetry <= 0) {
+            // Time has already passed, trigger sync immediately
+            dispatch(syncNow());
+            return;
+        }
+
+        // Set timer to trigger sync at nextRetryTime
+        const timer = setTimeout(() => {
+            dispatch(syncNow());
+        }, timeUntilRetry);
+
+        return () => clearTimeout(timer);
+    }, [selectedSection?.nextRetryTime, dispatch]);
+
     // Event handlers
     const handleRefresh = () => {
         dispatch(refreshCurrentSection());
@@ -94,6 +118,34 @@ export function ScoreEntryPage({csrfToken: _csrfToken}: ScoreEntryPageProps) {
         }
     };
 
+    const handleSyncNow = () => {
+        dispatch(syncNow());
+    };
+
+    const handleForceSync = async () => {
+        if (!selectedSection) return;
+
+        // Browser confirmation dialog
+        const confirmed = window.confirm(
+            'Force Sync - Use with Caution\n\n' +
+            'This will clear permanent errors and retry all pending scores. ' +
+            'Be careful not to trigger rate limits.\n\n' +
+            'Continue?'
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            await dispatch(forceSync()).unwrap();
+            showToast('success', 'Force sync initiated');
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to force sync';
+            showToast('error', message);
+        }
+    };
+
     // Render empty states
     if (!selectedSection) {
         return (
@@ -127,6 +179,7 @@ export function ScoreEntryPage({csrfToken: _csrfToken}: ScoreEntryPageProps) {
 
     const hasChanges = changes.length > 0;
     const isRefreshing = isLoading; // Could track separately if needed
+    const hasPendingSync = (selectedSection.pendingCount ?? 0) > 0;
 
     return (
         <>
@@ -134,9 +187,18 @@ export function ScoreEntryPage({csrfToken: _csrfToken}: ScoreEntryPageProps) {
                 <ScoreHeader
                     sectionName={selectedSection.name}
                     isOnline={true} // Worker handles offline - always show as ready
-                    hasPendingSync={false} // TODO: Track from worker state if needed
+                    hasPendingSync={hasPendingSync}
                     fetchedAt={null} // TODO: Track timestamp if needed
                 />
+
+                {hasPendingSync && (
+                    <SyncStatusBadge
+                        nextRetryTime={selectedSection.nextRetryTime}
+                        pendingCount={selectedSection.pendingCount ?? 0}
+                        readyCount={selectedSection.readyCount ?? 0}
+                        syncInProgress={selectedSection.syncInProgress ?? false}
+                    />
+                )}
 
                 <PatrolList
                     patrolKeys={patrolKeys}
@@ -147,9 +209,13 @@ export function ScoreEntryPage({csrfToken: _csrfToken}: ScoreEntryPageProps) {
                     hasChanges={hasChanges}
                     isRefreshing={isRefreshing}
                     isOnline={true} // Worker handles offline
+                    readyCount={selectedSection.readyCount ?? 0}
+                    pendingCount={selectedSection.pendingCount ?? 0}
                     onRefresh={handleRefresh}
                     onClear={handleClear}
                     onSubmit={handleAddScores}
+                    onSyncNow={handleSyncNow}
+                    onForceSync={handleForceSync}
                 />
             </div>
 

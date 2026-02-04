@@ -17,18 +17,21 @@ import (
 )
 
 const (
-	mockUserID      = 12345
-	mockUserName    = "Test User"
-	mockCSRFToken   = "mock-csrf-token"
-	defaultPort     = "8081"
-	selectedSection = 1001 // Default selected section
+	mockUserID               = 12345
+	mockUserName             = "Test User"
+	mockCSRFToken            = "mock-csrf-token"
+	defaultPort              = "8081"
+	selectedSection          = 1001 // Default selected section
+	defaultRateLimitInterval = 60   // Default: 1 update per 60 seconds
 )
 
 // MockState holds the in-memory state for the mock server
 type MockState struct {
-	mu       sync.RWMutex
-	sections []AdminSection
-	scores   map[int][]types.PatrolScore // section ID -> patrol scores
+	mu              sync.RWMutex
+	sections        []AdminSection
+	scores          map[int][]types.PatrolScore // section ID -> patrol scores
+	lastUpdateTimes map[string]time.Time        // patrol ID -> last successful update time
+	rateLimitSec    int                         // Rate limit interval in seconds
 }
 
 // AdminSection represents a section (copied from handlers package to avoid import cycles)
@@ -41,6 +44,14 @@ type AdminSection struct {
 var state *MockState
 
 func init() {
+	// Read rate limit from environment (default: 60 seconds = 1 update per minute)
+	rateLimitSec := defaultRateLimitInterval
+	if rateLimitEnv := os.Getenv("MOCK_RATE_LIMIT_SECONDS"); rateLimitEnv != "" {
+		if parsed, err := strconv.Atoi(rateLimitEnv); err == nil && parsed >= 0 {
+			rateLimitSec = parsed
+		}
+	}
+
 	// Initialize mock data
 	state = &MockState{
 		sections: []AdminSection{
@@ -59,6 +70,8 @@ func init() {
 				{ID: "patrol_6", Name: "Wolves", Score: 49},
 			},
 		},
+		lastUpdateTimes: make(map[string]time.Time),
+		rateLimitSec:    rateLimitSec,
 	}
 }
 
@@ -104,13 +117,21 @@ func main() {
 		"event", "startup",
 		"port", port,
 		"sections", len(state.sections),
+		"rate_limit_seconds", state.rateLimitSec,
 	)
 
 	fmt.Printf("\n🚀 Mock Admin Server running on http://localhost:%s\n", port)
 	fmt.Printf("   Session:  GET  http://localhost:%s/api/admin/session\n", port)
 	fmt.Printf("   Sections: GET  http://localhost:%s/api/admin/sections\n", port)
 	fmt.Printf("   Scores:   GET  http://localhost:%s/api/admin/sections/{id}/scores\n", port)
-	fmt.Printf("   Update:   POST http://localhost:%s/api/admin/sections/{id}/scores\n\n", port)
+	fmt.Printf("   Update:   POST http://localhost:%s/api/admin/sections/{id}/scores\n", port)
+	if state.rateLimitSec > 0 {
+		fmt.Printf("\n⏱️  Rate Limit: 1 update per %d seconds per patrol\n", state.rateLimitSec)
+		fmt.Printf("   Set MOCK_RATE_LIMIT_SECONDS=0 to disable\n")
+	} else {
+		fmt.Printf("\n⚡ Rate Limit: Disabled\n")
+	}
+	fmt.Println()
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
@@ -280,6 +301,7 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, sectionID int) {
 
 	scores := state.scores[sectionID]
 	results := make([]handlers.AdminPatrolResult, 0, len(req.Updates))
+	now := time.Now()
 
 	for _, update := range req.Updates {
 		// Find patrol
@@ -292,7 +314,7 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, sectionID int) {
 		}
 
 		if patrol == nil {
-			// Patrol not found - return error result
+			// Patrol not found - return permanent error result
 			errMsg := fmt.Sprintf("Patrol %s not found", update.PatrolID)
 			results = append(results, handlers.AdminPatrolResult{
 				ID:           update.PatrolID,
@@ -302,9 +324,47 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, sectionID int) {
 			continue
 		}
 
+		// Check rate limit (if enabled)
+		if state.rateLimitSec > 0 {
+			if lastUpdate, exists := state.lastUpdateTimes[patrol.ID]; exists {
+				timeSinceLastUpdate := now.Sub(lastUpdate)
+				rateLimitDuration := time.Duration(state.rateLimitSec) * time.Second
+
+				if timeSinceLastUpdate < rateLimitDuration {
+					// Rate limited - return temporary error
+					retryAfter := lastUpdate.Add(rateLimitDuration)
+					errMsg := fmt.Sprintf("Rate limit exceeded. Please wait %d seconds between updates for this patrol.",
+						state.rateLimitSec)
+					isTemporary := true
+
+					slog.Info("mock_server.scores.rate_limited",
+						"component", "mock_server",
+						"event", "scores.rate_limited",
+						"section_id", sectionID,
+						"patrol_id", patrol.ID,
+						"patrol_name", patrol.Name,
+						"retry_after", retryAfter,
+					)
+
+					results = append(results, handlers.AdminPatrolResult{
+						ID:               patrol.ID,
+						Name:             patrol.Name,
+						Success:          false,
+						IsTemporaryError: &isTemporary,
+						RetryAfter:       &retryAfter,
+						ErrorMessage:     &errMsg,
+					})
+					continue
+				}
+			}
+		}
+
 		// Update score
 		previousScore := patrol.Score
 		patrol.Score += update.Points
+
+		// Track update time for rate limiting
+		state.lastUpdateTimes[patrol.ID] = now
 
 		slog.Info("mock_server.scores.updated",
 			"component", "mock_server",

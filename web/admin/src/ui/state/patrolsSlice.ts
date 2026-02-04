@@ -34,7 +34,15 @@ export type SectionMetadata = model.Section & {
     patrols: Array<string>,
     state: LoadingState,
     version: number,
-    error?: string
+    error?: string,
+    /** Next retry time (milliseconds), undefined if no pending entries */
+    nextRetryTime?: number,
+    /** Total number of pending entries */
+    pendingCount: number,
+    /** Number of entries ready to sync now */
+    readyCount: number,
+    /** True if section sync lock is currently held */
+    syncInProgress: boolean
 }
 
 const initialState = entityAdapter.getInitialState({
@@ -45,7 +53,15 @@ const initialState = entityAdapter.getInitialState({
     sections: {} as Record<number, SectionMetadata>
 });
 
-export type SetCanonicalPatrolsPayload = { sectionId: number, version: number, patrols: Array<model.PatrolScore> };
+export type SetCanonicalPatrolsPayload = {
+    sectionId: number,
+    version: number,
+    patrols: Array<model.PatrolScore>,
+    nextRetryTime?: number,
+    pendingCount: number,
+    readyCount: number,
+    syncInProgress: boolean
+};
 export type SetCanonicalSectionsPayload = { version: number, sections: Array<model.Section> };
 export type VersionedErrorPayload = { version: number, error: string };
 export type SectionErrorPayload = { sectionId: number, version: number, error: string };
@@ -110,7 +126,10 @@ const patrolsSlice = createSlice({
             const stateMeta: SectionMetadata = state.sections[sectionId] || {
                 state: 'uninitialized',
                 version: -1,
-                patrols: []
+                patrols: [],
+                pendingCount: 0,
+                readyCount: 0,
+                syncInProgress: false
             };
             const statePatrolsKeys: Set<string> = new Set(stateMeta.patrols);
 
@@ -134,7 +153,11 @@ const patrolsSlice = createSlice({
                 state: 'ready',
                 version: action.payload.version,
                 patrols: upserts.map(p => p.key),
-                error: undefined
+                error: undefined,
+                nextRetryTime: action.payload.nextRetryTime,
+                pendingCount: action.payload.pendingCount,
+                readyCount: action.payload.readyCount,
+                syncInProgress: action.payload.syncInProgress
             };
             if (!state.sectionIds.includes(sectionId)) {
                 state.sectionIds.push(sectionId)

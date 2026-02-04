@@ -70,6 +70,8 @@ export {
     handleWrongUser,
     submitScoreChanges,
     refreshCurrentSection,
+    syncNow,
+    forceSync,
 } from './workerThunks';
 
 // App slice - actions

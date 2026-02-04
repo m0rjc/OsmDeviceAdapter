@@ -50,6 +50,9 @@ run:
 	go run $(LDFLAGS) ./cmd/server
 
 # Run the mock admin server for frontend development (port 8081)
+# Set MOCK_RATE_LIMIT_SECONDS to configure rate limiting (default: 60 seconds)
+# Example: MOCK_RATE_LIMIT_SECONDS=5 make mock-server (5 second rate limit)
+# Example: MOCK_RATE_LIMIT_SECONDS=0 make mock-server (disable rate limiting)
 mock-server:
 	@echo "Starting mock admin server on port 8081..."
 	@echo "Use with frontend dev server: cd web/admin && npm run dev"

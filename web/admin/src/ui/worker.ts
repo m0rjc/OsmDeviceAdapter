@@ -61,6 +61,26 @@ export interface Worker {
         patrolId: string,
         score: number
     }>): string;
+
+    /**
+     * Sync pending scores now (respects retry timers and permanent errors).
+     * Triggered by user clicking "Sync Now" button or automatic retry timer.
+     *
+     * @param userId The user ID
+     * @param sectionId The section ID
+     * @returns requestId for correlating the response
+     */
+    sendSyncNowRequest(userId: number, sectionId: number): string;
+
+    /**
+     * Force sync pending scores (clears permanent errors, preserves rate limits).
+     * Triggered by user clicking "Force Sync" button after acknowledging warnings.
+     *
+     * @param userId The user ID
+     * @param sectionId The section ID
+     * @returns requestId for correlating the response
+     */
+    sendForceSyncRequest(userId: number, sectionId: number): string;
 }
 
 /**
@@ -185,6 +205,18 @@ class WorkerService implements Worker {
     }>): string {
         const requestId = crypto.randomUUID();
         this.sendMessage({type: "submit-scores", requestId, userId, sectionId, deltas});
+        return requestId;
+    }
+
+    public sendSyncNowRequest(userId: number, sectionId: number): string {
+        const requestId = crypto.randomUUID();
+        this.sendMessage({type: "sync-now", requestId, userId, sectionId});
+        return requestId;
+    }
+
+    public sendForceSyncRequest(userId: number, sectionId: number): string {
+        const requestId = crypto.randomUUID();
+        this.sendMessage({type: "force-sync", requestId, userId, sectionId});
         return requestId;
     }
 }

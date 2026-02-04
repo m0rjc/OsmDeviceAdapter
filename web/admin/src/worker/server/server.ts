@@ -1,6 +1,5 @@
 import * as api from './types';
 import * as model from '../../types/model';
-import type {SessionResponse} from "./types";
 
 /**
  * Error thrown when an API request fails

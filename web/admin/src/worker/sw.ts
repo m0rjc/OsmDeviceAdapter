@@ -3,7 +3,7 @@ import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from
 import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { NetworkFirst } from 'workbox-strategies';
 import * as messages from '../types/messages'
-import {NetworkError, OsmAdapterApiService, type SessionStatus} from "./server/server";
+import {NetworkError, OsmAdapterApiService} from "./server/server";
 import * as clients from "./client";
 import {OpenPatrolPointsStore, PatrolPointsStore, Patrol as StoredPatrol} from "./store/store";
 import type {ScoreDelta} from "../types/model";
@@ -26,15 +26,9 @@ self.addEventListener('activate', () => {
 const navigationHandler = async (options: any) => {
     try {
         // Try to get from precache first (works in production builds)
-        const precacheController = (self as any).__WB_MANIFEST?.length > 0
-            ? createHandlerBoundToURL('index.html')
-            : null;
-
-        if (precacheController) {
-            return precacheController(options);
-        }
+        return await createHandlerBoundToURL('index.html')(options);
     } catch (e) {
-        // Precache not available, fall through to fetch
+        // Precache not available (dev mode), fall through to fetch
     }
 
     // Fallback for dev mode: fetch index.html directly
@@ -74,6 +68,12 @@ self.addEventListener('message', (event) => {
             break;
         case 'submit-scores':
             submitScores(client, message.requestId, message.userId, message.sectionId, message.deltas);
+            break;
+        case 'sync-now':
+            syncNow(client, message.requestId, message.userId, message.sectionId);
+            break;
+        case 'force-sync':
+            forceSync(client, message.requestId, message.userId, message.sectionId);
             break;
         default:
             const unrecognized = message as any;
@@ -279,7 +279,7 @@ export async function refreshScores(client: Client, requestId: string, userId: n
         const { patrols, uiRevision, lastError, lastErrorTime } = await store.setCanonicalPatrolList(sectionId, scores);
         // Send successful response with requestId to the specific client (error state cleared)
         console.debug(`[ServiceWorker] Refreshing scores for section ${sectionId} succeeded`);
-        clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
+        await clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
     } catch (e) {
         // Store the error on the section record and bump its UI revision
         const errorMessage = reduceError(e, "Unable to refresh patrol scores from server.");
@@ -288,7 +288,7 @@ export async function refreshScores(client: Client, requestId: string, userId: n
         // Get the cached data with the new error state and send it
         console.warn(`[ServiceWorker] Refreshing scores for section ${sectionId} failed. Trying cached data:`);
         const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
-        clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
+        await clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
     } finally {
         store.close();
     }
@@ -389,9 +389,12 @@ async function syncPendingScores(server: OsmAdapterApiService, store: PatrolPoin
     } catch (e: any) {
         // Catastrophic error (network failure, server error, etc.)
         if(e instanceof NetworkError) {
+            // Network error - offline or connectivity issue
+            // Don't mark as failed, just log and let retry logic handle it
             console.warn(`[ServiceWorker] Network error syncing scores for section ${sectionId}:`, e.cause);
+            // Note: We still broadcast below to update timing, but no error messages are set
         } else {
-            // Mark all pending entries as failed so the user can see what happened
+            // Server error or other failure - mark all pending entries as failed
             await store.markAllPendingAsFailed(sectionId, e.message || 'Failed to sync scores');
             console.error(`[ServiceWorker] Error in syncPendingScores for section ${sectionId}:`, e);
         }
@@ -401,10 +404,145 @@ async function syncPendingScores(server: OsmAdapterApiService, store: PatrolPoin
             await store.releaseSyncLock(sectionId, lockId);
         }
 
-        // If I did anything, then publish the updated scores to all clients
+        // Update section sync timing (updates nextRetryTime for countdown display)
+        await store.updateSectionSyncTiming(sectionId);
+
+        // If we locked any patrols, broadcast the updated state to all clients
+        // This includes: successful syncs, failed syncs, and timing updates (even for NetworkError)
         if (hasChanges) {
             const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
             await clients.publishScores(userId, sectionId, patrols, uiRevision, lastError, lastErrorTime);
         }
+    }
+}
+
+/** Client-side rate limit for force sync (5 seconds) */
+const SYNC_RATE_LIMIT_MS = 5000;
+
+/**
+ * Sync pending scores now (respects retry timers and permanent errors).
+ * Triggered by user clicking "Sync Now" button or automatic retry timer.
+ *
+ * @param client - The client requesting the sync
+ * @param requestId - Correlation ID to match request with response
+ * @param userId - User ID
+ * @param sectionId - Section ID
+ */
+export async function syncNow(client: Client, requestId: string, userId: number, sectionId: number) {
+    const store = await OpenPatrolPointsStore(userId);
+    try {
+        // Enforce client-side rate limit
+        const sections = await store.getSections();
+        const section = sections.find(s => s.id === sectionId);
+        if (section && section.lastSyncAttempt > 0) {
+            const timeSinceLastSync = Date.now() - section.lastSyncAttempt;
+            if (timeSinceLastSync < SYNC_RATE_LIMIT_MS) {
+                console.warn(`[ServiceWorker] Sync rate limited: ${timeSinceLastSync}ms since last attempt`);
+                // Still broadcast current state
+                const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+                await clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
+                return;
+            }
+        }
+
+        // Try to acquire section sync lock
+        const lockId = await store.acquireSectionSyncLock(sectionId, 60000);
+        if (!lockId) {
+            console.log(`[ServiceWorker] Section ${sectionId} sync already in progress`);
+            // Broadcast current state showing sync in progress
+            const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+            await clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
+            return;
+        }
+
+        try {
+            // Check authentication
+            const server = await requireLoggedInUser(client, userId, requestId);
+            if (!server) {
+                return;
+            }
+
+            // Perform sync using existing syncPendingScores logic
+            if (!server.isOffline()) {
+                await syncPendingScores(server, store, userId, sectionId);
+            }
+        } finally {
+            // Always release section lock
+            await store.releaseSectionSyncLock(sectionId, lockId);
+
+            // Broadcast final state
+            const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+            await clients.publishScores(userId, sectionId, patrols, uiRevision, lastError, lastErrorTime);
+        }
+    } finally {
+        store.close();
+    }
+}
+
+/**
+ * Force sync pending scores (clears permanent errors, preserves rate limits).
+ * Triggered by user clicking "Force Sync" button after acknowledging warnings.
+ *
+ * @param client - The client requesting the force sync
+ * @param requestId - Correlation ID to match request with response
+ * @param userId - User ID
+ * @param sectionId - Section ID
+ */
+export async function forceSync(client: Client, requestId: string, userId: number, sectionId: number) {
+    const store = await OpenPatrolPointsStore(userId);
+    try {
+        // Enforce client-side rate limit
+        const sections = await store.getSections();
+        const section = sections.find(s => s.id === sectionId);
+        if (section && section.lastSyncAttempt > 0) {
+            const timeSinceLastSync = Date.now() - section.lastSyncAttempt;
+            if (timeSinceLastSync < SYNC_RATE_LIMIT_MS) {
+                console.warn(`[ServiceWorker] Force sync rate limited: ${timeSinceLastSync}ms since last attempt`);
+                // Still broadcast current state
+                const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+                await clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
+                return;
+            }
+        }
+
+        // Try to acquire section sync lock
+        const lockId = await store.acquireSectionSyncLock(sectionId, 60000);
+        if (!lockId) {
+            console.log(`[ServiceWorker] Section ${sectionId} sync already in progress (force sync)`);
+            // Broadcast current state showing sync in progress
+            const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+            await clients.sendScoresToClient(client, userId, sectionId, patrols, uiRevision, lastError, lastErrorTime, requestId);
+            return;
+        }
+
+        try {
+            // Clear permanent errors (retryAfter = -1 → retryAfter = 0)
+            const clearedCount = await store.clearPermanentErrors(sectionId);
+            console.log(`[ServiceWorker] Force sync cleared ${clearedCount} permanent errors in section ${sectionId}`);
+
+            // Broadcast state after clearing errors
+            const { patrols: afterClear, uiRevision: afterClearRevision } = await store.getScoresForSection(sectionId);
+            await clients.publishScores(userId, sectionId, afterClear, afterClearRevision);
+
+            // Check authentication
+            const server = await requireLoggedInUser(client, userId, requestId);
+            if (!server) {
+                return;
+            }
+
+            // Perform sync using existing syncPendingScores logic
+            if (!server.isOffline()) {
+                await syncPendingScores(server, store, userId, sectionId);
+            }
+        } finally {
+            // Always release section lock
+            await store.releaseSectionSyncLock(sectionId, lockId);
+
+            // Broadcast final state
+            const { patrols, uiRevision, lastError, lastErrorTime } = await store.getScoresForSection(sectionId);
+            await clients.publishScores(userId, sectionId, patrols, uiRevision, lastError, lastErrorTime);
+        }
+    } finally {
+        store.close();
     }
 }

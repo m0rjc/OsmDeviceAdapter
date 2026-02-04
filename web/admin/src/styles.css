@@ -186,6 +186,65 @@ body {
   border-color: var(--color-warning);
 }
 
+/* Patrol error icon */
+.patrol-error-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.25rem;
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+}
+
+.patrol-error-icon:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.patrol-error-icon svg {
+  display: block;
+}
+
+/* Patrol error tooltip */
+.patrol-error-tooltip {
+  position: fixed;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  max-width: 250px;
+  min-width: 200px;
+  /* Position is set via inline styles in JavaScript */
+}
+
+.patrol-error-tooltip-message {
+  font-size: 0.875rem;
+  color: var(--color-text);
+  line-height: 1.4;
+  margin-bottom: 0.5rem;
+}
+
+.patrol-error-tooltip-retry,
+.patrol-error-tooltip-action {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.patrol-error-tooltip-retry {
+  color: var(--color-warning);
+}
+
+.patrol-error-tooltip-action {
+  color: var(--color-danger);
+}
+
 /* Patrol cards */
 .patrol-cards {
   display: flex;

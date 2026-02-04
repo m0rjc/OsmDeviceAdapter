@@ -14,7 +14,7 @@ export async function sendMessage(...messages : messages.WorkerMessage[]){
     );
 }
 
-function createPatrolMessageFromStoreData(
+async function createPatrolMessageFromStoreData(
     userId: number,
     sectionId: number,
     scores: store.Patrol[],
@@ -22,7 +22,46 @@ function createPatrolMessageFromStoreData(
     lastError?: string,
     lastErrorTime?: number,
     requestId?: string
-) {
+): Promise<messages.PatrolsChangeMessage> {
+    // Calculate sync timing metadata
+    const now = Date.now();
+    let pendingCount = 0;
+    let readyCount = 0;
+    let nextRetryTime: number | undefined = undefined;
+    let minRetryTime = Infinity;
+
+    for (const patrol of scores) {
+        if (patrol.pendingScoreDelta !== 0) {
+            pendingCount++;
+
+            // Count ready entries: not locked, retry time passed, not permanent error
+            if (patrol.lockTimeout <= now && patrol.retryAfter <= now && patrol.retryAfter >= 0) {
+                readyCount++;
+            }
+
+            // Track soonest retry time for future retries
+            if (patrol.retryAfter > now && patrol.retryAfter >= 0) {
+                minRetryTime = Math.min(minRetryTime, patrol.retryAfter);
+            }
+        }
+    }
+
+    if (minRetryTime !== Infinity) {
+        nextRetryTime = minRetryTime;
+    }
+
+    // Check if section sync lock is held
+    const patrolStore = await store.OpenPatrolPointsStore(userId);
+    let syncInProgress = false;
+    try {
+        // Get section metadata to check lock status
+        const sections = await patrolStore.getSections();
+        const section = sections.find(s => s.id === sectionId);
+        syncInProgress = section ? section.syncLockTimeout > now : false;
+    } finally {
+        patrolStore.close();
+    }
+
     const message: messages.PatrolsChangeMessage = {
         type: 'patrols-change',
         requestId,
@@ -38,7 +77,11 @@ function createPatrolMessageFromStoreData(
         })),
         uiRevision,
         lastError,
-        lastErrorTime
+        lastErrorTime,
+        nextRetryTime,
+        pendingCount,
+        readyCount,
+        syncInProgress
     }
     return message;
 }
@@ -52,12 +95,12 @@ export async function publishScores(
     lastError?: string,
     lastErrorTime?: number
 ) {
-    const message = createPatrolMessageFromStoreData(userId, sectionId, scores, uiRevision, lastError, lastErrorTime);
+    const message = await createPatrolMessageFromStoreData(userId, sectionId, scores, uiRevision, lastError, lastErrorTime);
     return sendMessage(message);
 }
 
 /** Send scores to a specific client in response to a request. */
-export function sendScoresToClient(
+export async function sendScoresToClient(
     client: Client,
     userId: number,
     sectionId: number,
@@ -66,8 +109,9 @@ export function sendScoresToClient(
     lastError?: string,
     lastErrorTime?: number,
     requestId?: string
-):void {
-    client.postMessage(createPatrolMessageFromStoreData(userId, sectionId, scores, uiRevision, lastError, lastErrorTime, requestId));
+):Promise<void> {
+    const message = await createPatrolMessageFromStoreData(userId, sectionId, scores, uiRevision, lastError, lastErrorTime, requestId);
+    client.postMessage(message);
 }
 
 /** Send a message to a specific client. This is a typesafe wrapper around client.postMessage */

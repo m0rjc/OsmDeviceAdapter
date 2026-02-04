@@ -18,6 +18,8 @@ describe('Worker mocking pattern', () => {
       sendGetProfileRequest: jest.fn().mockReturnValue('request-id-123'),
       sendRefreshRequest: jest.fn().mockReturnValue('request-id-456'),
       sendSubmitScoresRequest: jest.fn().mockReturnValue('request-id-789'),
+      sendSyncNowRequest: jest.fn().mockReturnValue('request-id-sync'),
+      sendForceSyncRequest: jest.fn().mockReturnValue('request-id-force'),
     };
 
     // Override the worker factory to return our mock (now async)
@@ -61,6 +63,9 @@ describe('Worker mocking pattern', () => {
       scores: [
         { id: '1', name: 'Red Patrol', committedScore: 10, pendingScore: 0 },
       ],
+      pendingCount: 0,
+      readyCount: 0,
+      syncInProgress: false,
     };
 
     // These messages can be passed to mockWorker.onMessage() in tests
