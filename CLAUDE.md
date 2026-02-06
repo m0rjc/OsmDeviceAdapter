@@ -84,6 +84,26 @@ To use the real backend instead of the mock, set `VITE_API_URL` when running Vit
 VITE_API_URL=http://localhost:8080 npm run dev
 ```
 
+### Mock OSM Server (End-to-End Testing)
+```bash
+# Run standalone mock OSM server (port 8082)
+make mock-osm
+
+# Run adapter + mock OSM together (needs DATABASE_URL, REDIS_URL)
+make dev-e2e
+
+# Connect any adapter instance to mock OSM
+OSM_DOMAIN=http://localhost:8082 OSM_CLIENT_ID=mock-client-id OSM_CLIENT_SECRET=mock-client-secret make run
+```
+
+The mock OSM server (`cmd/mock-osm-server/main.go`) emulates the real OSM OAuth and API endpoints, enabling end-to-end testing without real OSM credentials. It implements:
+- OAuth authorization, token exchange, and token refresh
+- User profile endpoint (`/oauth/resource`)
+- Patrol scores fetch and update (`/ext/members/patrols/`)
+- OSM-style rate limiting with `X-RateLimit-*` headers and `X-Blocked` simulation
+
+Configuration via environment variables: `MOCK_RATE_LIMIT`, `MOCK_RATE_LIMIT_WINDOW`, `MOCK_SERVICE_BLOCKED`, `MOCK_TOKEN_EXPIRY`, `MOCK_CLIENT_ID`, `MOCK_CLIENT_SECRET`, `MOCK_AUTO_APPROVE`.
+
 ## Code Architecture
 
 ### Two-Tier OAuth Bridge

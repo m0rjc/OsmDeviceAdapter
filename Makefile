@@ -1,4 +1,4 @@
-.PHONY: build build-server run test check-main-branch docker-build docker-push docker-build-dev docker-push-dev k8s-deploy helm-install helm-upgrade helm-uninstall helm-install-dev helm-upgrade-dev helm-uninstall-dev helm-template-dev helm-lint helm-template helm-values helm-package helm-secrets-install helm-secrets-upgrade helm-secrets-install-dev helm-secrets-upgrade-dev helm-secrets-uninstall-dev helm-secrets-lint helm-secrets-template monitoring-deploy clean ui-build ui-dev ui-clean mock-server dev
+.PHONY: build build-server run test check-main-branch docker-build docker-push docker-build-dev docker-push-dev k8s-deploy helm-install helm-upgrade helm-uninstall helm-install-dev helm-upgrade-dev helm-uninstall-dev helm-template-dev helm-lint helm-template helm-values helm-package helm-secrets-install helm-secrets-upgrade helm-secrets-install-dev helm-secrets-upgrade-dev helm-secrets-uninstall-dev helm-secrets-lint helm-secrets-template monitoring-deploy clean ui-build ui-dev ui-clean mock-server dev mock-osm dev-e2e
 
 # Variables - Production (Live)
 APP_NAME=osm-device-adapter
@@ -278,6 +278,25 @@ monitoring-deploy:
 		--create-namespace \
 		--install \
 		-f k8s/monitoring/kube-prometheus-stack-values.yaml
+
+# Run mock OSM server for end-to-end testing (port 8082)
+mock-osm:
+	@echo "Starting mock OSM server on port 8082..."
+	@echo "Set OSM_DOMAIN=http://localhost:8082 when running the adapter"
+	go run ./cmd/mock-osm-server
+
+# Run adapter + mock OSM for end-to-end testing
+# Requires DATABASE_URL and REDIS_URL
+dev-e2e:
+	@echo "Starting end-to-end dev environment..."
+	@echo "  - Mock OSM server on http://localhost:8082"
+	@echo "  - Adapter server on http://localhost:8080"
+	@trap 'kill 0' EXIT; \
+	MOCK_AUTO_APPROVE=true go run ./cmd/mock-osm-server & \
+	OSM_DOMAIN=http://localhost:8082 \
+	OSM_CLIENT_ID=mock-client-id \
+	OSM_CLIENT_SECRET=mock-client-secret \
+	go run $(LDFLAGS) ./cmd/server
 
 # Clean build artifacts
 clean:
