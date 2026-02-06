@@ -6,3 +6,4 @@ export { LoadingBanner } from './LoadingBanner';
 export { UpdatePrompt } from './UpdatePrompt';
 export { ToastProvider } from './Toast';
 export * from './scores';
+export * from './settings';

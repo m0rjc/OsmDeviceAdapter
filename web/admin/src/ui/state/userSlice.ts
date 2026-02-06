@@ -10,26 +10,31 @@ export interface UserState {
   userId: number | null;
   /** User's display name (null when not authenticated) */
   userName: string | null;
+  /** CSRF token for authenticated requests (null when not authenticated) */
+  csrfToken: string | null;
 }
 
 const initialState: UserState = {
   loading: true, // Start as loading since we immediately request profile on bootstrap
   userId: null,
   userName: null,
+  csrfToken: null,
 };
 
 const userSlice = createSlice({
   name: 'user',
   initialState,
   reducers: {
-    setUser: (state, action: PayloadAction<{ userId: number; userName: string }>) => {
+    setUser: (state, action: PayloadAction<{ userId: number; userName: string; csrfToken?: string }>) => {
       state.userId = action.payload.userId;
       state.userName = action.payload.userName;
+      state.csrfToken = action.payload.csrfToken ?? null;
       state.loading = false;
     },
     setUnauthenticated: (state) => {
       state.userId = null;
       state.userName = null;
+      state.csrfToken = null;
       state.loading = false;
     },
   },

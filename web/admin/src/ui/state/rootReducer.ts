@@ -4,11 +4,13 @@ import * as user from './userSlice';
 import * as dialog from './dialogSlice';
 import * as ui from './uiSlice';
 import * as app from './appSlice';
+import * as settings from './settingsSlice';
 import patrolsReducer, {selectPatrolById, type UIPatrol} from './patrolsSlice.ts';
 import userReducer from './userSlice';
 import dialogReducer from './dialogSlice';
 import uiReducer from './uiSlice';
 import appReducer from './appSlice';
+import settingsReducer from './settingsSlice';
 
 export const rootReducer = combineReducers({
     user: userReducer,
@@ -16,6 +18,7 @@ export const rootReducer = combineReducers({
     patrols: patrolsReducer,
     ui: uiReducer,
     app: appReducer,
+    settings: settingsReducer,
 })
 
 export type RootState = ReturnType<typeof rootReducer>;
@@ -28,6 +31,7 @@ export type {UserState} from './userSlice';
 export type {DialogState} from './dialogSlice';
 export type {UiState} from './uiSlice';
 export type {AppState} from './appSlice';
+export type {SettingsStateType as SettingsState, SectionSettingsState, PatrolInfo} from './settingsSlice';
 
 // Slice state extractors
 const selectPatrolState: AppSelector<patrols.PatrolsState> = (state) => state.patrols;
@@ -35,6 +39,8 @@ const selectUserState: AppSelector<user.UserState> = (state) => state.user;
 const selectDialogState: AppSelector<dialog.DialogState> = (state) => state.dialog;
 const selectUiState: AppSelector<ui.UiState> = (state) => state.ui;
 const selectAppState: AppSelector<app.AppState> = (state) => state.app;
+const _selectSettingsState: AppSelector<settings.SettingsStateType> = (state) => state.settings;
+void _selectSettingsState; // Reserved for future use
 
 // App-level selectors for user slice
 export const selectUserId = createAppSelector([selectUserState], user.selectUserId);
@@ -124,3 +130,17 @@ export const selectChangesForCurrentSection: AppSelector<Array<UserChange>> =
 // App-level selectors for app slice (PWA lifecycle)
 export const selectShouldShowUpdatePrompt = createAppSelector([selectAppState], app.selectShouldShowUpdatePrompt);
 export const selectUpdateAvailable = createAppSelector([selectAppState], app.selectUpdateAvailable);
+
+// App-level selectors for settings slice
+export const selectSettingsForSection = (state: RootState, sectionId: number): settings.SectionSettingsState | null =>
+    settings.selectSettingsBySectionId(state.settings, sectionId);
+export const selectPatrolColorsForSection = (state: RootState, sectionId: number): Record<string, string> =>
+    settings.selectPatrolColorsBySectionId(state.settings, sectionId);
+export const selectPatrolsForSettings = (state: RootState, sectionId: number): settings.PatrolInfo[] =>
+    settings.selectPatrolsBySectionId(state.settings, sectionId);
+export const selectSettingsLoadState = (state: RootState, sectionId: number) =>
+    settings.selectSettingsLoadState(state.settings, sectionId);
+export const selectIsSavingSettings = (state: RootState, sectionId: number): boolean =>
+    settings.selectIsSaving(state.settings, sectionId);
+export const selectSettingsSaveError = (state: RootState, sectionId: number): string | undefined =>
+    settings.selectSaveError(state.settings, sectionId);

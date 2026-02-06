@@ -11,6 +11,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/sectionsettings"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 	"github.com/redis/go-redis/v9"
@@ -36,11 +37,12 @@ type CachedPatrolScores struct {
 
 // PatrolScoreResponse represents the API response for patrol scores
 type PatrolScoreResponse struct {
-	Patrols        []types.PatrolScore `json:"patrols"`
-	FromCache      bool                `json:"from_cache"`
-	CachedAt       time.Time           `json:"cached_at"`
-	CacheExpiresAt time.Time           `json:"cache_expires_at"`
-	RateLimitState RateLimitState      `json:"rate_limit_state"`
+	Patrols        []types.PatrolScore   `json:"patrols"`
+	FromCache      bool                  `json:"from_cache"`
+	CachedAt       time.Time             `json:"cached_at"`
+	CacheExpiresAt time.Time             `json:"cache_expires_at"`
+	RateLimitState RateLimitState        `json:"rate_limit_state"`
+	Settings       *types.DeviceSettings `json:"settings,omitempty"`
 }
 
 // PatrolScoreService orchestrates patrol score fetching with caching and rate limiting
@@ -73,6 +75,9 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 		return nil, osm.ErrNoSectionConfigured
 	}
 
+	// Fetch device settings (best effort - settings errors don't fail the request)
+	settings := s.fetchDeviceSettings(device)
+
 	// Check patrol scores cache
 	cached, err := s.getCachedPatrolScores(ctx, device.DeviceCode)
 	if err == nil && time.Now().Before(cached.ValidUntil) {
@@ -83,6 +88,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 			CachedAt:       cached.CachedAt,
 			CacheExpiresAt: cached.ValidUntil,
 			RateLimitState: cached.RateLimitState,
+			Settings:       settings,
 		}, nil
 	}
 
@@ -122,6 +128,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 				CachedAt:       cached.CachedAt,
 				CacheExpiresAt: cached.ValidUntil,
 				RateLimitState: rateLimitState,
+				Settings:       settings,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to fetch patrol scores: %w", err)
@@ -148,7 +155,36 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 		CachedAt:       now,
 		CacheExpiresAt: validUntil,
 		RateLimitState: rateLimitState,
+		Settings:       settings,
 	}, nil
+}
+
+// fetchDeviceSettings fetches user settings for the device's section.
+// Returns nil if settings cannot be fetched (best effort - never fails the request).
+func (s *PatrolScoreService) fetchDeviceSettings(device *db.DeviceCode) *types.DeviceSettings {
+	if device.OsmUserID == nil || device.SectionID == nil {
+		return nil
+	}
+
+	settings, err := sectionsettings.GetParsed(s.conns, *device.OsmUserID, *device.SectionID)
+	if err != nil {
+		slog.Error("patrol_score_service.settings_fetch_failed",
+			"component", "patrol_score_service",
+			"event", "settings.fetch.error",
+			"device_code_hash", device.DeviceCode[:8],
+			"error", err,
+		)
+		return nil
+	}
+
+	// Only return settings if there's actual content
+	if len(settings.PatrolColors) == 0 {
+		return nil
+	}
+
+	return &types.DeviceSettings{
+		PatrolColors: settings.PatrolColors,
+	}
 }
 
 // ensureTermInfo ensures that the device has valid term information.

@@ -208,6 +208,7 @@ export async function getProfile(client: Client, requestId: string) {
 
         const userId = server.userId;
         const userName = server.user?.name ?? '';
+        const csrfToken = server.getCsrfToken() ?? undefined;
 
         const store = await OpenPatrolPointsStore(userId);
         try {
@@ -216,6 +217,7 @@ export async function getProfile(client: Client, requestId: string) {
             client.postMessage(messages.newUserProfileMessage(
                 userId,
                 userName,
+                csrfToken,
                 sections,
                 sectionsListRevision,
                 requestId,
@@ -235,6 +237,7 @@ export async function getProfile(client: Client, requestId: string) {
             client.postMessage(messages.newUserProfileMessage(
                 userId,
                 userName,
+                csrfToken,
                 sections,
                 sectionsListRevision,
                 requestId,

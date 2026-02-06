@@ -29,9 +29,10 @@ const (
 type MockState struct {
 	mu              sync.RWMutex
 	sections        []AdminSection
-	scores          map[int][]types.PatrolScore // section ID -> patrol scores
-	lastUpdateTimes map[string]time.Time        // patrol ID -> last successful update time
-	rateLimitSec    int                         // Rate limit interval in seconds
+	scores          map[int][]types.PatrolScore   // section ID -> patrol scores
+	settings        map[int]map[string]string     // section ID -> patrol ID -> color
+	lastUpdateTimes map[string]time.Time          // patrol ID -> last successful update time
+	rateLimitSec    int                           // Rate limit interval in seconds
 }
 
 // AdminSection represents a section (copied from handlers package to avoid import cycles)
@@ -70,6 +71,14 @@ func init() {
 				{ID: "patrol_6", Name: "Wolves", Score: 49},
 			},
 		},
+		settings: map[int]map[string]string{
+			1001: {
+				"patrol_1": "#FF0000", // Eagles - Red
+				"patrol_2": "#00FF00", // Hawks - Green
+				"patrol_3": "#0000FF", // Owls - Blue
+			},
+			1002: {}, // No colors set for section 1002
+		},
 		lastUpdateTimes: make(map[string]time.Time),
 		rateLimitSec:    rateLimitSec,
 	}
@@ -93,7 +102,7 @@ func main() {
 	corsMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token")
 
 			if r.Method == "OPTIONS" {
@@ -108,7 +117,7 @@ func main() {
 	// Register endpoints
 	mux.HandleFunc("/api/admin/session", corsMiddleware(handleSession))
 	mux.HandleFunc("/api/admin/sections", corsMiddleware(handleSections))
-	mux.HandleFunc("/api/admin/sections/", corsMiddleware(handleScores)) // Trailing slash for path matching
+	mux.HandleFunc("/api/admin/sections/", corsMiddleware(handleSectionRoutes)) // Trailing slash for path matching
 	mux.HandleFunc("/health", corsMiddleware(handleHealth))
 
 	addr := ":" + port
@@ -191,6 +200,16 @@ func handleSections(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, handlers.AdminSectionsResponse{Sections: sections})
+}
+
+// handleSectionRoutes routes to scores or settings based on URL suffix
+func handleSectionRoutes(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if strings.HasSuffix(path, "/settings") {
+		handleSettings(w, r)
+	} else {
+		handleScores(w, r)
+	}
 }
 
 // handleScores handles both GET and POST for /api/admin/sections/{id}/scores
@@ -410,5 +429,121 @@ func writeJSONError(w http.ResponseWriter, statusCode int, errorCode, message st
 	json.NewEncoder(w).Encode(handlers.AdminErrorResponse{
 		Error:   errorCode,
 		Message: message,
+	})
+}
+
+// handleSettings handles GET and PUT for /api/admin/sections/{id}/settings
+func handleSettings(w http.ResponseWriter, r *http.Request) {
+	// Parse section ID from URL
+	path := r.URL.Path
+	prefix := "/api/admin/sections/"
+	suffix := "/settings"
+
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		writeJSONError(w, http.StatusNotFound, "not_found", "Invalid path")
+		return
+	}
+
+	sectionStr := path[len(prefix) : len(path)-len(suffix)]
+	sectionID, err := strconv.Atoi(sectionStr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid section ID")
+		return
+	}
+
+	// Validate section exists
+	state.mu.RLock()
+	_, exists := state.scores[sectionID]
+	if !exists {
+		state.mu.RUnlock()
+		writeJSONError(w, http.StatusNotFound, "not_found", "Section not found")
+		return
+	}
+	state.mu.RUnlock()
+
+	switch r.Method {
+	case http.MethodGet:
+		handleGetSettings(w, r, sectionID)
+	case http.MethodPut:
+		handleUpdateSettings(w, r, sectionID)
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+	}
+}
+
+// handleGetSettings returns settings for a section
+func handleGetSettings(w http.ResponseWriter, _ *http.Request, sectionID int) {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	// Get patrol list for this section
+	scores := state.scores[sectionID]
+	patrols := make([]types.PatrolInfo, len(scores))
+	for i, s := range scores {
+		patrols[i] = types.PatrolInfo{
+			ID:   s.ID,
+			Name: s.Name,
+		}
+	}
+
+	// Get colors
+	colors := state.settings[sectionID]
+	if colors == nil {
+		colors = make(map[string]string)
+	}
+
+	slog.Info("mock_server.settings.fetched",
+		"component", "mock_server",
+		"event", "settings.fetched",
+		"section_id", sectionID,
+		"patrol_count", len(patrols),
+		"color_count", len(colors),
+	)
+
+	writeJSON(w, handlers.AdminSettingsResponse{
+		SectionID:    sectionID,
+		PatrolColors: colors,
+		Patrols:      patrols,
+	})
+}
+
+// handleUpdateSettings updates settings for a section
+func handleUpdateSettings(w http.ResponseWriter, r *http.Request, sectionID int) {
+	// Validate CSRF token
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken != mockCSRFToken {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return
+	}
+
+	// Parse request
+	var req handlers.AdminSettingsUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+		return
+	}
+
+	// Update settings
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.settings[sectionID] == nil {
+		state.settings[sectionID] = make(map[string]string)
+	}
+
+	// Replace all colors
+	state.settings[sectionID] = req.PatrolColors
+
+	slog.Info("mock_server.settings.updated",
+		"component", "mock_server",
+		"event", "settings.updated",
+		"section_id", sectionID,
+		"color_count", len(req.PatrolColors),
+	)
+
+	writeJSON(w, handlers.AdminSettingsResponse{
+		SectionID:    sectionID,
+		PatrolColors: req.PatrolColors,
+		Patrols:      nil, // Don't need to return patrols for PUT
 	})
 }

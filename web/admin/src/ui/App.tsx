@@ -1,6 +1,9 @@
+import {useState} from 'react';
 import {useServiceWorkerUpdates, useWorkerBootstrap} from './hooks';
 import {selectGlobalError, selectIsAuthenticated, selectIsLoading, selectUserName, useAppSelector} from './state';
-import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, ToastProvider, UpdatePrompt} from './components';
+import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, SettingsPage, SectionSelector, ToastProvider, UpdatePrompt} from './components';
+
+type Tab = 'scores' | 'settings';
 
 /**
  * Main application component using Redux and worker-based architecture.
@@ -69,17 +72,46 @@ export function App() {
     }
 
     // Show authenticated content
+    return <AuthenticatedApp userName={userName} />;
+}
+
+/**
+ * Authenticated app content with tab navigation.
+ */
+function AuthenticatedApp({ userName }: { userName: string | null }) {
+    const [activeTab, setActiveTab] = useState<Tab>('scores');
+
     return (
         <ToastProvider>
             <UpdatePrompt/>
             <ErrorDialog/>
             <div className="app">
                 <header className="header">
-                    <h1>Patrol Scores Admin</h1>
-                    <p>Logged in as: {userName}</p>
+                    <div className="header-content">
+                        <h1 className="header-title">Patrol Scores Admin</h1>
+                        <div className="header-user">
+                            <span className="header-user-name">{userName}</span>
+                        </div>
+                    </div>
                 </header>
+                <nav className="nav-tabs">
+                    <button
+                        className={`nav-tab ${activeTab === 'scores' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('scores')}
+                    >
+                        Scores
+                    </button>
+                    <button
+                        className={`nav-tab ${activeTab === 'settings' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('settings')}
+                    >
+                        Settings
+                    </button>
+                </nav>
                 <main className="main">
-                    <ScoreEntryPage csrfToken=""/>
+                    <SectionSelector />
+                    {activeTab === 'scores' && <ScoreEntryPage csrfToken=""/>}
+                    {activeTab === 'settings' && <SettingsPage />}
                 </main>
                 <footer className="footer">
                     <div className="footer-build">

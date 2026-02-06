@@ -144,7 +144,7 @@ describe('Service Worker Message Handlers', () => {
       expect(mockApiService.fetchSections).toHaveBeenCalled();
       expect(mockStore.setCanonicalSectionList).toHaveBeenCalledWith(sections);
       expect(client.postMessage).toHaveBeenCalledWith(
-        messages.newUserProfileMessage(userId, userName, sections, 1, TEST_REQUEST_ID, undefined, undefined)
+        messages.newUserProfileMessage(userId, userName, undefined, sections, 1, TEST_REQUEST_ID, undefined, undefined)
       );
       expect(mockStore.close).toHaveBeenCalled();
     });

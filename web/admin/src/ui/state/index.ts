@@ -72,6 +72,8 @@ export {
     refreshCurrentSection,
     syncNow,
     forceSync,
+    fetchSectionSettings,
+    saveSectionSettings,
 } from './workerThunks';
 
 // App slice - actions
@@ -85,4 +87,26 @@ export type {AppState} from './rootReducer';
 export {
     selectShouldShowUpdatePrompt,
     selectUpdateAvailable,
+} from './rootReducer';
+
+// Settings slice - actions
+export {
+    setCanonicalSettings,
+    setSettingsState,
+    setSettingsError,
+    updatePatrolColor,
+    setSaving,
+    setSaveError,
+    clearSaveError,
+} from './settingsSlice';
+
+// Settings slice - types and selectors (from rootReducer)
+export type {SettingsState, SectionSettingsState, PatrolInfo} from './rootReducer';
+export {
+    selectSettingsForSection,
+    selectPatrolColorsForSection,
+    selectPatrolsForSettings,
+    selectSettingsLoadState,
+    selectIsSavingSettings,
+    selectSettingsSaveError,
 } from './rootReducer';

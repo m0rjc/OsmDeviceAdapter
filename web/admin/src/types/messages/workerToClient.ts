@@ -33,6 +33,8 @@ export type UserProfileMessage = {
     requestId: string;
     userId: number;
     userName: string;
+    /** CSRF token for authenticated API requests */
+    csrfToken?: string;
     sections: Section[];
     /** Global revision number for the section list - increments when sections added/removed/changed */
     sectionsListRevision: number;
@@ -45,13 +47,14 @@ export type UserProfileMessage = {
 export function newUserProfileMessage(
     userId: number,
     userName: string,
+    csrfToken: string | undefined,
     sections: Section[],
     sectionsListRevision: number,
     requestId: string,
     lastError?: string,
     lastErrorTime?: number
 ) {
-    return { type: 'user-profile', requestId, userId, userName, sections, sectionsListRevision, lastError, lastErrorTime };
+    return { type: 'user-profile', requestId, userId, userName, csrfToken, sections, sectionsListRevision, lastError, lastErrorTime };
 }
 
 export type SectionListChangeMessage = {

@@ -68,3 +68,19 @@ export interface ErrorResponse {
   error: string;
   message: string;
 }
+
+// Settings API types
+export interface SettingsResponse {
+  sectionId: number;
+  patrolColors: Record<string, string>;
+  patrols: PatrolInfo[];
+}
+
+export interface PatrolInfo {
+  id: string;
+  name: string;
+}
+
+export interface SettingsUpdateRequest {
+  patrolColors: Record<string, string>;
+}

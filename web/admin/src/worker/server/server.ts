@@ -75,6 +75,18 @@ export type PatrolScoreUpdateResultError = {
 
 export type PatrolScoreUpdateResult = PatrolScoreUpdateResultSuccess | PatrolScoreUpdateResultTemporaryError | PatrolScoreUpdateResultError;
 
+// Settings response types
+export type SectionSettings = {
+  sectionId: number;
+  patrolColors: Record<string, string>;
+  patrols: PatrolInfoResponse[];
+}
+
+export type PatrolInfoResponse = {
+  id: string;
+  name: string;
+}
+
 /**
  * OsmAdapterApiService represents a connection to the OSMAdapter server.
  * This service is designed to be used within a service worker context.
@@ -256,6 +268,44 @@ export class OsmAdapterApiService {
       credentials: 'same-origin',
     });
     return raw.patrols;
+  }
+
+  /**
+   * Fetch settings for a specific section
+   * @throws {NetworkError} for network/offline errors
+   * @throws {ApiError} for API errors
+   */
+  async fetchSettings(sectionId: number): Promise<SectionSettings> {
+    const raw = await this.fetchAndHandle<api.SettingsResponse>(`/api/admin/sections/${sectionId}/settings`, {
+      credentials: 'same-origin',
+    });
+    return {
+      sectionId: raw.sectionId,
+      patrolColors: raw.patrolColors || {},
+      patrols: raw.patrols || [],
+    };
+  }
+
+  /**
+   * Update settings for a specific section
+   * @throws {NetworkError} for network/offline errors (retryable)
+   * @throws {ApiError} for API errors
+   */
+  async updateSettings(sectionId: number, patrolColors: Record<string, string>): Promise<SectionSettings> {
+    const raw = await this.fetchAndHandle<api.SettingsResponse>(`/api/admin/sections/${sectionId}/settings`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': this.csrfToken || '',
+      },
+      body: JSON.stringify({ patrolColors }),
+    });
+    return {
+      sectionId: raw.sectionId,
+      patrolColors: raw.patrolColors || {},
+      patrols: raw.patrols || [],
+    };
   }
 
   /**

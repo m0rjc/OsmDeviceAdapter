@@ -21,6 +21,14 @@ import {
 } from "./patrolsSlice.ts";
 import {setGlobalError, showErrorDialog} from "./dialogSlice.ts";
 import type {AppDispatch} from "./store.ts";
+import {
+    setCanonicalSettings,
+    setSettingsError,
+    setSettingsState,
+    setSaving,
+    setSaveError,
+} from "./settingsSlice.ts";
+import {OsmAdapterApiService} from "../../worker/server/server";
 
 type AppThunkConfig = {
     state: RootState;
@@ -77,7 +85,7 @@ export const handleUserProfileMessage = createAsyncThunk<
     AppThunkConfig>(
     'worker/handleUserProfileMessage',
     async (message: UserProfileMessage, {dispatch, getState}) => {
-        dispatch(setUser(message));
+        dispatch(setUser({userId: message.userId, userName: message.userName, csrfToken: message.csrfToken}));
 
         const currentVersion = getState().patrols.sectionIdListVersion;
         if (currentVersion >= message.sectionsListRevision) {
@@ -403,5 +411,93 @@ export const forceSync = createAsyncThunk<
 
         const worker: Worker = await GetWorker();
         worker.sendForceSyncRequest(userId, selectedSection.id);
+    }
+);
+
+// ============================================================================
+// Settings Thunks
+// ============================================================================
+
+// Version counter for settings requests
+let settingsVersion = 0;
+
+/**
+ * Thunk to fetch settings for a section.
+ * Settings are fetched directly from the API (not via worker) since they
+ * don't require offline support.
+ */
+export const fetchSectionSettings = createAsyncThunk<
+    void,
+    number,
+    AppThunkConfig
+>(
+    'settings/fetchSectionSettings',
+    async (sectionId, {getState, dispatch}) => {
+        const state = getState();
+        const userId = state.user.userId;
+        const csrfToken = state.user.csrfToken;
+
+        if (!userId) {
+            throw new Error('User not authenticated');
+        }
+
+        const version = ++settingsVersion;
+        dispatch(setSettingsState({sectionId, stateName: 'loading'}));
+
+        try {
+            const api = new OsmAdapterApiService(userId, state.user.userName ?? undefined, csrfToken ?? undefined);
+            const settings = await api.fetchSettings(sectionId);
+
+            dispatch(setCanonicalSettings({
+                sectionId,
+                version,
+                patrolColors: settings.patrolColors,
+                patrols: settings.patrols,
+            }));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to fetch settings';
+            dispatch(setSettingsError({sectionId, version, error: message}));
+            throw error;
+        }
+    }
+);
+
+/**
+ * Thunk to save section settings.
+ */
+export const saveSectionSettings = createAsyncThunk<
+    void,
+    {sectionId: number, patrolColors: Record<string, string>},
+    AppThunkConfig
+>(
+    'settings/saveSectionSettings',
+    async ({sectionId, patrolColors}, {getState, dispatch}) => {
+        const state = getState();
+        const userId = state.user.userId;
+        const csrfToken = state.user.csrfToken;
+
+        if (!userId) {
+            throw new Error('User not authenticated');
+        }
+
+        dispatch(setSaving({sectionId, saving: true}));
+
+        try {
+            const api = new OsmAdapterApiService(userId, state.user.userName ?? undefined, csrfToken ?? undefined);
+            const updatedSettings = await api.updateSettings(sectionId, patrolColors);
+
+            // Update state with the server response
+            const version = ++settingsVersion;
+            dispatch(setCanonicalSettings({
+                sectionId,
+                version,
+                patrolColors: updatedSettings.patrolColors,
+                patrols: state.settings.sections[sectionId]?.patrols ?? [],
+            }));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to save settings';
+            dispatch(setSaveError({sectionId, error: message}));
+            throw error;
+        }
     }
 );

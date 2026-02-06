@@ -236,8 +236,38 @@ func (ScoreAuditLog) TableName() string {
 	return "score_audit_log"
 }
 
+// SectionSettings stores user-configurable settings for a section.
+// Settings are scoped per OSM user + section combination.
+type SectionSettings struct {
+	// OSMUserID is the OSM user who owns these settings
+	OSMUserID int `gorm:"primaryKey;column:osm_user_id;not null"`
+
+	// SectionID is the section these settings apply to
+	SectionID int `gorm:"primaryKey;column:section_id;not null"`
+
+	// Settings is a JSONB column storing all settings as a flexible JSON object.
+	// Current schema:
+	// {
+	//   "patrolColors": {
+	//     "<patrolId>": "#RRGGBB",
+	//     ...
+	//   }
+	// }
+	Settings []byte `gorm:"column:settings;type:jsonb;not null;default:'{}'"`
+
+	// CreatedAt is when this record was created
+	CreatedAt time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+
+	// UpdatedAt is when this record was last modified
+	UpdatedAt time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
+}
+
+func (SectionSettings) TableName() string {
+	return "section_settings"
+}
+
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{}, &WebSession{}, &ScoreAuditLog{})
+	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{}, &WebSession{}, &ScoreAuditLog{}, &SectionSettings{})
 }
 
 // User returns the OSM user associated with this Device, or nil if this
