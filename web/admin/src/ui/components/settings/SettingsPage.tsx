@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import {
   useAppDispatch,
   useAppSelector,
@@ -25,13 +25,6 @@ export function SettingsPage() {
   const settings = useAppSelector((state) =>
     sectionId !== undefined ? selectSettingsForSection(state, sectionId) : null
   );
-
-  // Fetch settings when section changes
-  useEffect(() => {
-    if (sectionId !== undefined && settings?.loadState === 'uninitialized') {
-      dispatch(fetchSectionSettings(sectionId));
-    }
-  }, [sectionId, settings?.loadState, dispatch]);
 
   // Handle color change
   const handleColorChange = useCallback(

@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useState} from 'react';
 import {
     clearUserEntriesForSection,
     refreshCurrentSection,
@@ -58,27 +58,6 @@ export function ScoreEntryPage({csrfToken: _csrfToken}: ScoreEntryPageProps) {
 
     // Local UI state
     const [showConfirm, setShowConfirm] = useState(false);
-
-    // Auto-retry timer based on nextRetryTime
-    useEffect(() => {
-        if (!selectedSection?.nextRetryTime) {
-            return;
-        }
-
-        const timeUntilRetry = selectedSection.nextRetryTime - Date.now();
-        if (timeUntilRetry <= 0) {
-            // Time has already passed, trigger sync immediately
-            dispatch(syncNow());
-            return;
-        }
-
-        // Set timer to trigger sync at nextRetryTime
-        const timer = setTimeout(() => {
-            dispatch(syncNow());
-        }, timeUntilRetry);
-
-        return () => clearTimeout(timer);
-    }, [selectedSection?.nextRetryTime, dispatch]);
 
     // Event handlers
     const handleRefresh = () => {

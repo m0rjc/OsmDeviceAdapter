@@ -10,7 +10,7 @@ import {setUnauthenticated, setUser} from './userSlice';
 import * as uiSlice from './uiSlice';
 import {selectSelectedSectionId} from './uiSlice';
 import type {RootState} from './rootReducer';
-import {selectChangesForCurrentSection, selectSelectedSection} from "./rootReducer";
+import {selectChangesForCurrentSection, selectSelectedSection, selectSettingsLoadState} from "./rootReducer";
 import {
     type SectionMetadata,
     setCanonicalPatrols,
@@ -78,6 +78,42 @@ function loadPatrolsIfNeeded({getState, dispatch}: ThunkApiBasics) {
     }
 }
 
+/**
+ * Fetch settings if needed for the currently selected section.
+ * Follows the same pattern as loadPatrolsIfNeeded.
+ */
+function loadSettingsIfNeeded({getState, dispatch}: ThunkApiBasics) {
+    const state = getState();
+    const selectedSection = selectSelectedSection(state);
+    if (selectedSection) {
+        const settingsLoadState = selectSettingsLoadState(state, selectedSection.id);
+        if (settingsLoadState === 'uninitialized') {
+            dispatch(fetchSectionSettings(selectedSection.id));
+        }
+    }
+}
+
+// Retry timer for auto-syncing pending scores
+let retryTimerId: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleRetry(dispatch: AppDispatch, nextRetryTime: number | undefined) {
+    if (retryTimerId !== null) {
+        clearTimeout(retryTimerId);
+        retryTimerId = null;
+    }
+    if (!nextRetryTime) return;
+
+    const delay = nextRetryTime - Date.now();
+    if (delay <= 0) {
+        dispatch(syncNow());
+    } else {
+        retryTimerId = setTimeout(() => {
+            retryTimerId = null;
+            dispatch(syncNow());
+        }, delay);
+    }
+}
+
 
 export const handleUserProfileMessage = createAsyncThunk<
     void,
@@ -96,6 +132,7 @@ export const handleUserProfileMessage = createAsyncThunk<
 
         setDefaultSectionIfNeeded({getState, dispatch});
         loadPatrolsIfNeeded({getState, dispatch});
+        loadSettingsIfNeeded({getState, dispatch});
 
         // Show an error dialog if we have an error
         if (message.lastError) {
@@ -139,6 +176,7 @@ export const handleSectionListChange = createAsyncThunk<
         // TODO: Put up a dialog explaining why the patrol list has changed under their feet (patrol disappeared).
         setDefaultSectionIfNeeded({getState, dispatch});
         loadPatrolsIfNeeded({getState, dispatch});
+        loadSettingsIfNeeded({getState, dispatch});
     }
 );
 
@@ -166,8 +204,9 @@ export const setSelectedSection = createAsyncThunk<
         // Update the selected section
         dispatch(uiSlice.setSelectedSectionId(sectionId));
 
-        // Check if we need to fetch patrols for this section
+        // Check if we need to fetch patrols and settings for this section
         loadPatrolsIfNeeded({getState, dispatch});
+        loadSettingsIfNeeded({getState, dispatch});
     }
 );
 
@@ -270,6 +309,12 @@ export const handlePatrolsChange = createAsyncThunk<
                 error: message.lastError,
                 version: message.uiRevision
             }));
+        }
+
+        // Schedule auto-retry if this message is for the selected section
+        const selectedSection = selectSelectedSection(getState());
+        if (selectedSection && message.sectionId === selectedSection.id) {
+            scheduleRetry(dispatch, message.nextRetryTime);
         }
     }
 )

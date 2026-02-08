@@ -259,6 +259,16 @@ body {
   overflow: hidden;
 }
 
+/* Patrol theme colors - subtle left border accent */
+.patrol-card.patrol-theme-red { border-left: 3px solid #dc2626; }
+.patrol-card.patrol-theme-green { border-left: 3px solid #16a34a; }
+.patrol-card.patrol-theme-blue { border-left: 3px solid #2563eb; }
+.patrol-card.patrol-theme-yellow { border-left: 3px solid #ca8a04; }
+.patrol-card.patrol-theme-cyan { border-left: 3px solid #0891b2; }
+.patrol-card.patrol-theme-magenta { border-left: 3px solid #c026d3; }
+.patrol-card.patrol-theme-orange { border-left: 3px solid #ea580c; }
+.patrol-card.patrol-theme-white { border-left: 3px solid #94a3b8; }
+
 .patrol-card-header {
   display: flex;
   justify-content: space-between;

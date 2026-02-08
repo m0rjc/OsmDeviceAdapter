@@ -57,6 +57,12 @@ registerRoute(
  * Listen for messages from clients.
  */
 self.addEventListener('message', (event) => {
+    // Handle vite-plugin-pwa skip waiting message for update flow
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+        return;
+    }
+
     const client = event.source as Client;
     const message = event.data as messages.ClientMessage;
     switch (message.type) {

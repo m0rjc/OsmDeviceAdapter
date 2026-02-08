@@ -1,5 +1,7 @@
 import {
     makeSelectPatrolById,
+    selectPatrolColorsForSection,
+    selectSelectedSectionId,
     selectUserScoreForPatrolKey,
     setPatrolScore,
     useAppDispatch,
@@ -7,6 +9,12 @@ import {
 } from '../../state';
 import {useMemo} from "react";
 import {PatrolErrorIcon} from './PatrolErrorIcon';
+import {COLOR_PALETTE} from '../settings/PatrolColorRow';
+
+/** Maps hex color values from the palette to CSS class suffixes */
+const COLOR_CLASS_MAP: Record<string, string> = Object.fromEntries(
+    COLOR_PALETTE.map(c => [c.value, c.label.toLowerCase()])
+);
 
 interface PatrolCardProps {
     patrolId: string;
@@ -27,7 +35,15 @@ export function PatrolCard({patrolId}: PatrolCardProps) {
     const selectPatrolById = useMemo(makeSelectPatrolById, []);
     const patrol = useAppSelector(state => selectPatrolById(state, patrolId));
     const userEntry: number = useAppSelector(state => selectUserScoreForPatrolKey(state, patrolId));
+    const sectionId = useAppSelector(selectSelectedSectionId);
+    const patrolColors = useAppSelector(state =>
+        sectionId ? selectPatrolColorsForSection(state, sectionId) : {}
+    );
     if (!patrol) return <span>WARN: Patrol id {patrolId} not found in patrol map</span>;
+
+    const colorHex = patrolColors[patrol.id];
+    const colorClass = colorHex ? COLOR_CLASS_MAP[colorHex] : undefined;
+    const themeClass = colorClass ? ` patrol-theme-${colorClass}` : '';
 
     const totalScore = patrol.committedScore + patrol.pendingScore + userEntry;
     const hasNetChange = (userEntry + patrol.pendingScore) !== 0;
@@ -46,7 +62,7 @@ export function PatrolCard({patrolId}: PatrolCardProps) {
     }
 
     return (
-        <div className={`patrol-card${patrol.pendingScore ? ' has-pending' : ''}`}>
+        <div className={`patrol-card${patrol.pendingScore ? ' has-pending' : ''}${themeClass}`}>
             <div className="patrol-card-header">
         <span className="patrol-name">
           {patrol.name}
