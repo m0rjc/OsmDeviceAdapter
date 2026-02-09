@@ -1,17 +1,22 @@
 import type { PatrolInfo } from '../../state';
 
 // Predefined color palette based on primary and secondary colors
-// The stored color represents the hue/theme - device firmware controls actual brightness
+// The stored value is the color name (used as CSS class suffix for theming)
 export const COLOR_PALETTE = [
-  { value: '#FF0000', label: 'Red' },
-  { value: '#00FF00', label: 'Green' },
-  { value: '#0000FF', label: 'Blue' },
-  { value: '#FFFF00', label: 'Yellow' },
-  { value: '#00FFFF', label: 'Cyan' },
-  { value: '#FF00FF', label: 'Magenta' },
-  { value: '#FF8000', label: 'Orange' },
-  { value: '#FFFFFF', label: 'White' },
+  { value: 'red', label: 'Red', hex: '#FF0000' },
+  { value: 'green', label: 'Green', hex: '#00FF00' },
+  { value: 'blue', label: 'Blue', hex: '#0000FF' },
+  { value: 'yellow', label: 'Yellow', hex: '#FFFF00' },
+  { value: 'cyan', label: 'Cyan', hex: '#00FFFF' },
+  { value: 'magenta', label: 'Magenta', hex: '#FF00FF' },
+  { value: 'orange', label: 'Orange', hex: '#FF8000' },
+  { value: 'white', label: 'White', hex: '#FFFFFF' },
 ] as const;
+
+/** Maps color name to hex for preview swatches */
+const COLOR_HEX_MAP: Record<string, string> = Object.fromEntries(
+    COLOR_PALETTE.map(c => [c.value, c.hex])
+);
 
 interface PatrolColorRowProps {
   patrol: PatrolInfo;
@@ -49,7 +54,7 @@ export function PatrolColorRow({ patrol, color, onChange, disabled }: PatrolColo
         {color && (
           <span
             className="patrol-color-preview"
-            style={{ backgroundColor: color }}
+            style={{ backgroundColor: COLOR_HEX_MAP[color] ?? color }}
             title={color}
           />
         )}

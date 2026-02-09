@@ -73,9 +73,9 @@ func init() {
 		},
 		settings: map[int]map[string]string{
 			1001: {
-				"patrol_1": "#FF0000", // Eagles - Red
-				"patrol_2": "#00FF00", // Hawks - Green
-				"patrol_3": "#0000FF", // Owls - Blue
+				"patrol_1": "red",   // Eagles
+				"patrol_2": "green", // Hawks
+				"patrol_3": "blue",  // Owls
 			},
 			1002: {}, // No colors set for section 1002
 		},

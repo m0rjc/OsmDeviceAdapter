@@ -9,12 +9,6 @@ import {
 } from '../../state';
 import {useMemo} from "react";
 import {PatrolErrorIcon} from './PatrolErrorIcon';
-import {COLOR_PALETTE} from '../settings/PatrolColorRow';
-
-/** Maps hex color values from the palette to CSS class suffixes */
-const COLOR_CLASS_MAP: Record<string, string> = Object.fromEntries(
-    COLOR_PALETTE.map(c => [c.value, c.label.toLowerCase()])
-);
 
 interface PatrolCardProps {
     patrolId: string;
@@ -41,9 +35,8 @@ export function PatrolCard({patrolId}: PatrolCardProps) {
     );
     if (!patrol) return <span>WARN: Patrol id {patrolId} not found in patrol map</span>;
 
-    const colorHex = patrolColors[patrol.id];
-    const colorClass = colorHex ? COLOR_CLASS_MAP[colorHex] : undefined;
-    const themeClass = colorClass ? ` patrol-theme-${colorClass}` : '';
+    const colorName = patrolColors[patrol.id];
+    const themeClass = colorName ? ` patrol-theme-${colorName}` : '';
 
     const totalScore = patrol.committedScore + patrol.pendingScore + userEntry;
     const hasNetChange = (userEntry + patrol.pendingScore) !== 0;
