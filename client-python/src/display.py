@@ -4,7 +4,7 @@ Handles all LED matrix display operations for the 64x32 Adafruit RGB Matrix HAT.
 """
 
 import time
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 try:
     from rgbmatrix import RGBMatrix, RGBMatrixOptions, graphics
     MATRIX_AVAILABLE = True
@@ -22,11 +22,36 @@ except ImportError:
         print("WARNING: qrcode library not available. QR codes will not be displayed.")
 
 
+# Maps color names (from admin UI) to RGB tuples for LED driver
+COLOR_RGB_MAP = {
+    "red":     (255, 0, 0),
+    "green":   (0, 255, 0),
+    "blue":    (0, 0, 255),
+    "yellow":  (255, 255, 0),
+    "cyan":    (0, 255, 255),
+    "magenta": (255, 0, 255),
+    "orange":  (255, 128, 0),
+    "white":   (255, 255, 255),
+}
+
+# Bar brightness scale factor (0.0-1.0). Keeps bars dimmer than text for readability.
+BAR_BRIGHTNESS = 0.25
+
+# Bar graph dimensions within each 8-row patrol strip
+BAR_HEIGHT = 5   # rows
+BAR_WIDTH = 48   # columns (max LEDs = BAR_WIDTH * BAR_HEIGHT = 240)
+BAR_MAX_LEDS = BAR_WIDTH * BAR_HEIGHT  # 240
+
+# Default bar color when patrol has no configured color
+DEFAULT_BAR_COLOR = "green"
+
+
 class PatrolScore:
     """Represents a patrol and its score."""
-    def __init__(self, name: str, score: int):
+    def __init__(self, name: str, score: int, patrol_id: str = ""):
         self.name = name
         self.score = score
+        self.id = patrol_id
 
 
 class MatrixDisplay:
@@ -321,13 +346,69 @@ class MatrixDisplay:
         if self.simulate:
             print(f"[DISPLAY ERROR] {error}")
 
-    def show_scores(self, patrols: List[PatrolScore], rate_limit_state: str = "NONE"):
-        """Display patrol names and scores with status indicator.
+    def draw_bar(self, x: int, y: int, width: int, height: int,
+                 score: int, max_score: int, color: Tuple[int, int, int]):
+        """Draw a bar graph using bottom-fill algorithm.
+
+        LEDs fill from the bottom of each column upward, then move to the
+        next column left-to-right. LED n maps to:
+            column = n // height
+            row    = (height - 1) - (n % height)
+
+        Args:
+            x: Left edge X coordinate of bar area
+            y: Top edge Y coordinate of bar area
+            width: Number of columns available
+            height: Number of rows for the bar
+            score: Number of LEDs to light
+            max_score: Maximum LEDs (width * height), used for clamping
+            color: Base RGB tuple (will be scaled by BAR_BRIGHTNESS)
+        """
+        num_leds = min(score, max_score)
+        if num_leds <= 0:
+            return
+
+        # Scale color by brightness
+        r = int(color[0] * BAR_BRIGHTNESS)
+        g = int(color[1] * BAR_BRIGHTNESS)
+        b = int(color[2] * BAR_BRIGHTNESS)
+
+        if not self.simulate:
+            for n in range(num_leds):
+                col = n // height
+                row = (height - 1) - (n % height)
+                self.canvas.SetPixel(x + col, y + row, r, g, b)
+
+    def draw_zigzag(self, x: int, y: int, height: int,
+                    color: Tuple[int, int, int] = (80, 80, 80)):
+        """Draw a broken-axis zigzag indicator in a single column.
+
+        Alternating pixels: ON at even rows, OFF at odd rows.
+
+        Args:
+            x: Column X coordinate
+            y: Top edge Y coordinate
+            height: Number of rows
+            color: RGB tuple for the zigzag pixels
+        """
+        if not self.simulate:
+            for row in range(height):
+                if row % 2 == 0:  # ON at rows 0, 2, 4
+                    self.canvas.SetPixel(x, y + row, color[0], color[1], color[2])
+
+    def show_scores(self, patrols: List[PatrolScore], rate_limit_state: str = "NONE",
+                    patrol_colors: Dict[str, str] = None, score_offset: int = 0):
+        """Display patrol names and scores with bar graphs and status indicator.
 
         Args:
             patrols: List of PatrolScore objects (up to 4)
             rate_limit_state: Current rate limit state for status indicator
+            patrol_colors: Dict mapping patrol ID to color name (e.g., {"123": "red"})
+            score_offset: Score offset for broken-axis display (subtracted from scores)
         """
+        if patrol_colors is None:
+            patrol_colors = {}
+
         self.clear()
 
         # Special handling for service blocked - show message instead of scores
@@ -345,23 +426,46 @@ class MatrixDisplay:
                 print("="*40 + "\n")
             return
 
+        # Determine bar start column and max LEDs based on offset
+        has_offset = score_offset > 0
+        bar_start_col = 1 if has_offset else 0
+        bar_cols = BAR_WIDTH - bar_start_col
+        bar_max = bar_cols * BAR_HEIGHT
+
         # Display up to 4 patrols
         row_height = 8
         for i, patrol in enumerate(patrols[:4]):
-            y = (i * row_height) + 8  # Baseline for text (moved down slightly)
+            strip_y = i * row_height       # Top of this patrol's strip
+            bar_y = strip_y + 3            # Bar occupies rows 3-7 within the strip (5 rows)
+            text_y = strip_y + 8           # Baseline for text
+
+            # Calculate display score (after offset)
+            display_score = max(0, patrol.score - score_offset)
+
+            # Look up bar color
+            color_name = patrol_colors.get(patrol.id, DEFAULT_BAR_COLOR)
+            bar_rgb = COLOR_RGB_MAP.get(color_name, COLOR_RGB_MAP[DEFAULT_BAR_COLOR])
+
+            # Draw zigzag broken-axis indicator if offset is active
+            if has_offset:
+                self.draw_zigzag(0, bar_y, BAR_HEIGHT)
+
+            # Draw bar graph behind text
+            self.draw_bar(bar_start_col, bar_y, bar_cols, BAR_HEIGHT,
+                          display_score, bar_max, bar_rgb)
 
             # Draw patrol name (left justified, using small font)
             name = patrol.name
             if len(name) > 11:  # Truncate long names (small font fits more)
                 name = name[:11]
-            self.draw_text(1, y, name, color=(0, 255, 0), font_size="small")
+            self.draw_text(1, text_y, name, color=(0, 255, 0), font_size="small")
 
             # Draw score (right justified, using small font)
             score_text = str(patrol.score)
             # Small font is 5 pixels wide per character
             score_width = len(score_text) * 5
             score_x = self.cols - score_width - 2  # Extra padding from edge
-            self.draw_text(score_x, y, score_text, color=(255, 255, 0), font_size="small")
+            self.draw_text(score_x, text_y, score_text, color=(255, 255, 0), font_size="small")
 
         # Draw status indicator
         self.draw_status_indicator(rate_limit_state)
@@ -370,11 +474,15 @@ class MatrixDisplay:
 
         if self.simulate:
             print("\n" + "="*40)
-            print("SCOREBOARD")
+            print(f"SCOREBOARD (offset={score_offset})")
             print("="*40)
             for patrol in patrols[:4]:
-                print(f"{patrol.name:<20} {patrol.score:>10}")
+                display_score = max(0, patrol.score - score_offset)
+                color_name = patrol_colors.get(patrol.id, DEFAULT_BAR_COLOR)
+                print(f"{patrol.name:<15} {patrol.score:>6}  bar={display_score:>3} [{color_name}]")
             print(f"\nStatus: {rate_limit_state}")
+            if has_offset:
+                print(f"Broken axis: offset={score_offset}")
             print("="*40 + "\n")
 
     def show_message(self, message: str, color: Tuple[int, int, int] = (255, 255, 255)):

@@ -47,6 +47,11 @@ class PatrolScoresResponse:
     cached_at: datetime
     cache_expires_at: datetime
     rate_limit_state: str  # "NONE", "DEGRADED", "USER_TEMPORARY_BLOCK", "SERVICE_BLOCKED"
+    patrol_colors: Dict[str, str] = None  # Maps patrol ID to color name (e.g., "red", "blue")
+
+    def __post_init__(self):
+        if self.patrol_colors is None:
+            self.patrol_colors = {}
 
 
 class DeviceFlowError(Exception):
@@ -273,12 +278,16 @@ class OSMDeviceClient:
             cached_at = datetime.fromisoformat(data["cached_at"].replace('Z', '+00:00'))
             cache_expires_at = datetime.fromisoformat(data["cache_expires_at"].replace('Z', '+00:00'))
 
+            # Extract patrol colors from settings if present
+            patrol_colors = data.get("settings", {}).get("patrolColors", {}) if data.get("settings") else {}
+
             return PatrolScoresResponse(
                 patrols=patrols,
                 from_cache=data.get("from_cache", False),
                 cached_at=cached_at,
                 cache_expires_at=cache_expires_at,
-                rate_limit_state=data.get("rate_limit_state", "NONE")
+                rate_limit_state=data.get("rate_limit_state", "NONE"),
+                patrol_colors=patrol_colors,
             )
 
         except requests.exceptions.RequestException as e:

@@ -4,7 +4,7 @@ package types
 // These settings are configured by users via the admin UI and included
 // in the /api/v1/patrols response for devices to consume.
 type DeviceSettings struct {
-	// PatrolColors maps patrol IDs to hex color codes (e.g., "#FF0000")
+	// PatrolColors maps patrol IDs to color names (e.g., "red", "blue")
 	// Colors represent the hue/theme - device firmware controls actual brightness
 	PatrolColors map[string]string `json:"patrolColors,omitempty"`
 }
