@@ -8,7 +8,7 @@ import {
   saveSectionSettings,
   updatePatrolColor,
 } from '../../state';
-import { Loading } from '../../../legacy/components';
+import { Loading } from '../Loading';
 import { MessageCard } from '../MessageCard';
 import { PatrolColorList } from './PatrolColorList';
 import { useToast } from '../../hooks';

@@ -11,7 +11,7 @@ import {
     useAppDispatch,
     useAppSelector
 } from '../../state';
-import {ConfirmDialog, Loading} from '../../../legacy/components';
+import {ConfirmDialog, Loading} from '..';
 import {useToast} from '../../hooks';
 import {MessageCard} from '../MessageCard';
 import {ScoreHeader} from './ScoreHeader';
