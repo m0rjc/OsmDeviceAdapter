@@ -38,8 +38,10 @@ charts/secrets/values-prod.yaml
 charts/secrets/values-*.yaml
 !charts/secrets/values-example.yaml
 
-# Built server (often built here by Claude)
+# Built server binaries (often built here by Claude)
 /server
+/mock-admin-server
+/mock-osm-server
 
 # Deployment values files with secrets
 values-dev.yaml
