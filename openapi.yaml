@@ -1,0 +1,515 @@
+openapi: 3.0.3
+info:
+  title: OSM Device Adapter API
+  description: OAuth Device Flow bridge for IoT scoreboard devices with Online Scout Manager
+  version: 1.0.0
+  contact:
+    name: OSM Device Adapter
+servers:
+  - url: https://osma.m0rjc.me.uk
+    description: Production server
+
+tags:
+  - name: Device OAuth
+    description: RFC 8628 Device Authorization Flow endpoints
+  - name: OAuth Web
+    description: OAuth Web Flow for OSM integration
+  - name: Admin Web
+    description: Admin authentication endpoints
+  - name: Admin API
+    description: Admin score management API
+  - name: Scoreboard API
+    description: Device API for fetching patrol scores
+
+paths:
+  /:
+    get:
+      summary: Home page
+      tags:
+        - General
+      responses:
+        '200':
+          description: Home page HTML
+
+  # Device OAuth Flow (RFC 8628)
+  /device/authorize:
+    post:
+      summary: Start device authorization flow
+      tags:
+        - Device OAuth
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - client_id
+              properties:
+                client_id:
+                  type: string
+                  description: Device client identifier
+                scope:
+                  type: string
+                  description: Requested OAuth scopes
+      responses:
+        '200':
+          description: Device authorization response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device_code:
+                    type: string
+                  user_code:
+                    type: string
+                  verification_uri:
+                    type: string
+                  verification_uri_complete:
+                    type: string
+                  expires_in:
+                    type: integer
+                  interval:
+                    type: integer
+        '400':
+          description: Invalid request
+        '429':
+          description: Rate limit exceeded
+
+  /device/token:
+    post:
+      summary: Poll for device authorization token
+      tags:
+        - Device OAuth
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - grant_type
+                - device_code
+                - client_id
+              properties:
+                grant_type:
+                  type: string
+                  enum:
+                    - urn:ietf:params:oauth:grant-type:device_code
+                device_code:
+                  type: string
+                client_id:
+                  type: string
+      responses:
+        '200':
+          description: Authorization complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  token_type:
+                    type: string
+                  expires_in:
+                    type: integer
+                  scope:
+                    type: string
+        '400':
+          description: Authorization pending, denied, or expired
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum:
+                      - authorization_pending
+                      - slow_down
+                      - access_denied
+                      - expired_token
+                  error_description:
+                    type: string
+
+  /device:
+    get:
+      summary: User verification page
+      tags:
+        - Device OAuth
+      parameters:
+        - name: user_code
+          in: query
+          schema:
+            type: string
+          description: User code from device
+      responses:
+        '200':
+          description: Verification page HTML
+        '302':
+          description: Redirect to OAuth authorize
+
+  /d/{short_code}:
+    get:
+      summary: Short URL redirect for QR codes
+      tags:
+        - Device OAuth
+      parameters:
+        - name: short_code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Short code from QR code
+      responses:
+        '302':
+          description: Redirect to full verification URL
+
+  /device/confirm:
+    post:
+      summary: Confirm device authorization
+      tags:
+        - Device OAuth
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                session_id:
+                  type: string
+      responses:
+        '200':
+          description: Authorization confirmed
+        '302':
+          description: Redirect after confirmation
+
+  /device/cancel:
+    post:
+      summary: Cancel device authorization
+      tags:
+        - Device OAuth
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                session_id:
+                  type: string
+      responses:
+        '200':
+          description: Authorization cancelled
+        '302':
+          description: Redirect after cancellation
+
+  /device/select-section:
+    post:
+      summary: Select section after OAuth
+      tags:
+        - Device OAuth
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - session_id
+                - section_id
+              properties:
+                session_id:
+                  type: string
+                section_id:
+                  type: string
+      responses:
+        '302':
+          description: Redirect after section selection
+
+  # OAuth Web Flow
+  /oauth/authorize:
+    get:
+      summary: Initiate OAuth flow with OSM
+      tags:
+        - OAuth Web
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to OSM OAuth
+
+  /oauth/callback:
+    get:
+      summary: OAuth callback from OSM
+      tags:
+        - OAuth Web
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect after OAuth completion
+
+  # Admin Web Interface
+  /admin/login:
+    get:
+      summary: Initiate admin OAuth flow
+      tags:
+        - Admin Web
+      responses:
+        '302':
+          description: Redirect to OSM OAuth
+
+  /admin/callback:
+    get:
+      summary: Admin OAuth callback
+      tags:
+        - Admin Web
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to admin interface
+
+  /admin/logout:
+    post:
+      summary: Admin logout
+      tags:
+        - Admin Web
+      security:
+        - cookieAuth: []
+      responses:
+        '302':
+          description: Redirect after logout
+
+  /admin/{path}:
+    get:
+      summary: Admin SPA static files
+      tags:
+        - Admin Web
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: SPA route path
+      responses:
+        '200':
+          description: Admin SPA HTML/JS/CSS
+
+  # Admin API
+  /api/admin/session:
+    get:
+      summary: Get current admin session
+      tags:
+        - Admin API
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Session information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated:
+                    type: boolean
+                  user_id:
+                    type: string
+                  selected_section_id:
+                    type: string
+                  csrf_token:
+                    type: string
+        '401':
+          description: Not authenticated
+
+  /api/admin/sections:
+    get:
+      summary: List available sections
+      tags:
+        - Admin API
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: List of sections
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sections:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        section_id:
+                          type: string
+                        section_name:
+                          type: string
+        '401':
+          description: Not authenticated
+
+  /api/admin/sections/{section_id}/scores:
+    get:
+      summary: Get patrol scores for section
+      tags:
+        - Admin API
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: section_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Patrol scores
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  patrols:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        patrol_id:
+                          type: string
+                        patrol_name:
+                          type: string
+                        total:
+                          type: number
+        '401':
+          description: Not authenticated
+        '403':
+          description: Not authorized for this section
+
+    post:
+      summary: Update patrol scores
+      tags:
+        - Admin API
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: section_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-CSRF-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - patrol_id
+                - points
+              properties:
+                patrol_id:
+                  type: string
+                points:
+                  type: number
+                  description: Points to add (can be negative)
+      responses:
+        '200':
+          description: Score updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  new_total:
+                    type: number
+        '400':
+          description: Invalid request
+        '401':
+          description: Not authenticated
+        '403':
+          description: CSRF token invalid or not authorized
+
+  # Scoreboard API
+  /api/v1/patrols:
+    get:
+      summary: Get patrol scores (device API)
+      tags:
+        - Scoreboard API
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Patrol scores
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  patrols:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        patrol_id:
+                          type: string
+                        patrol_name:
+                          type: string
+                        total:
+                          type: number
+                  cached:
+                    type: boolean
+                  cached_at:
+                    type: string
+                    format: date-time
+        '401':
+          description: Invalid or expired device token
+        '429':
+          description: Rate limit exceeded
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Device access token from /device/token
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: osm_device_adapter_session
+      description: Admin session cookie from /admin/callback
