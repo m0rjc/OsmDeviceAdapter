@@ -47,6 +47,8 @@ class ScoreboardApp:
         self.authenticated = False
         self.cache_expires_at = None  # Track when to poll next
         self.current_rate_limit_state = "NONE"  # Track current state
+        self.score_offset = 0          # Bar graph offset for broken-axis display
+        self.offset_initialized = False  # False until first successful score fetch
 
         # Set up signal handler for SIGTERM (SIGINT/CTRL-C handled by KeyboardInterrupt)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -154,14 +156,34 @@ class ScoreboardApp:
             self.cache_expires_at = response.cache_expires_at
             self.current_rate_limit_state = response.rate_limit_state
 
+            # Calculate bar graph offset
+            if response.patrols:
+                max_score = max(p.score for p in response.patrols)
+                if not self.offset_initialized:
+                    # First fetch: set offset if scores exceed bar capacity
+                    if max_score > 240:
+                        self.score_offset = max_score - 200
+                    else:
+                        self.score_offset = 0
+                    self.offset_initialized = True
+                else:
+                    # Subsequent fetches: only recalculate if a score overflows
+                    if any(p.score - self.score_offset > 240 for p in response.patrols):
+                        self.score_offset = max_score - 200
+
             # Convert to display format
             display_patrols = [
-                DisplayPatrolScore(name=p.name, score=p.score)
+                DisplayPatrolScore(name=p.name, score=p.score, patrol_id=p.id)
                 for p in response.patrols
             ]
 
-            # Update display with status indicator
-            self.display.show_scores(display_patrols, response.rate_limit_state)
+            # Update display with bar graphs and status indicator
+            self.display.show_scores(
+                display_patrols,
+                response.rate_limit_state,
+                patrol_colors=response.patrol_colors,
+                score_offset=self.score_offset,
+            )
 
         except SectionNotFound as e:
             logger.error(f"Section not found: {e}")

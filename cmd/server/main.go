@@ -19,6 +19,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/server"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/services/scoreupdateservice"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/tokenrefresh"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/webauth"
 )
@@ -82,14 +83,18 @@ func main() {
 	// Create OSM client (token refresh is handled via context-bound functions)
 	osmClient := osm.NewClient(cfg.ExternalDomains.OSMDomain, rlStore, recorder)
 
+	// Create score update service with distributed locking
+	scoreUpdateService := scoreupdateservice.New(osmClient, conns)
+
 	// Create handler dependencies
 	deps := &handlers.Dependencies{
-		Config:     cfg,
-		Conns:      conns,
-		OSM:        osmClient,
-		OSMAuth:    oauthClient,
-		DeviceAuth: deviceAuthService,
-		WebAuth:    webAuthService,
+		Config:             cfg,
+		Conns:              conns,
+		OSM:                osmClient,
+		OSMAuth:            oauthClient,
+		DeviceAuth:         deviceAuthService,
+		WebAuth:            webAuthService,
+		ScoreUpdateService: scoreUpdateService,
 	}
 
 	// Create and configure HTTP server

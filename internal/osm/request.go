@@ -17,6 +17,7 @@ import (
 
 var (
 	ErrServiceBlocked = fmt.Errorf("OSM service blocked")
+	ErrUnauthorized   = fmt.Errorf("unauthorized")
 )
 
 // fallbackUserBlockTime is the last resort block time to apply if we cannot find a block time from headers.
@@ -346,6 +347,17 @@ func (c *Client) Request(ctx context.Context, method string, target any, options
 		if retryOpts := c.attemptTokenRefreshAndRetry(ctx, options, endpoint); retryOpts != nil {
 			return c.Request(ctx, method, target, retryOpts...)
 		}
+	}
+
+	// If we get a 401 and couldn't refresh or already retried, return ErrUnauthorized
+	if resp.StatusCode == http.StatusUnauthorized {
+		slog.Error("osm.api.unauthorized",
+			"component", "osm_api",
+			"event", "api.unauthorized",
+			"endpoint", endpoint,
+			"duration_ms", duration.Milliseconds(),
+		)
+		return osmResponse, ErrUnauthorized
 	}
 
 	if resp.StatusCode != http.StatusOK {

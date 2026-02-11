@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/admin"
@@ -53,7 +54,17 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 
 	mux.Handle("/api/admin/session", adminMiddleware(handlers.AdminSessionHandler(deps)))
 	mux.Handle("/api/admin/sections", adminMiddleware(handlers.AdminSectionsHandler(deps)))
-	mux.Handle("/api/admin/sections/", adminMiddleware(handlers.AdminScoresHandler(deps)))
+	// Route settings before scores - Go's mux uses longest match, but we need to check path suffix
+	// Settings endpoint: /api/admin/sections/{id}/settings
+	// Scores endpoint: /api/admin/sections/{id}/scores
+	mux.Handle("/api/admin/sections/", adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/settings") {
+			handlers.AdminSettingsHandler(deps).ServeHTTP(w, r)
+		} else {
+			handlers.AdminScoresHandler(deps).ServeHTTP(w, r)
+		}
+	})))
 
 	// Admin SPA (serves static files for /admin/*)
 	// Note: More specific routes (/admin/login, /admin/callback, /admin/logout, /api/admin/*)

@@ -151,3 +151,17 @@ func (r *RedisClient) ResetRateLimit(ctx context.Context, name, key string) erro
 	rateLimitKey := r.prefixKey(fmt.Sprintf("ratelimit:%s:%s", name, key))
 	return r.client.Del(ctx, rateLimitKey).Err()
 }
+
+// SetNX sets a key if it does not exist with the configured key prefix
+func (r *RedisClient) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd {
+	return r.client.SetNX(ctx, r.prefixKey(key), value, expiration)
+}
+
+// Eval executes a Lua script with the configured key prefix applied to keys
+func (r *RedisClient) Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd {
+	prefixedKeys := make([]string, len(keys))
+	for i, key := range keys {
+		prefixedKeys[i] = r.prefixKey(key)
+	}
+	return r.client.Eval(ctx, script, prefixedKeys, args...)
+}

@@ -11,7 +11,7 @@ export default defineConfig({
     react(),
     VitePWA({
       strategies: 'injectManifest',
-      srcDir: 'src',
+      srcDir: 'src/worker',
       filename: 'sw.ts',
       registerType: 'prompt',
       includeAssets: ['favicon.svg', 'icons/*.png'],
@@ -29,5 +29,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    sourcemap: true,  // Enable source maps for production builds
+  },
+  // Explicitly enable source maps in dev mode (default, but explicit)
+  server: {
+    sourcemapIgnoreList: () => false,  // Don't ignore any files in source maps
+    proxy: {
+      // Proxy API requests to the mock server (or real server)
+      '/api': {
+        target: process.env.VITE_API_URL || 'http://localhost:8081',
+        changeOrigin: true,
+      },
+    },
   },
 })
