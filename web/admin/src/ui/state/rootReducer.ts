@@ -3,7 +3,7 @@ import * as patrols from './patrolsSlice.ts';
 import * as user from './userSlice';
 import * as dialog from './dialogSlice';
 import * as ui from './uiSlice';
-import * as app from './appSlice';
+import type {AppState} from './appSlice';
 import * as settings from './settingsSlice';
 import patrolsReducer, {selectPatrolById, type UIPatrol} from './patrolsSlice.ts';
 import userReducer from './userSlice';
@@ -30,7 +30,7 @@ export type {PatrolsState, SectionMetadata, UIPatrol} from './patrolsSlice.ts';
 export type {UserState} from './userSlice';
 export type {DialogState} from './dialogSlice';
 export type {UiState} from './uiSlice';
-export type {AppState} from './appSlice';
+export type {AppState};
 export type {SettingsStateType as SettingsState, SectionSettingsState, PatrolInfo} from './settingsSlice';
 
 // Slice state extractors
@@ -38,7 +38,6 @@ const selectPatrolState: AppSelector<patrols.PatrolsState> = (state) => state.pa
 const selectUserState: AppSelector<user.UserState> = (state) => state.user;
 const selectDialogState: AppSelector<dialog.DialogState> = (state) => state.dialog;
 const selectUiState: AppSelector<ui.UiState> = (state) => state.ui;
-const selectAppState: AppSelector<app.AppState> = (state) => state.app;
 const _selectSettingsState: AppSelector<settings.SettingsStateType> = (state) => state.settings;
 void _selectSettingsState; // Reserved for future use
 
@@ -127,9 +126,6 @@ export const selectChangesForCurrentSection: AppSelector<Array<UserChange>> =
             })).filter((s: UserChange): boolean => s.score !== 0) ?? []
     );
 
-// App-level selectors for app slice (PWA lifecycle)
-export const selectShouldShowUpdatePrompt = createAppSelector([selectAppState], app.selectShouldShowUpdatePrompt);
-export const selectUpdateAvailable = createAppSelector([selectAppState], app.selectUpdateAvailable);
 
 // App-level selectors for settings slice
 export const selectSettingsForSection = (state: RootState, sectionId: number): settings.SectionSettingsState | null =>

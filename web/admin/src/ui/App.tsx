@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import {useServiceWorkerUpdates, useWorkerBootstrap} from './hooks';
 import {selectGlobalError, selectIsAuthenticated, selectIsLoading, selectUserName, useAppSelector} from './state';
-import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, SettingsPage, SectionSelector, ToastProvider, UpdatePrompt} from './components';
+import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, SettingsPage, SectionSelector, ToastProvider} from './components';
 
 type Tab = 'scores' | 'settings';
 
@@ -31,7 +31,6 @@ export function App() {
     if (globalError) {
         return (
             <ToastProvider>
-                <UpdatePrompt/>
                 <ErrorDialog/>
                 <div className="app">
                     <main className="main">
@@ -54,7 +53,6 @@ export function App() {
     if (isLoading) {
         return (
             <ToastProvider>
-                <UpdatePrompt/>
                 <LoadingBanner/>
             </ToastProvider>
         );
@@ -64,7 +62,6 @@ export function App() {
     if (!isAuthenticated) {
         return (
             <ToastProvider>
-                <UpdatePrompt/>
                 <ErrorDialog/>
                 <LoginPage/>
             </ToastProvider>
@@ -83,7 +80,6 @@ function AuthenticatedApp({ userName }: { userName: string | null }) {
 
     return (
         <ToastProvider>
-            <UpdatePrompt/>
             <ErrorDialog/>
             <div className="app">
                 <header className="header">

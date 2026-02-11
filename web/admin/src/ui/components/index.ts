@@ -5,7 +5,7 @@ export { MessageCard } from './MessageCard';
 export { Loading } from './Loading';
 export { ConfirmDialog } from './ConfirmDialog';
 export { LoadingBanner } from './LoadingBanner';
-export { UpdatePrompt } from './UpdatePrompt';
+
 export { ToastProvider } from './Toast';
 export * from './scores';
 export * from './settings';

@@ -76,18 +76,8 @@ export {
     saveSectionSettings,
 } from './workerThunks';
 
-// App slice - actions
-export {
-    setUpdateAvailable,
-    dismissUpdate,
-} from './appSlice';
-
-// App slice - types and selectors (from rootReducer)
+// App slice - types (from rootReducer)
 export type {AppState} from './rootReducer';
-export {
-    selectShouldShowUpdatePrompt,
-    selectUpdateAvailable,
-} from './rootReducer';
 
 // Settings slice - actions
 export {
