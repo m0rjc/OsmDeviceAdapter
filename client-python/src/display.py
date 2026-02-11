@@ -1,12 +1,19 @@
 """LED Matrix Display Module for Scoreboard
 
 Handles all LED matrix display operations for the 64x32 Adafruit RGB Matrix HAT.
+Uses a PIL frame buffer for all rendering with 1-bit (no anti-aliasing) text,
+which gives crisp pixel-perfect output on LED matrices where the gaps between
+pixels make anti-aliased intermediate brightness look muddy.
 """
 
+import os
+import tempfile
 import time
 from typing import Dict, List, Tuple, Optional
+from PIL import Image, ImageDraw, ImageFont, BdfFontFile
+
 try:
-    from rgbmatrix import RGBMatrix, RGBMatrixOptions, graphics
+    from rgbmatrix import RGBMatrix, RGBMatrixOptions
     MATRIX_AVAILABLE = True
 except ImportError:
     MATRIX_AVAILABLE = False
@@ -14,7 +21,6 @@ except ImportError:
 
 try:
     import qrcode
-    from PIL import Image
     QR_AVAILABLE = True
 except ImportError:
     QR_AVAILABLE = False
@@ -38,7 +44,15 @@ THEME_PALETTES = {
 }
 
 # Bar brightness scale factor (0.0-1.0). Keeps bars dimmer than text for readability.
-BAR_BRIGHTNESS = 0.25
+BAR_BRIGHTNESS = 0.40
+
+# Border brightness scale factor (0.0-1.0). Brighter than bars for a visible frame.
+BORDER_BRIGHTNESS = 0.60
+
+# Composite text colors: white at different intensities depending on whether
+# the text pixel overlaps a lit bar pixel or a dark background pixel.
+TEXT_ON_BAR = (255, 255, 255)   # 100% white over lit bar pixels
+TEXT_ON_DARK = (180, 180, 180)  # 80% white over dark pixels
 
 # Bar graph dimensions within each 8-row patrol strip
 BAR_HEIGHT = 5   # rows
@@ -47,6 +61,79 @@ BAR_MAX_LEDS = BAR_WIDTH * BAR_HEIGHT  # 240
 
 # Default bar color when patrol has no configured color
 DEFAULT_BAR_COLOR = "green"
+
+# BDF font search paths (pixel-perfect bitmap fonts for LED matrices)
+BDF_FONT_DIRS = [
+    "/usr/local/share/fonts/",  # Common install location
+    "/usr/share/fonts/",         # Alternative location
+    "./fonts/",                  # Local fonts directory
+]
+
+# TrueType fallback paths (used only if BDF fonts not available)
+TTF_FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+]
+
+# Fallback TrueType font sizes (at PIL's default 72 DPI, 1pt ≈ 1px)
+SMALL_FONT_SIZE = 8
+SMALL_FONT = "5x8.bdf"
+NORMAL_FONT_SIZE = 9
+NORMAL_FONT = "7x13.bdf"
+
+def _load_bdf_font(bdf_path: str) -> Optional[ImageFont.ImageFont]:
+    """Convert a BDF font to PIL format and load it.
+
+    PIL can't load BDF directly but has a converter. We convert to PIL's
+    bitmap font format (.pil/.pbm) in a temp directory and load from there.
+    """
+    try:
+        with open(bdf_path, "rb") as f:
+            bdf = BdfFontFile.BdfFontFile(f)
+            tmpdir = tempfile.mkdtemp(prefix="pilfonts_")
+            pil_path = os.path.join(tmpdir, "font")
+            bdf.save(pil_path)
+            font = ImageFont.load(pil_path + ".pil")
+            print(f"[DISPLAY] Loaded BDF font: {bdf_path}")
+            return font
+    except Exception as e:
+        print(f"[DISPLAY] Failed to load BDF font {bdf_path}: {e}")
+        return None
+
+
+def _load_truetype_font(size: int) -> ImageFont.FreeTypeFont:
+    """Try to load a TrueType font from common system locations."""
+    for path in TTF_FONT_PATHS:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    print(f"WARNING: No TrueType font found at size {size}, using PIL default bitmap font")
+    return ImageFont.load_default()
+
+
+def _load_fonts() -> Tuple[ImageFont.ImageFont, ImageFont.ImageFont]:
+    """Load fonts, preferring BDF bitmap fonts over TrueType.
+
+    Returns:
+        (normal_font, small_font) tuple
+    """
+    # Try BDF fonts first (pixel-perfect for LED matrices)
+    for base_path in BDF_FONT_DIRS:
+        normal_path = os.path.join(base_path, NORMAL_FONT )
+        small_path = os.path.join(base_path, SMALL_FONT )
+        if os.path.exists(normal_path) and os.path.exists(small_path):
+            normal = _load_bdf_font(normal_path)
+            small = _load_bdf_font(small_path)
+            if normal and small:
+                return normal, small
+
+    # Fall back to TrueType with 1-bit rendering
+    print("[DISPLAY] BDF fonts not found, falling back to TrueType (1-bit mode)")
+    return _load_truetype_font(NORMAL_FONT_SIZE), _load_truetype_font(SMALL_FONT_SIZE)
 
 
 class PatrolScore:
@@ -58,7 +145,12 @@ class PatrolScore:
 
 
 class MatrixDisplay:
-    """Manages the LED matrix display for the scoreboard."""
+    """Manages the LED matrix display for the scoreboard.
+
+    All drawing operations render to a PIL Image frame buffer.
+    Text uses TrueType fonts with anti-aliasing for smooth edges.
+    The frame buffer is pushed to the hardware in show().
+    """
 
     def __init__(self, rows: int = 32, cols: int = 64, simulate: bool = False):
         """Initialize the LED matrix.
@@ -72,6 +164,16 @@ class MatrixDisplay:
         self.cols = cols
         self.simulate = simulate or not MATRIX_AVAILABLE
 
+        # PIL frame buffer - all drawing goes here
+        self.frame = Image.new('RGB', (cols, rows), (0, 0, 0))
+        self.draw = ImageDraw.Draw(self.frame)
+        # 1-bit text rendering: every pixel fully on or off, no anti-aliasing.
+        # Crisp and readable on LED matrices with visible gaps between pixels.
+        self.draw.fontmode = "1"
+
+        # Load fonts (BDF bitmap preferred, TrueType fallback)
+        self.font, self.small_font = _load_fonts()
+
         if not self.simulate:
             # Configure the matrix
             options = RGBMatrixOptions()
@@ -80,74 +182,70 @@ class MatrixDisplay:
             options.chain_length = 1
             options.parallel = 1
             options.hardware_mapping = 'adafruit-hat'
-            options.gpio_slowdown = 2  # Adjust if flickering occurs
-            options.brightness = 60  # 0-100
+            options.gpio_slowdown = 4  # Adjust if flickering occurs
+            options.brightness = 100  # 0-100
+            options.pwm_bits = 4  # Fewer brightness levels = faster refresh, less flicker at low PWM
             options.pwm_lsb_nanoseconds = 130  # Lower values = higher refresh rate
 
             self.matrix = RGBMatrix(options=options)
             self.canvas = self.matrix.CreateFrameCanvas()
-
-            # Load BDF fonts (required by rgbmatrix library)
-            # Try common font locations for rpi-rgb-led-matrix
-            font_paths = [
-                "/usr/local/share/fonts/",  # Common install location
-                "/usr/share/fonts/",         # Alternative location
-                "./fonts/",                  # Local fonts directory
-            ]
-
-            self.font = graphics.Font()
-            self.small_font = graphics.Font()
-
-            # Try to load fonts from known locations
-            font_loaded = False
-            for base_path in font_paths:
-                try:
-                    self.font.LoadFont(f"{base_path}7x13.bdf")  # Normal font
-                    self.small_font.LoadFont(f"{base_path}5x7.bdf")  # Small font
-                    font_loaded = True
-                    print(f"[DISPLAY] Loaded fonts from {base_path}")
-                    break
-                except Exception:
-                    continue
-
-            if not font_loaded:
-                print("WARNING: Could not load BDF fonts. Text may not display.")
-                print("Install rpi-rgb-led-matrix fonts or specify font path.")
         else:
             print(f"[DISPLAY] Simulation mode: {cols}x{rows} matrix")
             self.matrix = None
             self.canvas = None
 
     def clear(self):
-        """Clear the display."""
-        if not self.simulate:
-            self.canvas.Clear()
-        else:
+        """Clear the frame buffer."""
+        self.draw.rectangle([(0, 0), (self.cols - 1, self.rows - 1)], fill=(0, 0, 0))
+        if self.simulate:
             print("[DISPLAY] Clear")
 
     def show(self):
-        """Update the display with current canvas content."""
+        """Push the frame buffer to the LED matrix."""
         if not self.simulate:
+            self.canvas.SetImage(self.frame)
             self.canvas = self.matrix.SwapOnVSync(self.canvas)
 
     def draw_text(self, x: int, y: int, text: str,
                   color: Tuple[int, int, int] = (255, 255, 255),
                   font_size: str = "normal"):
-        """Draw text at specified position.
+        """Draw 1-bit crisp text at specified position.
 
         Args:
             x: X coordinate (0 = left edge)
-            y: Y coordinate (baseline of text, not top)
+            y: Y coordinate (baseline of text, matching BDF convention)
             text: Text to display
             color: RGB tuple (0-255 each)
             font_size: "normal" or "small"
         """
-        if not self.simulate:
-            font = self.font if font_size == "normal" else self.small_font
-            text_color = graphics.Color(color[0], color[1], color[2])
-            graphics.DrawText(self.canvas, font, x, y, text_color, text)
+        font = self.font if font_size == "normal" else self.small_font
+        # Convert baseline y to top-left y for PIL.
+        # TrueType fonts have getmetrics(), BDF/PIL bitmap fonts do not.
+        if hasattr(font, 'getmetrics'):
+            ascent, descent = font.getmetrics()
+            top_y = y - ascent
         else:
+            # PIL bitmap font: getbbox gives us the bounding box
+            bbox = font.getbbox(text)
+            top_y = y - (bbox[3] - bbox[1])
+        self.draw.text((x, top_y), text, fill=color, font=font)
+
+        if self.simulate:
             print(f"[DISPLAY] Text at ({x},{y}): '{text}' color={color}")
+
+    def text_width(self, text: str, font_size: str = "normal") -> int:
+        """Get the pixel width of rendered text.
+
+        Args:
+            text: Text to measure
+            font_size: "normal" or "small"
+
+        Returns:
+            Width in pixels
+        """
+        font = self.font if font_size == "normal" else self.small_font
+        bbox = font.getbbox(text)
+        return bbox[2] - bbox[0]
 
     def draw_line(self, x1: int, y1: int, x2: int, y2: int,
                   color: Tuple[int, int, int] = (100, 100, 100)):
@@ -158,14 +256,12 @@ class MatrixDisplay:
             x2, y2: End coordinates
             color: RGB tuple
         """
-        if not self.simulate:
-            line_color = graphics.Color(color[0], color[1], color[2])
-            graphics.DrawLine(self.canvas, x1, y1, x2, y2, line_color)
-        else:
+        self.draw.line([(x1, y1), (x2, y2)], fill=color)
+        if self.simulate:
             print(f"[DISPLAY] Line from ({x1},{y1}) to ({x2},{y2})")
 
     def draw_status_indicator(self, rate_limit_state: str):
-        """Draw a 2x2 status indicator in the top-right corner.
+        """Draw a status indicator pixel in the top-right corner.
 
         Args:
             rate_limit_state: One of "LOADING", "NONE", "DEGRADED",
@@ -185,10 +281,9 @@ class MatrixDisplay:
         # Draw 1x1 pixel in top-right corner
         x = self.cols - 2  # 2 pixels from right edge
         y = 0
+        self.frame.putpixel((x, y), color)
 
-        if not self.simulate:
-            self.canvas.SetPixel(x, y, color[0], color[1], color[2])
-        else:
+        if self.simulate:
             print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x},{y}) color={color}")
 
     def generate_qr_image(self, url: str):
@@ -259,9 +354,9 @@ class MatrixDisplay:
 
         # Use QR code layout if available and url_short provided
         if QR_AVAILABLE and url_short and not self.simulate:
-            # Generate and display QR code on left side (32x32 at position 0,0)
+            # Generate QR code and paste onto frame buffer
             qr_img = self.generate_qr_image(url_short)
-            self.canvas.SetImage(qr_img.convert('RGB'), 0, 0)
+            self.frame.paste(qr_img.convert('RGB'), (0, 0))
 
             # Display wrapped device code on right side
             # Code format: "MRHQ-TDY4" (9 chars total)
@@ -298,10 +393,10 @@ class MatrixDisplay:
             self.draw_text(4, 20, code, color=(255, 255, 0))
 
             # Draw URL hint (may be truncated)
-            url_short = url.replace("https://", "").replace("http://", "")
-            if len(url_short) > 12:
-                url_short = url_short[:12] + "..."
-            self.draw_text(2, 30, url_short, color=(100, 100, 100))
+            url_display = url.replace("https://", "").replace("http://", "")
+            if len(url_display) > 12:
+                url_display = url_display[:12] + "..."
+            self.draw_text(2, 30, url_display, color=(100, 100, 100))
 
             self.show()
 
@@ -345,6 +440,50 @@ class MatrixDisplay:
         if self.simulate:
             print(f"[DISPLAY ERROR] {error}")
 
+    def draw_composite_text(self, x: int, y: int, text: str,
+                            font_size: str = "small",
+                            color_on_lit: Tuple[int, int, int] = TEXT_ON_BAR,
+                            color_on_dark: Tuple[int, int, int] = TEXT_ON_DARK):
+        """Draw text composited with existing frame content.
+
+        Text pixels over lit (non-black) bar pixels get color_on_lit,
+        text pixels over dark background get color_on_dark. This gives
+        a subtle brightness difference that improves readability.
+
+        Args:
+            x: X coordinate (0 = left edge)
+            y: Y coordinate (baseline of text)
+            text: Text to display
+            font_size: "normal" or "small"
+            color_on_lit: RGB color where text overlaps a lit pixel
+            color_on_dark: RGB color where text overlaps a dark pixel
+        """
+        font = self.font if font_size == "normal" else self.small_font
+
+        # Compute top_y (same logic as draw_text)
+        if hasattr(font, 'getmetrics'):
+            ascent, _ = font.getmetrics()
+            top_y = y - ascent
+        else:
+            bbox = font.getbbox(text)
+            top_y = y - (bbox[3] - bbox[1])
+
+        # Render text to a grayscale mask at the same frame coordinates
+        text_mask = Image.new('L', (self.cols, self.rows), 0)
+        mask_draw = ImageDraw.Draw(text_mask)
+        mask_draw.fontmode = "1"
+        mask_draw.text((x, top_y), text, fill=255, font=font)
+
+        # Composite: check each text pixel against the existing frame
+        for py in range(max(0, top_y), min(self.rows, top_y + 16)):
+            for px in range(max(0, x), min(self.cols, x + self.text_width(text, font_size) + 2)):
+                if text_mask.getpixel((px, py)) > 0:
+                    r, g, b = self.frame.getpixel((px, py))
+                    if r > 0 or g > 0 or b > 0:
+                        self.frame.putpixel((px, py), color_on_lit)
+                    else:
+                        self.frame.putpixel((px, py), color_on_dark)
+
     def draw_bar(self, x: int, y: int, width: int, height: int,
                  score: int, max_score: int, color: Tuple[int, int, int]):
         """Draw a bar graph using bottom-fill algorithm.
@@ -368,15 +507,14 @@ class MatrixDisplay:
             return
 
         # Scale color by brightness
-        r = int(color[0] * BAR_BRIGHTNESS)
-        g = int(color[1] * BAR_BRIGHTNESS)
-        b = int(color[2] * BAR_BRIGHTNESS)
+        scaled = (int(color[0] * BAR_BRIGHTNESS),
+                  int(color[1] * BAR_BRIGHTNESS),
+                  int(color[2] * BAR_BRIGHTNESS))
 
-        if not self.simulate:
-            for n in range(num_leds):
-                col = n // height
-                row = (height - 1) - (n % height)
-                self.canvas.SetPixel(x + col, y + row, r, g, b)
+        for n in range(num_leds):
+            col = n // height
+            row = (height - 1) - (n % height)
+            self.frame.putpixel((x + col, y + row), scaled)
 
     def draw_zigzag(self, x: int, y: int, height: int,
                     color: Tuple[int, int, int] = (80, 80, 80)):
@@ -390,10 +528,9 @@ class MatrixDisplay:
             height: Number of rows
             color: RGB tuple for the zigzag pixels
         """
-        if not self.simulate:
-            for row in range(height):
-                if row % 2 == 0:  # ON at rows 0, 2, 4
-                    self.canvas.SetPixel(x, y + row, color[0], color[1], color[2])
+        for row in range(height):
+            if row % 2 == 0:  # ON at rows 0, 2, 4
+                self.frame.putpixel((x, y + row), color)
 
     def show_scores(self, patrols: List[PatrolScore], rate_limit_state: str = "NONE",
                     patrol_colors: Dict[str, str] = None, score_offset: int = 0):
@@ -438,7 +575,7 @@ class MatrixDisplay:
             border_top_y = strip_y + 1     # Top border line
             bar_y = strip_y + 2            # Bar occupies rows 2-6 within the strip (5 rows)
             border_bottom_y = strip_y + 7  # Bottom border line
-            text_y = strip_y + 7           # Baseline for text (overlaps bottom border)
+            text_y = strip_y + 8           # Baseline for text (1px below bottom border)
 
             # Calculate display score (after offset)
             display_score = max(0, patrol.score - score_offset)
@@ -447,8 +584,14 @@ class MatrixDisplay:
             color_name = patrol_colors.get(patrol.id, DEFAULT_BAR_COLOR)
             palette = THEME_PALETTES.get(color_name, THEME_PALETTES[DEFAULT_BAR_COLOR])
 
+            # Compute border color from bar base color at BORDER_BRIGHTNESS
+            bar_base = palette["bar"]
+            border_color = (int(bar_base[0] * BORDER_BRIGHTNESS),
+                            int(bar_base[1] * BORDER_BRIGHTNESS),
+                            int(bar_base[2] * BORDER_BRIGHTNESS))
+
             # Draw top border line
-            self.draw_line(bar_start_col, border_top_y, BAR_WIDTH - 1, border_top_y, palette["border"])
+            self.draw_line(bar_start_col, border_top_y, BAR_WIDTH - 1, border_top_y, border_color)
 
             # Draw zigzag broken-axis indicator if offset is active
             if has_offset:
@@ -459,20 +602,19 @@ class MatrixDisplay:
                           display_score, bar_max, palette["bar"])
 
             # Draw bottom border line
-            self.draw_line(bar_start_col, border_bottom_y, BAR_WIDTH - 1, border_bottom_y, palette["border"])
+            self.draw_line(bar_start_col, border_bottom_y, BAR_WIDTH - 1, border_bottom_y, border_color)
 
-            # Draw patrol name (left justified, using small font)
+            # Draw patrol name (left justified, composited over bar)
             name = patrol.name
             if len(name) > 11:  # Truncate long names (small font fits more)
                 name = name[:11]
-            self.draw_text(1, text_y, name, color=palette["text"], font_size="small")
+            self.draw_composite_text(1, text_y, name, font_size="small")
 
-            # Draw score (right justified, using small font)
+            # Draw score (right justified, composited over bar)
             score_text = str(patrol.score)
-            # Small font is 5 pixels wide per character
-            score_width = len(score_text) * 5
-            score_x = self.cols - score_width - 2  # Extra padding from edge
-            self.draw_text(score_x, text_y, score_text, color=SCORE_COLOR, font_size="small")
+            score_w = self.text_width(score_text, font_size="small")
+            score_x = self.cols - score_w - 2  # Extra padding from edge
+            self.draw_composite_text(score_x, text_y, score_text, font_size="small")
 
         # Draw status indicator
         self.draw_status_indicator(rate_limit_state)
@@ -500,9 +642,8 @@ class MatrixDisplay:
             color: RGB color tuple
         """
         self.clear()
-        # Rough centering (assumes ~5 pixels per character)
-        text_width = len(message) * 5
-        x = max(0, (self.cols - text_width) // 2)
+        text_w = self.text_width(message)
+        x = max(0, (self.cols - text_w) // 2)
         y = self.rows // 2
         self.draw_text(x, y, message, color=color)
         self.show()
