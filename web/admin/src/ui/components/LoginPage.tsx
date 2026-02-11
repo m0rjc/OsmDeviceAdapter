@@ -32,6 +32,11 @@ export function LoginPage() {
           </button>
         </div>
       </main>
+      <footer className="footer">
+        <div className="footer-build">
+          Build: {__BUILD_TIME__}
+        </div>
+      </footer>
     </div>
   );
 }
