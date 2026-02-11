@@ -2,7 +2,7 @@ import {deleteRecord, getAllFromIndex, inTransaction, put, read} from "./promisD
 import * as model from "../../types/model"
 
 const DB_NAME = 'penguin-patrol-scores';
-const DB_VERSION = 2;
+const DB_VERSION = 4;
 const SECTIONS_STORE = 'sections';
 const PATROL_SCORES_STORE = 'patrol_scores';
 const USER_METADATA_STORE = 'user_metadata';
@@ -153,6 +153,9 @@ export function OpenPatrolPointsStore(userId: number): Promise<PatrolPointsStore
     });
 }
 
+/** The object stores we expect to exist in the current schema */
+const EXPECTED_STORES = new Set([SECTIONS_STORE, PATROL_SCORES_STORE, USER_METADATA_STORE]);
+
 /** Handles the initial database setup and upgrades */
 function handleDatabaseInstall(event: IDBVersionChangeEvent) {
     const request = event.target as IDBOpenDBRequest;
@@ -160,26 +163,48 @@ function handleDatabaseInstall(event: IDBVersionChangeEvent) {
     const oldVersion = event.oldVersion;
     console.log(`[PatrolPointsStore] Upgrading database from v${oldVersion} to v${DB_VERSION}`);
 
-    // Version 1: Initial schema
-    if (oldVersion < 1) {
-        // Create the sections store with keyPath
+    // If upgrading from a completely different schema (e.g. a previous version of the app
+    // that used the same database name), wipe everything and start fresh.
+    if (oldVersion > 0 && oldVersion < 1) {
+        // Version 0 shouldn't happen with oldVersion > 0, but guard anyway
+    }
+
+    // Versions 1-2 are ours. Version 3 was from an older incompatible app version.
+    // If coming from version 3 (or any unknown version not in our lineage), drop all
+    // stores and rebuild from scratch.
+    const isCleanInstall = oldVersion === 0;
+    const isKnownVersion = oldVersion >= 1 && oldVersion <= 2;
+    if (!isCleanInstall && !isKnownVersion) {
+        console.log(`[PatrolPointsStore] Unknown previous version ${oldVersion}, wiping all stores`);
+        for (const name of Array.from(db.objectStoreNames)) {
+            db.deleteObjectStore(name);
+        }
+    } else {
+        // Remove any unexpected object stores (shouldn't happen, but be safe)
+        for (const name of Array.from(db.objectStoreNames)) {
+            if (!EXPECTED_STORES.has(name)) {
+                console.log(`[PatrolPointsStore] Removing unknown store: ${name}`);
+                db.deleteObjectStore(name);
+            }
+        }
+    }
+
+    // Create stores if they don't exist (handles both fresh installs and rebuilds)
+    if (!db.objectStoreNames.contains(SECTIONS_STORE)) {
         const sectionsStore = db.createObjectStore(SECTIONS_STORE, { keyPath: 'key' });
         sectionsStore.createIndex(INDEX_SECTIONS_USERID, 'userId');
+        console.log(`[PatrolPointsStore] Created store: sections`);
+    }
 
-        // Create the patrol scores store with keyPath
+    if (!db.objectStoreNames.contains(PATROL_SCORES_STORE)) {
         const patrolsStore = db.createObjectStore(PATROL_SCORES_STORE, { keyPath: 'key' });
-
-        // Index for getting all scores for a user in a specific section
         patrolsStore.createIndex(INDEX_USERID_SECTIONID, ['userId', 'sectionId']);
-
-        // Index for finding entries that need syncing (by userId and retryAfter time)
         patrolsStore.createIndex(INDEX_USERID_RETRY_AFTER, ['userId', 'retryAfter']);
-
-        console.log(`[PatrolPointsStore] Created stores: sections, patrol_scores`);
+        console.log(`[PatrolPointsStore] Created store: patrol_scores`);
     }
 
     // Version 2: Add user metadata store for section list revision tracking
-    if (oldVersion < 2) {
+    if (!db.objectStoreNames.contains(USER_METADATA_STORE)) {
         db.createObjectStore(USER_METADATA_STORE, { keyPath: 'userId' });
         console.log(`[PatrolPointsStore] Created store: user_metadata`);
     }

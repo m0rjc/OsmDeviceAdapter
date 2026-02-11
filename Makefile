@@ -77,6 +77,10 @@ test:
 docker-build:
 	docker build --build-arg BUILD_TIME=$(BUILD_TIME) -t $(IMAGE) .
 
+# Build Docker image with no cache (forces full rebuild including frontend)
+docker-build-clean:
+	docker build --no-cache --build-arg BUILD_TIME=$(BUILD_TIME) -t $(IMAGE) .
+
 # Push Docker image to registry
 docker-push: check-main-branch docker-build
 	docker push $(IMAGE)

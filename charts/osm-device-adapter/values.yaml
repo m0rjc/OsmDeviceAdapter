@@ -6,7 +6,7 @@ replicaCount: 2
 
 image:
   repository: your-registry/osm-device-adapter
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
 
