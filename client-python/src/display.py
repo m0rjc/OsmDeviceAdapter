@@ -22,16 +22,19 @@ except ImportError:
         print("WARNING: qrcode library not available. QR codes will not be displayed.")
 
 
-# Maps color names (from admin UI) to RGB tuples for LED driver
-COLOR_RGB_MAP = {
-    "red":     (255, 0, 0),
-    "green":   (0, 255, 0),
-    "blue":    (0, 0, 255),
-    "yellow":  (255, 255, 0),
-    "cyan":    (0, 255, 255),
-    "magenta": (255, 0, 255),
-    "orange":  (255, 128, 0),
-    "white":   (255, 255, 255),
+# Score color is consistent across all themes (reserved for future rising/falling indicators)
+SCORE_COLOR = (255, 255, 0)
+
+# Per-color theme palettes: bar (scaled by BAR_BRIGHTNESS), text (bright), border (subtle frame)
+THEME_PALETTES = {
+    "red":     {"bar": (255, 0, 0),     "text": (255, 80, 80),   "border": (100, 0, 0)},
+    "green":   {"bar": (0, 255, 0),     "text": (80, 255, 80),   "border": (0, 100, 0)},
+    "blue":    {"bar": (0, 0, 255),     "text": (80, 80, 255),   "border": (0, 0, 100)},
+    "yellow":  {"bar": (255, 255, 0),   "text": (255, 255, 100), "border": (100, 100, 0)},
+    "cyan":    {"bar": (0, 255, 255),   "text": (80, 255, 255),  "border": (0, 100, 100)},
+    "magenta": {"bar": (255, 0, 255),   "text": (255, 80, 255),  "border": (100, 0, 100)},
+    "orange":  {"bar": (255, 128, 0),   "text": (255, 160, 80),  "border": (100, 50, 0)},
+    "white":   {"bar": (255, 255, 255), "text": (200, 200, 200), "border": (80, 80, 80)},
 }
 
 # Bar brightness scale factor (0.0-1.0). Keeps bars dimmer than text for readability.
@@ -179,18 +182,14 @@ class MatrixDisplay:
 
         color = colors.get(rate_limit_state, (128, 128, 128))  # Default to grey
 
-        # Draw 2x2 square in top-right corner
-        x_start = self.cols - 3  # 3 pixels from right edge
-        y_start = 1              # 1 pixel from top
+        # Draw 1x1 pixel in top-right corner
+        x = self.cols - 2  # 2 pixels from right edge
+        y = 0
 
         if not self.simulate:
-            status_color = graphics.Color(color[0], color[1], color[2])
-            # Draw a 2x2 filled square
-            for x in range(x_start, x_start + 2):
-                for y in range(y_start, y_start + 2):
-                    self.canvas.SetPixel(x, y, status_color.red, status_color.green, status_color.blue)
+            self.canvas.SetPixel(x, y, color[0], color[1], color[2])
         else:
-            print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x_start},{y_start}) color={color}")
+            print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x},{y}) color={color}")
 
     def generate_qr_image(self, url: str):
         """Generate a QR code image for the given URL.
@@ -436,15 +435,20 @@ class MatrixDisplay:
         row_height = 8
         for i, patrol in enumerate(patrols[:4]):
             strip_y = i * row_height       # Top of this patrol's strip
-            bar_y = strip_y + 3            # Bar occupies rows 3-7 within the strip (5 rows)
-            text_y = strip_y + 8           # Baseline for text
+            border_top_y = strip_y + 1     # Top border line
+            bar_y = strip_y + 2            # Bar occupies rows 2-6 within the strip (5 rows)
+            border_bottom_y = strip_y + 7  # Bottom border line
+            text_y = strip_y + 7           # Baseline for text (overlaps bottom border)
 
             # Calculate display score (after offset)
             display_score = max(0, patrol.score - score_offset)
 
-            # Look up bar color
+            # Look up theme palette
             color_name = patrol_colors.get(patrol.id, DEFAULT_BAR_COLOR)
-            bar_rgb = COLOR_RGB_MAP.get(color_name, COLOR_RGB_MAP[DEFAULT_BAR_COLOR])
+            palette = THEME_PALETTES.get(color_name, THEME_PALETTES[DEFAULT_BAR_COLOR])
+
+            # Draw top border line
+            self.draw_line(bar_start_col, border_top_y, BAR_WIDTH - 1, border_top_y, palette["border"])
 
             # Draw zigzag broken-axis indicator if offset is active
             if has_offset:
@@ -452,20 +456,23 @@ class MatrixDisplay:
 
             # Draw bar graph behind text
             self.draw_bar(bar_start_col, bar_y, bar_cols, BAR_HEIGHT,
-                          display_score, bar_max, bar_rgb)
+                          display_score, bar_max, palette["bar"])
+
+            # Draw bottom border line
+            self.draw_line(bar_start_col, border_bottom_y, BAR_WIDTH - 1, border_bottom_y, palette["border"])
 
             # Draw patrol name (left justified, using small font)
             name = patrol.name
             if len(name) > 11:  # Truncate long names (small font fits more)
                 name = name[:11]
-            self.draw_text(1, text_y, name, color=(0, 255, 0), font_size="small")
+            self.draw_text(1, text_y, name, color=palette["text"], font_size="small")
 
             # Draw score (right justified, using small font)
             score_text = str(patrol.score)
             # Small font is 5 pixels wide per character
             score_width = len(score_text) * 5
             score_x = self.cols - score_width - 2  # Extra padding from edge
-            self.draw_text(score_x, text_y, score_text, color=(255, 255, 0), font_size="small")
+            self.draw_text(score_x, text_y, score_text, color=SCORE_COLOR, font_size="small")
 
         # Draw status indicator
         self.draw_status_indicator(rate_limit_state)

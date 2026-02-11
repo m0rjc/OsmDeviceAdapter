@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -483,8 +482,18 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 	})
 }
 
-// hexColorRegex validates hex color codes (#RGB or #RRGGBB format)
-var hexColorRegex = regexp.MustCompile(`^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$`)
+// validColorNames is the set of allowed color names for patrol colors.
+// These match the COLOR_PALETTE defined in the admin UI (PatrolColorRow.tsx).
+var validColorNames = map[string]bool{
+	"red":     true,
+	"green":   true,
+	"blue":    true,
+	"yellow":  true,
+	"cyan":    true,
+	"magenta": true,
+	"orange":  true,
+	"white":   true,
+}
 
 // AdminSettingsHandler handles both GET and PUT for /api/admin/sections/{sectionId}/settings
 func AdminSettingsHandler(deps *Dependencies) http.HandlerFunc {
@@ -655,9 +664,9 @@ func handleUpdateSettings(w http.ResponseWriter, r *http.Request, deps *Dependen
 	}
 
 	for patrolID, color := range req.PatrolColors {
-		if color != "" && !hexColorRegex.MatchString(color) {
+		if color != "" && !validColorNames[color] {
 			writeJSONError(w, http.StatusBadRequest, "validation_error",
-				"Invalid color format for patrol "+patrolID+": must be #RGB or #RRGGBB")
+				"Invalid color for patrol "+patrolID+": must be a valid color name")
 			return
 		}
 	}
