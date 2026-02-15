@@ -84,3 +84,30 @@ export interface PatrolInfo {
 export interface SettingsUpdateRequest {
   patrolColors: Record<string, string>;
 }
+
+// Ad-hoc patrol API types
+export interface AdhocPatrol {
+  id: string;
+  name: string;
+  color: string;
+  score: number;
+  position: number;
+}
+
+export interface AdhocPatrolRequest {
+  name: string;
+  color: string;
+}
+
+// Scoreboard API types
+export interface Scoreboard {
+  deviceCodePrefix: string;
+  sectionId: number | null;
+  sectionName: string;
+  clientId: string;
+  lastUsedAt?: string;
+}
+
+export interface ScoreboardSectionUpdate {
+  sectionId: number;
+}

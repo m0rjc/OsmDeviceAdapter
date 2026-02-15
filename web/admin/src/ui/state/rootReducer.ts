@@ -5,12 +5,16 @@ import * as dialog from './dialogSlice';
 import * as ui from './uiSlice';
 import type {AppState} from './appSlice';
 import * as settings from './settingsSlice';
+import * as teams from './teamsSlice';
+import * as scoreboards from './scoreboardsSlice';
 import patrolsReducer, {selectPatrolById, type UIPatrol} from './patrolsSlice.ts';
 import userReducer from './userSlice';
 import dialogReducer from './dialogSlice';
 import uiReducer from './uiSlice';
 import appReducer from './appSlice';
 import settingsReducer from './settingsSlice';
+import teamsReducer from './teamsSlice';
+import scoreboardsReducer from './scoreboardsSlice';
 
 export const rootReducer = combineReducers({
     user: userReducer,
@@ -19,6 +23,8 @@ export const rootReducer = combineReducers({
     ui: uiReducer,
     app: appReducer,
     settings: settingsReducer,
+    teams: teamsReducer,
+    scoreboards: scoreboardsReducer,
 })
 
 export type RootState = ReturnType<typeof rootReducer>;
@@ -140,3 +146,19 @@ export const selectIsSavingSettings = (state: RootState, sectionId: number): boo
     settings.selectIsSaving(state.settings, sectionId);
 export const selectSettingsSaveError = (state: RootState, sectionId: number): string | undefined =>
     settings.selectSaveError(state.settings, sectionId);
+
+// App-level selectors for teams slice
+export type {AdhocTeam, TeamsState} from './teamsSlice';
+const selectTeamsState = (state: RootState) => state.teams;
+export const selectAllTeams = createAppSelector([selectTeamsState], teams.selectAllTeams);
+export const selectTeamsLoadState = createAppSelector([selectTeamsState], teams.selectTeamsLoadState);
+export const selectTeamsError = createAppSelector([selectTeamsState], teams.selectTeamsError);
+export const selectTeamsSaving = createAppSelector([selectTeamsState], teams.selectTeamsSaving);
+
+// App-level selectors for scoreboards slice
+export type {Scoreboard, ScoreboardsState} from './scoreboardsSlice';
+const selectScoreboardsState = (state: RootState) => state.scoreboards;
+export const selectAllScoreboards = createAppSelector([selectScoreboardsState], scoreboards.selectAllScoreboards);
+export const selectScoreboardsLoadState = createAppSelector([selectScoreboardsState], scoreboards.selectScoreboardsLoadState);
+export const selectScoreboardsError = createAppSelector([selectScoreboardsState], scoreboards.selectScoreboardsError);
+export const selectScoreboardsSaving = createAppSelector([selectScoreboardsState], scoreboards.selectScoreboardsSaving);

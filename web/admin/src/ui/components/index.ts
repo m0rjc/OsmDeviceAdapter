@@ -9,3 +9,4 @@ export { LoadingBanner } from './LoadingBanner';
 export { ToastProvider } from './Toast';
 export * from './scores';
 export * from './settings';
+export * from './teams';

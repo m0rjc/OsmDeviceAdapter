@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/adhocpatrol"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/sectionsettings"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
@@ -214,8 +215,13 @@ func AdminSectionsHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
-		// Convert OSM sections to admin sections
-		sections := make([]AdminSection, 0, len(profile.Data.Sections))
+		// Convert OSM sections to admin sections, with ad-hoc section first
+		sections := make([]AdminSection, 0, len(profile.Data.Sections)+1)
+		sections = append(sections, AdminSection{
+			ID:        0,
+			Name:      "Ad-hoc Teams",
+			GroupName: "Local",
+		})
 		for _, s := range profile.Data.Sections {
 			sections = append(sections, AdminSection{
 				ID:        s.SectionID,
@@ -260,6 +266,19 @@ func AdminScoresHandler(deps *Dependencies) http.HandlerFunc {
 		sectionID, err := strconv.Atoi(sectionStr)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid section ID")
+			return
+		}
+
+		// Ad-hoc section: bypass OSM validation, serve from local DB
+		if sectionID == 0 {
+			switch r.Method {
+			case http.MethodGet:
+				handleGetAdhocScores(w, deps, session)
+			case http.MethodPost:
+				handleUpdateAdhocScores(w, r, deps, session)
+			default:
+				writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+			}
 			return
 		}
 
@@ -482,6 +501,150 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 	})
 }
 
+// handleGetAdhocScores handles GET /api/admin/sections/0/scores
+func handleGetAdhocScores(w http.ResponseWriter, deps *Dependencies, session *db.WebSession) {
+	patrols, err := adhocpatrol.ListByUser(deps.Conns, session.OSMUserID)
+	if err != nil {
+		slog.Error("admin.api.adhoc_scores.fetch_failed",
+			"component", "admin_api",
+			"event", "adhoc_scores.error",
+			"error", err,
+		)
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch ad-hoc scores")
+		return
+	}
+
+	scores := make([]types.PatrolScore, len(patrols))
+	for i, p := range patrols {
+		scores[i] = types.PatrolScore{
+			ID:    strconv.FormatInt(p.ID, 10),
+			Name:  p.Name,
+			Score: p.Score,
+		}
+	}
+
+	writeJSON(w, AdminScoresResponse{
+		Section: AdminSectionInfo{
+			ID:   0,
+			Name: "Ad-hoc Teams",
+		},
+		TermID:    0,
+		Patrols:   scores,
+		FetchedAt: time.Now().UTC(),
+	})
+}
+
+// handleUpdateAdhocScores handles POST /api/admin/sections/0/scores
+func handleUpdateAdhocScores(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession) {
+	if err := validateCSRFToken(r, session); err != nil {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", err.Error())
+		return
+	}
+
+	var req AdminUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+		return
+	}
+
+	if len(req.Updates) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "No updates provided")
+		return
+	}
+
+	results := make([]AdminPatrolResult, 0, len(req.Updates))
+	auditLogs := make([]db.ScoreAuditLog, 0, len(req.Updates))
+
+	for _, update := range req.Updates {
+		if update.Points < -1000 || update.Points > 1000 {
+			writeJSONError(w, http.StatusBadRequest, "validation_error", "Points must be between -1000 and 1000")
+			return
+		}
+
+		patrolID, err := strconv.ParseInt(update.PatrolID, 10, 64)
+		if err != nil {
+			errMsg := "Invalid patrol ID: " + update.PatrolID
+			results = append(results, AdminPatrolResult{
+				ID:           update.PatrolID,
+				Success:      false,
+				ErrorMessage: &errMsg,
+			})
+			continue
+		}
+
+		// Find the patrol (with ownership check)
+		patrol, err := adhocpatrol.FindByIDAndUser(deps.Conns, patrolID, session.OSMUserID)
+		if err != nil {
+			errMsg := "Patrol not found"
+			results = append(results, AdminPatrolResult{
+				ID:           update.PatrolID,
+				Success:      false,
+				ErrorMessage: &errMsg,
+			})
+			continue
+		}
+
+		previousScore := patrol.Score
+		newScore := previousScore + update.Points
+
+		if err := adhocpatrol.UpdateScore(deps.Conns, patrolID, session.OSMUserID, newScore); err != nil {
+			errMsg := "Failed to update score"
+			results = append(results, AdminPatrolResult{
+				ID:           update.PatrolID,
+				Name:         patrol.Name,
+				Success:      false,
+				ErrorMessage: &errMsg,
+			})
+			continue
+		}
+
+		results = append(results, AdminPatrolResult{
+			ID:            update.PatrolID,
+			Name:          patrol.Name,
+			Success:       true,
+			PreviousScore: previousScore,
+			NewScore:      newScore,
+		})
+
+		auditLogs = append(auditLogs, db.ScoreAuditLog{
+			OSMUserID:     session.OSMUserID,
+			SectionID:     0,
+			PatrolID:      update.PatrolID,
+			PatrolName:    patrol.Name,
+			PreviousScore: previousScore,
+			NewScore:      newScore,
+			PointsAdded:   update.Points,
+		})
+	}
+
+	// Create audit log entries
+	if len(auditLogs) > 0 {
+		if err := scoreaudit.CreateBatch(deps.Conns, auditLogs); err != nil {
+			slog.Error("admin.api.adhoc_scores.audit_log_failed",
+				"component", "admin_api",
+				"event", "adhoc_scores.audit_error",
+				"error", err,
+			)
+		}
+	}
+
+	// Invalidate ad-hoc scores cache
+	cacheKey := "adhoc_scores:" + strconv.Itoa(session.OSMUserID)
+	deps.Conns.Redis.Del(r.Context(), cacheKey)
+
+	slog.Info("admin.api.adhoc_scores.updated",
+		"component", "admin_api",
+		"event", "adhoc_scores.update_success",
+		"user_id", session.OSMUserID,
+		"update_count", len(results),
+	)
+
+	writeJSON(w, AdminUpdateResponse{
+		Success: true,
+		Patrols: results,
+	})
+}
+
 // validColorNames is the set of allowed color names for patrol colors.
 // These match the COLOR_PALETTE defined in the admin UI (PatrolColorRow.tsx).
 var validColorNames = map[string]bool{
@@ -520,6 +683,19 @@ func AdminSettingsHandler(deps *Dependencies) http.HandlerFunc {
 		sectionID, err := strconv.Atoi(sectionStr)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid section ID")
+			return
+		}
+
+		// Ad-hoc section: settings are the patrol list with colors
+		if sectionID == 0 {
+			switch r.Method {
+			case http.MethodGet:
+				handleGetAdhocSettings(w, deps, session)
+			case http.MethodPut:
+				handleUpdateAdhocSettings(w, r, deps, session)
+			default:
+				writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+			}
 			return
 		}
 
@@ -564,6 +740,91 @@ func AdminSettingsHandler(deps *Dependencies) http.HandlerFunc {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
 		}
 	}
+}
+
+// handleGetAdhocSettings handles GET /api/admin/sections/0/settings
+func handleGetAdhocSettings(w http.ResponseWriter, deps *Dependencies, session *db.WebSession) {
+	patrols, err := adhocpatrol.ListByUser(deps.Conns, session.OSMUserID)
+	if err != nil {
+		slog.Error("admin.api.adhoc_settings.fetch_failed",
+			"component", "admin_api",
+			"event", "adhoc_settings.error",
+			"error", err,
+		)
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "Failed to fetch settings")
+		return
+	}
+
+	patrolInfos := make([]types.PatrolInfo, len(patrols))
+	patrolColors := make(map[string]string)
+	for i, p := range patrols {
+		idStr := strconv.FormatInt(p.ID, 10)
+		patrolInfos[i] = types.PatrolInfo{
+			ID:   idStr,
+			Name: p.Name,
+		}
+		if p.Color != "" {
+			patrolColors[idStr] = p.Color
+		}
+	}
+
+	writeJSON(w, AdminSettingsResponse{
+		SectionID:    0,
+		PatrolColors: patrolColors,
+		Patrols:      patrolInfos,
+	})
+}
+
+// handleUpdateAdhocSettings handles PUT /api/admin/sections/0/settings
+func handleUpdateAdhocSettings(w http.ResponseWriter, r *http.Request, deps *Dependencies, session *db.WebSession) {
+	if err := validateCSRFToken(r, session); err != nil {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", err.Error())
+		return
+	}
+
+	var req AdminSettingsUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+		return
+	}
+
+	if req.PatrolColors == nil {
+		req.PatrolColors = make(map[string]string)
+	}
+
+	// Validate and apply colors to ad-hoc patrols
+	for patrolIDStr, color := range req.PatrolColors {
+		if color != "" && !validColorNames[color] {
+			writeJSONError(w, http.StatusBadRequest, "validation_error",
+				"Invalid color for patrol "+patrolIDStr+": must be a valid color name")
+			return
+		}
+
+		patrolID, err := strconv.ParseInt(patrolIDStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		// Fetch the patrol to preserve its name
+		patrol, err := adhocpatrol.FindByIDAndUser(deps.Conns, patrolID, session.OSMUserID)
+		if err != nil {
+			continue
+		}
+
+		adhocpatrol.Update(deps.Conns, patrolID, session.OSMUserID, patrol.Name, color)
+	}
+
+	slog.Info("admin.api.adhoc_settings.updated",
+		"component", "admin_api",
+		"event", "adhoc_settings.update_success",
+		"user_id", session.OSMUserID,
+		"color_count", len(req.PatrolColors),
+	)
+
+	writeJSON(w, AdminSettingsResponse{
+		SectionID:    0,
+		PatrolColors: req.PatrolColors,
+	})
 }
 
 // handleGetSettings handles GET /api/admin/sections/{sectionId}/settings

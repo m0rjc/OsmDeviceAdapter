@@ -66,6 +66,14 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 		}
 	})))
 
+	// Ad-hoc patrol CRUD endpoints
+	mux.Handle("/api/admin/adhoc/patrols", adminMiddleware(handlers.AdminAdhocPatrolsHandler(deps)))
+	mux.Handle("/api/admin/adhoc/patrols/", adminMiddleware(handlers.AdminAdhocPatrolHandler(deps)))
+
+	// Scoreboard management endpoints
+	mux.Handle("/api/admin/scoreboards", adminMiddleware(handlers.AdminScoreboardsHandler(deps)))
+	mux.Handle("/api/admin/scoreboards/", adminMiddleware(handlers.AdminScoreboardSectionHandler(deps)))
+
 	// Admin SPA (serves static files for /admin/*)
 	// Note: More specific routes (/admin/login, /admin/callback, /admin/logout, /api/admin/*)
 	// are registered above and take precedence over this catch-all

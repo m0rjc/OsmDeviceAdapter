@@ -9,6 +9,7 @@ pixels make anti-aliased intermediate brightness look muddy.
 import os
 import tempfile
 import time
+import math
 from typing import Dict, List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont, BdfFontFile
 
@@ -579,6 +580,7 @@ class MatrixDisplay:
 
             # Calculate display score (after offset)
             display_score = max(0, patrol.score - score_offset)
+            bar_length = int(math.ceil(float(display_score)/BAR_HEIGHT))
 
             # Look up theme palette
             color_name = patrol_colors.get(patrol.id, DEFAULT_BAR_COLOR)
@@ -590,8 +592,10 @@ class MatrixDisplay:
                             int(bar_base[1] * BORDER_BRIGHTNESS),
                             int(bar_base[2] * BORDER_BRIGHTNESS))
 
-            # Draw top border line
-            self.draw_line(bar_start_col, border_top_y, BAR_WIDTH - 1, border_top_y, border_color)
+            # Draw top and bottom border lines (matching bar length)
+            if bar_length > 0:
+                border_end_x = bar_start_col + bar_length - 1
+                self.draw_line(bar_start_col, border_top_y, border_end_x, border_top_y, border_color)
 
             # Draw zigzag broken-axis indicator if offset is active
             if has_offset:
@@ -601,8 +605,9 @@ class MatrixDisplay:
             self.draw_bar(bar_start_col, bar_y, bar_cols, BAR_HEIGHT,
                           display_score, bar_max, palette["bar"])
 
-            # Draw bottom border line
-            self.draw_line(bar_start_col, border_bottom_y, BAR_WIDTH - 1, border_bottom_y, border_color)
+            if bar_length > 0:
+                border_end_x = bar_start_col + bar_length - 1
+                self.draw_line(bar_start_col, border_bottom_y, border_end_x, border_bottom_y, border_color)
 
             # Draw patrol name (left justified, composited over bar)
             name = patrol.name

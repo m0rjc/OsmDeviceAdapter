@@ -10,6 +10,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/config"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/adhocpatrol"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/sectionsettings"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm"
@@ -73,6 +74,11 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 
 	if device.SectionID == nil {
 		return nil, osm.ErrNoSectionConfigured
+	}
+
+	// Ad-hoc section: serve from local database instead of OSM
+	if *device.SectionID == 0 {
+		return s.getAdhocPatrolScores(ctx, device)
 	}
 
 	// Fetch device settings (best effort - settings errors don't fail the request)
@@ -185,6 +191,81 @@ func (s *PatrolScoreService) fetchDeviceSettings(device *db.DeviceCode) *types.D
 	return &types.DeviceSettings{
 		PatrolColors: settings.PatrolColors,
 	}
+}
+
+// getAdhocPatrolScores returns patrol scores from the local ad-hoc patrols table.
+// Uses a short Redis cache (15 seconds) to avoid hitting the database on every poll.
+func (s *PatrolScoreService) getAdhocPatrolScores(ctx context.Context, device *db.DeviceCode) (*PatrolScoreResponse, error) {
+	if device.OsmUserID == nil {
+		return nil, fmt.Errorf("device has no user ID")
+	}
+
+	cacheKey := fmt.Sprintf("adhoc_scores:%d", *device.OsmUserID)
+	const adhocCacheTTL = 15 * time.Second
+
+	// Try cache first
+	data, err := s.conns.Redis.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var cached CachedPatrolScores
+		if json.Unmarshal([]byte(data), &cached) == nil && time.Now().Before(cached.ValidUntil) {
+			return &PatrolScoreResponse{
+				Patrols:        cached.Patrols,
+				FromCache:      true,
+				CachedAt:       cached.CachedAt,
+				CacheExpiresAt: cached.ValidUntil,
+				RateLimitState: RateLimitStateNone,
+			}, nil
+		}
+	}
+
+	// Fetch from database
+	patrols, err := adhocpatrol.ListByUser(s.conns, *device.OsmUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch ad-hoc patrols: %w", err)
+	}
+
+	scores := make([]types.PatrolScore, len(patrols))
+	for i, p := range patrols {
+		scores[i] = types.PatrolScore{
+			ID:    fmt.Sprintf("%d", p.ID),
+			Name:  p.Name,
+			Score: p.Score,
+		}
+	}
+
+	// Build settings from patrol colors
+	var settings *types.DeviceSettings
+	patrolColors := make(map[string]string)
+	for _, p := range patrols {
+		if p.Color != "" {
+			patrolColors[fmt.Sprintf("%d", p.ID)] = p.Color
+		}
+	}
+	if len(patrolColors) > 0 {
+		settings = &types.DeviceSettings{PatrolColors: patrolColors}
+	}
+
+	// Cache the result
+	now := time.Now()
+	validUntil := now.Add(adhocCacheTTL)
+	cacheRecord := &CachedPatrolScores{
+		Patrols:        scores,
+		CachedAt:       now,
+		ValidUntil:     validUntil,
+		RateLimitState: RateLimitStateNone,
+	}
+	if cacheData, err := json.Marshal(cacheRecord); err == nil {
+		s.conns.Redis.Set(ctx, cacheKey, cacheData, adhocCacheTTL)
+	}
+
+	return &PatrolScoreResponse{
+		Patrols:        scores,
+		FromCache:      false,
+		CachedAt:       now,
+		CacheExpiresAt: validUntil,
+		RateLimitState: RateLimitStateNone,
+		Settings:       settings,
+	}, nil
 }
 
 // ensureTermInfo ensures that the device has valid term information.

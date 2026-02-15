@@ -308,6 +308,112 @@ export class OsmAdapterApiService {
     };
   }
 
+  // ============================================================================
+  // Ad-hoc Patrol Methods
+  // ============================================================================
+
+  /**
+   * Fetch the user's ad-hoc patrols
+   */
+  async fetchAdhocPatrols(): Promise<api.AdhocPatrol[]> {
+    return this.fetchAndHandle<api.AdhocPatrol[]>('/api/admin/adhoc/patrols', {
+      credentials: 'same-origin',
+    });
+  }
+
+  /**
+   * Create a new ad-hoc patrol
+   */
+  async createAdhocPatrol(name: string, color: string): Promise<api.AdhocPatrol> {
+    return this.fetchAndHandle<api.AdhocPatrol>('/api/admin/adhoc/patrols', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': this.csrfToken || '',
+      },
+      body: JSON.stringify({ name, color }),
+    });
+  }
+
+  /**
+   * Update an ad-hoc patrol's name and color
+   */
+  async updateAdhocPatrol(id: string, name: string, color: string): Promise<api.AdhocPatrol> {
+    return this.fetchAndHandle<api.AdhocPatrol>(`/api/admin/adhoc/patrols/${id}`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': this.csrfToken || '',
+      },
+      body: JSON.stringify({ name, color }),
+    });
+  }
+
+  /**
+   * Delete an ad-hoc patrol
+   */
+  async deleteAdhocPatrol(id: string): Promise<void> {
+    const response = await fetch(`/api/admin/adhoc/patrols/${id}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: {
+        'X-CSRF-Token': this.csrfToken || '',
+      },
+    });
+    if (!response.ok && response.status !== 204) {
+      let errorData: api.ErrorResponse;
+      try {
+        errorData = await response.json();
+      } catch {
+        throw new ApiError(response.status, 'unknown_error', 'Failed to delete patrol');
+      }
+      throw new ApiError(response.status, errorData.error, errorData.message);
+    }
+  }
+
+  /**
+   * Reset all ad-hoc patrol scores to 0
+   */
+  async resetAdhocScores(): Promise<void> {
+    await this.fetchAndHandle<{ success: boolean }>('/api/admin/adhoc/patrols/reset', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'X-CSRF-Token': this.csrfToken || '',
+      },
+    });
+  }
+
+  // ============================================================================
+  // Scoreboard Methods
+  // ============================================================================
+
+  /**
+   * Fetch the user's authorized scoreboards (devices)
+   */
+  async fetchScoreboards(): Promise<api.Scoreboard[]> {
+    return this.fetchAndHandle<api.Scoreboard[]>('/api/admin/scoreboards', {
+      credentials: 'same-origin',
+    });
+  }
+
+  /**
+   * Update a scoreboard's displayed section
+   */
+  async updateScoreboardSection(deviceCodePrefix: string, sectionId: number): Promise<void> {
+    await this.fetchAndHandle<{ success: boolean }>(`/api/admin/scoreboards/${deviceCodePrefix}/section`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': this.csrfToken || '',
+      },
+      body: JSON.stringify({ sectionId }),
+    });
+  }
+
   /**
    * Update patrol scores for a specific section
    * @throws {NetworkError} for network/offline errors (retryable)

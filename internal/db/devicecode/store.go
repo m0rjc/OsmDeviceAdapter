@@ -156,6 +156,28 @@ func Revoke(conns *db.Connections, deviceCode string) error {
 		Updates(updates).Error
 }
 
+// FindByUser returns all authorized device codes for a user, ordered by last used.
+func FindByUser(conns *db.Connections, osmUserID int) ([]db.DeviceCode, error) {
+	var records []db.DeviceCode
+	err := conns.DB.Where("osm_user_id = ? AND status = ?", osmUserID, "authorized").
+		Order("last_used_at DESC NULLS LAST").
+		Find(&records).Error
+	return records, err
+}
+
+// UpdateSectionID updates the section_id for a device code and clears term info.
+func UpdateSectionID(conns *db.Connections, deviceCodeStr string, sectionID int) error {
+	updates := map[string]interface{}{
+		"section_id":     sectionID,
+		"term_id":        nil,
+		"term_checked_at": nil,
+		"term_end_date":  nil,
+	}
+	return conns.DB.Model(&db.DeviceCode{}).
+		Where("device_code = ?", deviceCodeStr).
+		Updates(updates).Error
+}
+
 // DeleteUnused deletes device codes that haven't been used within the threshold duration
 // and are in authorized or revoked status (to avoid deleting pending authorization flows)
 func DeleteUnused(conns *db.Connections, unusedThreshold time.Duration) error {

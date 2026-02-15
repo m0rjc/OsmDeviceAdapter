@@ -266,8 +266,41 @@ func (SectionSettings) TableName() string {
 	return "section_settings"
 }
 
+// AdhocPatrol represents a user-created temporary team for ad-hoc games.
+// These patrols exist entirely in our database (not in OSM) and are
+// associated with the virtual section_id=0.
+type AdhocPatrol struct {
+	// ID is the auto-incrementing primary key, exposed as string in API
+	ID int64 `gorm:"primaryKey;autoIncrement"`
+
+	// OSMUserID is the user who owns this patrol
+	OSMUserID int `gorm:"column:osm_user_id;not null;uniqueIndex:idx_adhoc_user_position"`
+
+	// Position controls display ordering within the user's ad-hoc patrols
+	Position int `gorm:"column:position;not null;uniqueIndex:idx_adhoc_user_position"`
+
+	// Name is the team/patrol display name
+	Name string `gorm:"column:name;type:varchar(100);not null"`
+
+	// Color is the color name (from validColorNames set), empty string for no color
+	Color string `gorm:"column:color;type:varchar(50);not null;default:''"`
+
+	// Score is the current score for this patrol
+	Score int `gorm:"column:score;not null;default:0"`
+
+	// CreatedAt is when this patrol was created
+	CreatedAt time.Time `gorm:"column:created_at;default:CURRENT_TIMESTAMP"`
+
+	// UpdatedAt is when this patrol was last modified
+	UpdatedAt time.Time `gorm:"column:updated_at;default:CURRENT_TIMESTAMP"`
+}
+
+func (AdhocPatrol) TableName() string {
+	return "adhoc_patrols"
+}
+
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{}, &WebSession{}, &ScoreAuditLog{}, &SectionSettings{})
+	return db.AutoMigrate(&DeviceCode{}, &DeviceSession{}, &AllowedClientID{}, &WebSession{}, &ScoreAuditLog{}, &SectionSettings{}, &AdhocPatrol{})
 }
 
 // User returns the OSM user associated with this Device, or nil if this

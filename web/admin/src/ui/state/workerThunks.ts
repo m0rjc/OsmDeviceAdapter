@@ -28,6 +28,23 @@ import {
     setSaving,
     setSaveError,
 } from "./settingsSlice.ts";
+import {
+    setTeams,
+    setTeamsLoading,
+    setTeamsError,
+    addTeam,
+    updateTeam as updateTeamAction,
+    removeTeam,
+    resetAllTeamScores,
+    setTeamsSaving,
+} from "./teamsSlice.ts";
+import {
+    setScoreboards,
+    setScoreboardsLoading,
+    setScoreboardsError,
+    updateScoreboardSection as updateScoreboardSectionAction,
+    setScoreboardsSaving,
+} from "./scoreboardsSlice.ts";
 import {OsmAdapterApiService} from "../../worker/server/server";
 
 type AppThunkConfig = {
@@ -543,6 +560,128 @@ export const saveSectionSettings = createAsyncThunk<
             const message = error instanceof Error ? error.message : 'Failed to save settings';
             dispatch(setSaveError({sectionId, error: message}));
             throw error;
+        }
+    }
+);
+
+// ============================================================================
+// Ad-hoc Teams Thunks
+// ============================================================================
+
+function createApi(state: RootState): OsmAdapterApiService {
+    return new OsmAdapterApiService(
+        state.user.userId ?? undefined,
+        state.user.userName ?? undefined,
+        state.user.csrfToken ?? undefined,
+    );
+}
+
+export const fetchTeams = createAsyncThunk<void, void, AppThunkConfig>(
+    'teams/fetchTeams',
+    async (_, { getState, dispatch }) => {
+        dispatch(setTeamsLoading());
+        try {
+            const api = createApi(getState());
+            const patrols = await api.fetchAdhocPatrols();
+            dispatch(setTeams(patrols));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to fetch teams';
+            dispatch(setTeamsError(message));
+            throw error;
+        }
+    }
+);
+
+export const createTeam = createAsyncThunk<void, { name: string; color: string }, AppThunkConfig>(
+    'teams/createTeam',
+    async ({ name, color }, { getState, dispatch }) => {
+        dispatch(setTeamsSaving(true));
+        try {
+            const api = createApi(getState());
+            const patrol = await api.createAdhocPatrol(name, color);
+            dispatch(addTeam(patrol));
+        } finally {
+            dispatch(setTeamsSaving(false));
+        }
+    }
+);
+
+export const updateTeam = createAsyncThunk<void, { id: string; name: string; color: string }, AppThunkConfig>(
+    'teams/updateTeam',
+    async ({ id, name, color }, { getState, dispatch }) => {
+        dispatch(setTeamsSaving(true));
+        try {
+            const api = createApi(getState());
+            const patrol = await api.updateAdhocPatrol(id, name, color);
+            dispatch(updateTeamAction(patrol));
+        } finally {
+            dispatch(setTeamsSaving(false));
+        }
+    }
+);
+
+export const deleteTeam = createAsyncThunk<void, string, AppThunkConfig>(
+    'teams/deleteTeam',
+    async (id, { getState, dispatch }) => {
+        dispatch(setTeamsSaving(true));
+        try {
+            const api = createApi(getState());
+            await api.deleteAdhocPatrol(id);
+            dispatch(removeTeam(id));
+        } finally {
+            dispatch(setTeamsSaving(false));
+        }
+    }
+);
+
+export const resetTeamScores = createAsyncThunk<void, void, AppThunkConfig>(
+    'teams/resetScores',
+    async (_, { getState, dispatch }) => {
+        dispatch(setTeamsSaving(true));
+        try {
+            const api = createApi(getState());
+            await api.resetAdhocScores();
+            dispatch(resetAllTeamScores());
+        } finally {
+            dispatch(setTeamsSaving(false));
+        }
+    }
+);
+
+// ============================================================================
+// Scoreboard Thunks
+// ============================================================================
+
+export const fetchScoreboards = createAsyncThunk<void, void, AppThunkConfig>(
+    'scoreboards/fetchScoreboards',
+    async (_, { getState, dispatch }) => {
+        dispatch(setScoreboardsLoading());
+        try {
+            const api = createApi(getState());
+            const boards = await api.fetchScoreboards();
+            dispatch(setScoreboards(boards));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to fetch scoreboards';
+            dispatch(setScoreboardsError(message));
+            throw error;
+        }
+    }
+);
+
+export const changeScoreboardSection = createAsyncThunk<
+    void,
+    { deviceCodePrefix: string; sectionId: number; sectionName: string },
+    AppThunkConfig
+>(
+    'scoreboards/changeSection',
+    async ({ deviceCodePrefix, sectionId, sectionName }, { getState, dispatch }) => {
+        dispatch(setScoreboardsSaving(true));
+        try {
+            const api = createApi(getState());
+            await api.updateScoreboardSection(deviceCodePrefix, sectionId);
+            dispatch(updateScoreboardSectionAction({ deviceCodePrefix, sectionId, sectionName }));
+        } finally {
+            dispatch(setScoreboardsSaving(false));
         }
     }
 );

@@ -25,6 +25,24 @@ const (
 	defaultRateLimitInterval = 60   // Default: 1 update per 60 seconds
 )
 
+// MockAdhocPatrol represents an ad-hoc patrol in mock state
+type MockAdhocPatrol struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Color    string `json:"color"`
+	Score    int    `json:"score"`
+	Position int    `json:"position"`
+}
+
+// MockScoreboard represents a device scoreboard in mock state
+type MockScoreboard struct {
+	DeviceCodePrefix string `json:"deviceCodePrefix"`
+	SectionID        *int   `json:"sectionId"`
+	SectionName      string `json:"sectionName"`
+	ClientID         string `json:"clientId"`
+	LastUsedAt       string `json:"lastUsedAt,omitempty"`
+}
+
 // MockState holds the in-memory state for the mock server
 type MockState struct {
 	mu              sync.RWMutex
@@ -33,6 +51,9 @@ type MockState struct {
 	settings        map[int]map[string]string     // section ID -> patrol ID -> color
 	lastUpdateTimes map[string]time.Time          // patrol ID -> last successful update time
 	rateLimitSec    int                           // Rate limit interval in seconds
+	adhocPatrols    []MockAdhocPatrol             // Ad-hoc patrols for the mock user
+	adhocNextID     int64                         // Next ID for ad-hoc patrols
+	scoreboards     []MockScoreboard              // Mock scoreboards
 }
 
 // AdminSection represents a section (copied from handlers package to avoid import cycles)
@@ -56,6 +77,7 @@ func init() {
 	// Initialize mock data
 	state = &MockState{
 		sections: []AdminSection{
+			{ID: 0, Name: "Ad-hoc Teams", GroupName: "Local"},
 			{ID: 1001, Name: "1st Anytown Scouts", GroupName: "1st Anytown Group"},
 			{ID: 1002, Name: "2nd Anytown Scouts", GroupName: "2nd Anytown Group"},
 		},
@@ -81,6 +103,16 @@ func init() {
 		},
 		lastUpdateTimes: make(map[string]time.Time),
 		rateLimitSec:    rateLimitSec,
+		adhocPatrols: []MockAdhocPatrol{
+			{ID: 1, Name: "Red Team", Color: "red", Score: 15, Position: 0},
+			{ID: 2, Name: "Blue Team", Color: "blue", Score: 22, Position: 1},
+			{ID: 3, Name: "Green Team", Color: "green", Score: 18, Position: 2},
+		},
+		adhocNextID: 4,
+		scoreboards: []MockScoreboard{
+			{DeviceCodePrefix: "abc12345", SectionID: intPtr(1001), SectionName: "1st Anytown Scouts", ClientID: "mock-client", LastUsedAt: time.Now().Add(-1 * time.Hour).Format(time.RFC3339)},
+			{DeviceCodePrefix: "def67890", SectionID: intPtr(0), SectionName: "Ad-hoc Teams", ClientID: "mock-client", LastUsedAt: time.Now().Add(-24 * time.Hour).Format(time.RFC3339)},
+		},
 	}
 }
 
@@ -102,7 +134,7 @@ func main() {
 	corsMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token")
 
 			if r.Method == "OPTIONS" {
@@ -118,6 +150,10 @@ func main() {
 	mux.HandleFunc("/api/admin/session", corsMiddleware(handleSession))
 	mux.HandleFunc("/api/admin/sections", corsMiddleware(handleSections))
 	mux.HandleFunc("/api/admin/sections/", corsMiddleware(handleSectionRoutes)) // Trailing slash for path matching
+	mux.HandleFunc("/api/admin/adhoc/patrols", corsMiddleware(handleAdhocPatrols))
+	mux.HandleFunc("/api/admin/adhoc/patrols/", corsMiddleware(handleAdhocPatrolByID))
+	mux.HandleFunc("/api/admin/scoreboards", corsMiddleware(handleScoreboards))
+	mux.HandleFunc("/api/admin/scoreboards/", corsMiddleware(handleScoreboardSection))
 	mux.HandleFunc("/health", corsMiddleware(handleHealth))
 
 	addr := ":" + port
@@ -130,10 +166,12 @@ func main() {
 	)
 
 	fmt.Printf("\n🚀 Mock Admin Server running on http://localhost:%s\n", port)
-	fmt.Printf("   Session:  GET  http://localhost:%s/api/admin/session\n", port)
-	fmt.Printf("   Sections: GET  http://localhost:%s/api/admin/sections\n", port)
-	fmt.Printf("   Scores:   GET  http://localhost:%s/api/admin/sections/{id}/scores\n", port)
-	fmt.Printf("   Update:   POST http://localhost:%s/api/admin/sections/{id}/scores\n", port)
+	fmt.Printf("   Session:     GET  http://localhost:%s/api/admin/session\n", port)
+	fmt.Printf("   Sections:    GET  http://localhost:%s/api/admin/sections\n", port)
+	fmt.Printf("   Scores:      GET  http://localhost:%s/api/admin/sections/{id}/scores\n", port)
+	fmt.Printf("   Update:      POST http://localhost:%s/api/admin/sections/{id}/scores\n", port)
+	fmt.Printf("   Ad-hoc:      CRUD http://localhost:%s/api/admin/adhoc/patrols\n", port)
+	fmt.Printf("   Scoreboards: GET  http://localhost:%s/api/admin/scoreboards\n", port)
 	if state.rateLimitSec > 0 {
 		fmt.Printf("\n⏱️  Rate Limit: 1 update per %d seconds per patrol\n", state.rateLimitSec)
 		fmt.Printf("   Set MOCK_RATE_LIMIT_SECONDS=0 to disable\n")
@@ -228,6 +266,19 @@ func handleScores(w http.ResponseWriter, r *http.Request) {
 	sectionID, err := strconv.Atoi(sectionStr)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid section ID")
+		return
+	}
+
+	// Handle ad-hoc section (section 0)
+	if sectionID == 0 {
+		switch r.Method {
+		case http.MethodGet:
+			handleGetAdhocScores(w, r)
+		case http.MethodPost:
+			handleUpdateAdhocScores(w, r)
+		default:
+			writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		}
 		return
 	}
 
@@ -411,6 +462,11 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, sectionID int) {
 	})
 }
 
+// intPtr returns a pointer to an int value
+func intPtr(v int) *int {
+	return &v
+}
+
 // handleHealth returns a simple health check
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -448,6 +504,19 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
 	sectionID, err := strconv.Atoi(sectionStr)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid section ID")
+		return
+	}
+
+	// Handle ad-hoc section (section 0)
+	if sectionID == 0 {
+		switch r.Method {
+		case http.MethodGet:
+			handleGetAdhocSettings(w, r)
+		case http.MethodPut:
+			handleUpdateAdhocSettings(w, r)
+		default:
+			writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		}
 		return
 	}
 
@@ -546,4 +615,415 @@ func handleUpdateSettings(w http.ResponseWriter, r *http.Request, sectionID int)
 		PatrolColors: req.PatrolColors,
 		Patrols:      nil, // Don't need to return patrols for PUT
 	})
+}
+
+// --- Ad-hoc scores handlers ---
+
+// handleGetAdhocScores returns ad-hoc patrol scores as section 0
+func handleGetAdhocScores(w http.ResponseWriter, _ *http.Request) {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	patrols := make([]types.PatrolScore, len(state.adhocPatrols))
+	for i, p := range state.adhocPatrols {
+		patrols[i] = types.PatrolScore{
+			ID:    strconv.FormatInt(p.ID, 10),
+			Name:  p.Name,
+			Score: p.Score,
+		}
+	}
+
+	writeJSON(w, handlers.AdminScoresResponse{
+		Section: handlers.AdminSectionInfo{
+			ID:   0,
+			Name: "Ad-hoc Teams",
+		},
+		TermID:    0,
+		Patrols:   patrols,
+		FetchedAt: time.Now().UTC(),
+	})
+}
+
+// handleUpdateAdhocScores applies score deltas to ad-hoc patrols
+func handleUpdateAdhocScores(w http.ResponseWriter, r *http.Request) {
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken != mockCSRFToken {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return
+	}
+
+	var req handlers.AdminUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+		return
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	results := make([]handlers.AdminPatrolResult, 0, len(req.Updates))
+	for _, update := range req.Updates {
+		var found *MockAdhocPatrol
+		for i := range state.adhocPatrols {
+			if strconv.FormatInt(state.adhocPatrols[i].ID, 10) == update.PatrolID {
+				found = &state.adhocPatrols[i]
+				break
+			}
+		}
+		if found == nil {
+			errMsg := fmt.Sprintf("Patrol %s not found", update.PatrolID)
+			results = append(results, handlers.AdminPatrolResult{
+				ID:           update.PatrolID,
+				Success:      false,
+				ErrorMessage: &errMsg,
+			})
+			continue
+		}
+
+		previousScore := found.Score
+		found.Score += update.Points
+		results = append(results, handlers.AdminPatrolResult{
+			ID:            strconv.FormatInt(found.ID, 10),
+			Name:          found.Name,
+			Success:       true,
+			PreviousScore: previousScore,
+			NewScore:      found.Score,
+		})
+	}
+
+	writeJSON(w, handlers.AdminUpdateResponse{
+		Success: true,
+		Patrols: results,
+	})
+}
+
+// --- Ad-hoc settings handlers ---
+
+// handleGetAdhocSettings returns patrol list and colors for ad-hoc section
+func handleGetAdhocSettings(w http.ResponseWriter, _ *http.Request) {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	patrols := make([]types.PatrolInfo, len(state.adhocPatrols))
+	colors := make(map[string]string)
+	for i, p := range state.adhocPatrols {
+		id := strconv.FormatInt(p.ID, 10)
+		patrols[i] = types.PatrolInfo{
+			ID:   id,
+			Name: p.Name,
+		}
+		if p.Color != "" {
+			colors[id] = p.Color
+		}
+	}
+
+	writeJSON(w, handlers.AdminSettingsResponse{
+		SectionID:    0,
+		PatrolColors: colors,
+		Patrols:      patrols,
+	})
+}
+
+// handleUpdateAdhocSettings updates patrol colors for ad-hoc section
+func handleUpdateAdhocSettings(w http.ResponseWriter, r *http.Request) {
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken != mockCSRFToken {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return
+	}
+
+	var req handlers.AdminSettingsUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+		return
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	for i := range state.adhocPatrols {
+		id := strconv.FormatInt(state.adhocPatrols[i].ID, 10)
+		if color, ok := req.PatrolColors[id]; ok {
+			state.adhocPatrols[i].Color = color
+		}
+	}
+
+	writeJSON(w, handlers.AdminSettingsResponse{
+		SectionID:    0,
+		PatrolColors: req.PatrolColors,
+	})
+}
+
+// --- Ad-hoc patrol CRUD handlers ---
+
+// AdhocPatrolJSON is the mock API response format for ad-hoc patrols
+type AdhocPatrolJSON struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Color    string `json:"color"`
+	Score    int    `json:"score"`
+	Position int    `json:"position"`
+}
+
+func toAdhocPatrolJSON(p MockAdhocPatrol) AdhocPatrolJSON {
+	return AdhocPatrolJSON{
+		ID:       strconv.FormatInt(p.ID, 10),
+		Name:     p.Name,
+		Color:    p.Color,
+		Score:    p.Score,
+		Position: p.Position,
+	}
+}
+
+// handleAdhocPatrols handles GET /api/admin/adhoc/patrols and POST /api/admin/adhoc/patrols
+func handleAdhocPatrols(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		state.mu.RLock()
+		defer state.mu.RUnlock()
+
+		resp := make([]AdhocPatrolJSON, len(state.adhocPatrols))
+		for i, p := range state.adhocPatrols {
+			resp[i] = toAdhocPatrolJSON(p)
+		}
+		writeJSON(w, resp)
+
+	case http.MethodPost:
+		csrfToken := r.Header.Get("X-CSRF-Token")
+		if csrfToken != mockCSRFToken {
+			writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+			return
+		}
+
+		var req struct {
+			Name  string `json:"name"`
+			Color string `json:"color"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+			return
+		}
+
+		req.Name = strings.TrimSpace(req.Name)
+		if req.Name == "" || len(req.Name) > 50 {
+			writeJSONError(w, http.StatusBadRequest, "validation_error", "Name must be 1-50 characters")
+			return
+		}
+
+		state.mu.Lock()
+		if len(state.adhocPatrols) >= 20 {
+			state.mu.Unlock()
+			writeJSONError(w, http.StatusConflict, "max_patrols_reached", "Maximum of 20 ad-hoc patrols reached")
+			return
+		}
+
+		nextPosition := 0
+		for _, p := range state.adhocPatrols {
+			if p.Position >= nextPosition {
+				nextPosition = p.Position + 1
+			}
+		}
+
+		patrol := MockAdhocPatrol{
+			ID:       state.adhocNextID,
+			Name:     req.Name,
+			Color:    req.Color,
+			Score:    0,
+			Position: nextPosition,
+		}
+		state.adhocNextID++
+		state.adhocPatrols = append(state.adhocPatrols, patrol)
+		state.mu.Unlock()
+
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, toAdhocPatrolJSON(patrol))
+
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+	}
+}
+
+// handleAdhocPatrolByID handles PUT/DELETE /api/admin/adhoc/patrols/{id}
+func handleAdhocPatrolByID(w http.ResponseWriter, r *http.Request) {
+	// Parse patrol ID from path: /api/admin/adhoc/patrols/{id}
+	path := r.URL.Path
+	prefix := "/api/admin/adhoc/patrols/"
+
+	// Check for reset endpoint
+	if strings.HasSuffix(path, "/reset") {
+		handleAdhocReset(w, r)
+		return
+	}
+
+	idStr := path[len(prefix):]
+	if idStr == "" {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Missing patrol ID")
+		return
+	}
+
+	patrolID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid patrol ID")
+		return
+	}
+
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken != mockCSRFToken {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		var req struct {
+			Name  string `json:"name"`
+			Color string `json:"color"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+			return
+		}
+
+		req.Name = strings.TrimSpace(req.Name)
+		if req.Name == "" || len(req.Name) > 50 {
+			writeJSONError(w, http.StatusBadRequest, "validation_error", "Name must be 1-50 characters")
+			return
+		}
+
+		state.mu.Lock()
+		defer state.mu.Unlock()
+
+		for i := range state.adhocPatrols {
+			if state.adhocPatrols[i].ID == patrolID {
+				state.adhocPatrols[i].Name = req.Name
+				state.adhocPatrols[i].Color = req.Color
+				writeJSON(w, toAdhocPatrolJSON(state.adhocPatrols[i]))
+				return
+			}
+		}
+		writeJSONError(w, http.StatusNotFound, "not_found", "Patrol not found")
+
+	case http.MethodDelete:
+		state.mu.Lock()
+		defer state.mu.Unlock()
+
+		for i := range state.adhocPatrols {
+			if state.adhocPatrols[i].ID == patrolID {
+				state.adhocPatrols = append(state.adhocPatrols[:i], state.adhocPatrols[i+1:]...)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		writeJSONError(w, http.StatusNotFound, "not_found", "Patrol not found")
+
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+	}
+}
+
+// handleAdhocReset resets all ad-hoc patrol scores to 0
+func handleAdhocReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		return
+	}
+
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken != mockCSRFToken {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	for i := range state.adhocPatrols {
+		state.adhocPatrols[i].Score = 0
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Scoreboard handlers ---
+
+// handleScoreboards handles GET /api/admin/scoreboards
+func handleScoreboards(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		return
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	writeJSON(w, state.scoreboards)
+}
+
+// handleScoreboardSection handles PUT /api/admin/scoreboards/{deviceCode}/section
+func handleScoreboardSection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		return
+	}
+
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken != mockCSRFToken {
+		writeJSONError(w, http.StatusForbidden, "csrf_invalid", "Invalid CSRF token")
+		return
+	}
+
+	// Parse device code from path: /api/admin/scoreboards/{deviceCode}/section
+	path := r.URL.Path
+	prefix := "/api/admin/scoreboards/"
+	suffix := "/section"
+	if !strings.HasSuffix(path, suffix) {
+		writeJSONError(w, http.StatusNotFound, "not_found", "Invalid path")
+		return
+	}
+
+	deviceCode := path[len(prefix) : len(path)-len(suffix)]
+	if deviceCode == "" {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Missing device code")
+		return
+	}
+
+	var req struct {
+		SectionID int `json:"sectionId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid request body")
+		return
+	}
+
+	// Validate section exists
+	sectionFound := false
+	var sectionName string
+	state.mu.RLock()
+	for _, s := range state.sections {
+		if s.ID == req.SectionID {
+			sectionFound = true
+			sectionName = s.Name
+			break
+		}
+	}
+	state.mu.RUnlock()
+
+	if !sectionFound {
+		writeJSONError(w, http.StatusBadRequest, "bad_request", "Invalid section ID")
+		return
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	for i := range state.scoreboards {
+		if state.scoreboards[i].DeviceCodePrefix == deviceCode {
+			state.scoreboards[i].SectionID = intPtr(req.SectionID)
+			state.scoreboards[i].SectionName = sectionName
+			writeJSON(w, state.scoreboards[i])
+			return
+		}
+	}
+
+	writeJSONError(w, http.StatusNotFound, "not_found", "Device not found")
 }

@@ -1,9 +1,9 @@
 import {useState} from 'react';
 import {useServiceWorkerUpdates, useWorkerBootstrap} from './hooks';
-import {selectGlobalError, selectIsAuthenticated, selectIsLoading, selectUserName, useAppSelector} from './state';
-import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, SettingsPage, SectionSelector, ToastProvider} from './components';
+import {selectGlobalError, selectIsAuthenticated, selectIsLoading, selectSelectedSectionId, selectUserName, useAppSelector} from './state';
+import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, SettingsPage, SectionSelector, TeamsPage, ScoreboardSettings, ToastProvider} from './components';
 
-type Tab = 'scores' | 'settings';
+type Tab = 'scores' | 'settings' | 'teams';
 
 /**
  * Main application component using Redux and worker-based architecture.
@@ -77,6 +77,11 @@ export function App() {
  */
 function AuthenticatedApp({ userName }: { userName: string | null }) {
     const [activeTab, setActiveTab] = useState<Tab>('scores');
+    const selectedSectionId = useAppSelector(selectSelectedSectionId);
+    const isAdhocSection = selectedSectionId === 0;
+
+    // Switch away from teams tab if user selects a non-adhoc section
+    const effectiveTab = (activeTab === 'teams' && !isAdhocSection) ? 'scores' : activeTab;
 
     return (
         <ToastProvider>
@@ -92,13 +97,21 @@ function AuthenticatedApp({ userName }: { userName: string | null }) {
                 </header>
                 <nav className="nav-tabs">
                     <button
-                        className={`nav-tab ${activeTab === 'scores' ? 'active' : ''}`}
+                        className={`nav-tab ${effectiveTab === 'scores' ? 'active' : ''}`}
                         onClick={() => setActiveTab('scores')}
                     >
                         Scores
                     </button>
+                    {isAdhocSection && (
+                        <button
+                            className={`nav-tab ${effectiveTab === 'teams' ? 'active' : ''}`}
+                            onClick={() => setActiveTab('teams')}
+                        >
+                            Teams
+                        </button>
+                    )}
                     <button
-                        className={`nav-tab ${activeTab === 'settings' ? 'active' : ''}`}
+                        className={`nav-tab ${effectiveTab === 'settings' ? 'active' : ''}`}
                         onClick={() => setActiveTab('settings')}
                     >
                         Settings
@@ -106,8 +119,14 @@ function AuthenticatedApp({ userName }: { userName: string | null }) {
                 </nav>
                 <main className="main">
                     <SectionSelector />
-                    {activeTab === 'scores' && <ScoreEntryPage csrfToken=""/>}
-                    {activeTab === 'settings' && <SettingsPage />}
+                    {effectiveTab === 'scores' && <ScoreEntryPage csrfToken=""/>}
+                    {effectiveTab === 'teams' && <TeamsPage />}
+                    {effectiveTab === 'settings' && (
+                        <>
+                            <SettingsPage />
+                            <ScoreboardSettings />
+                        </>
+                    )}
                 </main>
                 <footer className="footer">
                     <div className="footer-build">

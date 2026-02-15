@@ -100,3 +100,32 @@ export {
     selectIsSavingSettings,
     selectSettingsSaveError,
 } from './rootReducer';
+
+// Teams slice - actions and types
+export type {AdhocTeam, TeamsState} from './rootReducer';
+export {
+    selectAllTeams,
+    selectTeamsLoadState,
+    selectTeamsError,
+    selectTeamsSaving,
+} from './rootReducer';
+export {
+    fetchTeams,
+    createTeam,
+    updateTeam,
+    deleteTeam,
+    resetTeamScores,
+} from './workerThunks';
+
+// Scoreboards slice - actions and types
+export type {Scoreboard, ScoreboardsState} from './rootReducer';
+export {
+    selectAllScoreboards,
+    selectScoreboardsLoadState,
+    selectScoreboardsError,
+    selectScoreboardsSaving,
+} from './rootReducer';
+export {
+    fetchScoreboards,
+    changeScoreboardSection,
+} from './workerThunks';
