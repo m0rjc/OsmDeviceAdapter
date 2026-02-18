@@ -14,10 +14,16 @@ import {
 } from '../../state';
 import { Loading } from '../Loading';
 import { MessageCard } from '../MessageCard';
-import { TeamRow } from './TeamRow';
+import { TeamRow } from '../teams/TeamRow';
 import { useToast } from '../../hooks';
 
-export function TeamsPage() {
+/**
+ * Settings page for ad-hoc teams (section 0).
+ * Combines team management (add/remove/rename) with color configuration
+ * in a single view, replacing both the Teams tab and the standard
+ * PatrolColorList settings for ad-hoc mode.
+ */
+export function AdhocSettingsPage() {
   const dispatch = useAppDispatch();
   const { showToast } = useToast();
 
@@ -27,7 +33,7 @@ export function TeamsPage() {
   const saving = useAppSelector(selectTeamsSaving);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
-  // Fetch teams on mount if not loaded
+  // Fetch teams if not loaded (fallback in case loadSettingsIfNeeded didn't trigger)
   useEffect(() => {
     if (loadState === 'uninitialized') {
       dispatch(fetchTeams());
@@ -90,7 +96,7 @@ export function TeamsPage() {
   return (
     <div className="settings-card">
       <div className="settings-header">
-        <h2>Ad-hoc Teams</h2>
+        <h2>Settings: Ad-hoc Teams</h2>
       </div>
 
       <div className="settings-section">

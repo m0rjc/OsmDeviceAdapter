@@ -11,16 +11,25 @@ import {
 import { Loading } from '../Loading';
 import { MessageCard } from '../MessageCard';
 import { PatrolColorList } from './PatrolColorList';
+import { AdhocSettingsPage } from './AdhocSettingsPage';
 import { useToast } from '../../hooks';
 
 /**
  * Settings page for configuring section-specific settings like patrol colors.
+ * For ad-hoc section (id 0), delegates to AdhocSettingsPage which provides
+ * team management (add/remove/rename) alongside color configuration.
  */
 export function SettingsPage() {
   const dispatch = useAppDispatch();
   const { showToast } = useToast();
 
   const selectedSection = useAppSelector(selectSelectedSection);
+
+  // For ad-hoc section, render the combined teams+settings page
+  if (selectedSection?.id === 0) {
+    return <AdhocSettingsPage />;
+  }
+
   const sectionId = selectedSection?.id;
   const settings = useAppSelector((state) =>
     sectionId !== undefined ? selectSettingsForSection(state, sectionId) : null

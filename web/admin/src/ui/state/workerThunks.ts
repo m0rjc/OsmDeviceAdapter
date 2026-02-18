@@ -97,16 +97,25 @@ function loadPatrolsIfNeeded({getState, dispatch}: ThunkApiBasics) {
 
 /**
  * Fetch settings if needed for the currently selected section.
- * Follows the same pattern as loadPatrolsIfNeeded.
+ * For ad-hoc section (id 0), loads teams instead of settings since
+ * teamsSlice is the single source of truth for ad-hoc team data.
  */
 function loadSettingsIfNeeded({getState, dispatch}: ThunkApiBasics) {
     const state = getState();
     const selectedSection = selectSelectedSection(state);
-    if (selectedSection) {
-        const settingsLoadState = selectSettingsLoadState(state, selectedSection.id);
-        if (settingsLoadState === 'uninitialized') {
-            dispatch(fetchSectionSettings(selectedSection.id));
+    if (!selectedSection) return;
+
+    if (selectedSection.id === 0) {
+        // Ad-hoc section: load teams instead of settings
+        if (state.teams.loadState === 'uninitialized') {
+            dispatch(fetchTeams());
         }
+        return;
+    }
+
+    const settingsLoadState = selectSettingsLoadState(state, selectedSection.id);
+    if (settingsLoadState === 'uninitialized') {
+        dispatch(fetchSectionSettings(selectedSection.id));
     }
 }
 
@@ -600,6 +609,7 @@ export const createTeam = createAsyncThunk<void, { name: string; color: string }
             const api = createApi(getState());
             const patrol = await api.createAdhocPatrol(name, color);
             dispatch(addTeam(patrol));
+            dispatch(fetchPatrolScoresForSection(0));
         } finally {
             dispatch(setTeamsSaving(false));
         }
@@ -614,6 +624,7 @@ export const updateTeam = createAsyncThunk<void, { id: string; name: string; col
             const api = createApi(getState());
             const patrol = await api.updateAdhocPatrol(id, name, color);
             dispatch(updateTeamAction(patrol));
+            dispatch(fetchPatrolScoresForSection(0));
         } finally {
             dispatch(setTeamsSaving(false));
         }
@@ -628,6 +639,7 @@ export const deleteTeam = createAsyncThunk<void, string, AppThunkConfig>(
             const api = createApi(getState());
             await api.deleteAdhocPatrol(id);
             dispatch(removeTeam(id));
+            dispatch(fetchPatrolScoresForSection(0));
         } finally {
             dispatch(setTeamsSaving(false));
         }
@@ -642,6 +654,7 @@ export const resetTeamScores = createAsyncThunk<void, void, AppThunkConfig>(
             const api = createApi(getState());
             await api.resetAdhocScores();
             dispatch(resetAllTeamScores());
+            dispatch(fetchPatrolScoresForSection(0));
         } finally {
             dispatch(setTeamsSaving(false));
         }
