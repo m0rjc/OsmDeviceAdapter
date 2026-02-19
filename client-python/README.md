@@ -12,7 +12,8 @@ Python client for displaying scout patrol scores on a 64x32 LED matrix using the
 ## Features
 
 - **OAuth Device Flow Authentication** - Displays user code on the matrix for easy authorization
-- **Automatic Score Updates** - Polls for patrol scores at configurable intervals
+- **Real-time Score Updates** - WebSocket connection for instant refresh when scores change
+- **Automatic Score Updates** - Falls back to polling for score updates when WebSocket is unavailable
 - **Headless Operation** - All user interaction happens on the LED display
 - **Error Handling** - Displays errors on the matrix for easy troubleshooting
 - **Token Persistence** - Saves authentication token to survive reboots
@@ -74,12 +75,23 @@ cd ~
 git clone <repository-url>
 cd OsmDeviceAdapter/client-python
 
+# Create a virtual environment (required on Raspbian — system Python packages
+# are managed by apt and don't include the modules needed by this application)
+python3 -m venv venv
+source venv/bin/activate
+
 # Install Python dependencies
 pip3 install -r requirements.txt
 
 # Make the main script executable
 chmod +x src/scoreboard.py
 ```
+
+**Note:** On Raspbian you must activate the virtual environment before running the application:
+```bash
+source ~/OsmDeviceAdapter/client-python/venv/bin/activate
+```
+The systemd service file handles this automatically — see step 6.
 
 ### 4. Configure the Application
 
@@ -194,6 +206,17 @@ Bears             115
 - Status indicator (2x2 pixel) in top-right corner shows connection/rate limit state
 
 ## Troubleshooting
+
+### "websocket-client not installed; real-time updates unavailable"
+
+The `websocket-client` package is missing from your Python environment. The application will fall back to polling but won't receive instant score updates.
+
+If you're running on Raspbian, make sure you're using the virtual environment (not the system Python):
+
+```bash
+source ~/OsmDeviceAdapter/client-python/venv/bin/activate
+pip3 install -r requirements.txt
+```
 
 ### "rgbmatrix library not available"
 

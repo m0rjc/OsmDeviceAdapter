@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bufio"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -167,4 +169,9 @@ type statusWriter struct {
 func (sw *statusWriter) WriteHeader(code int) {
 	sw.statusCode = code
 	sw.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack implements http.Hijacker so that WebSocket upgrades work through this wrapper.
+func (sw *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return sw.ResponseWriter.(http.Hijacker).Hijack()
 }

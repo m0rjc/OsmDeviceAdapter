@@ -17,8 +17,8 @@ Environment="TOKEN_FILE=/var/lib/scoreboard/token.txt"
 Environment="LOG_LEVEL=INFO"
 Environment="SIMULATE_DISPLAY=false"
 
-# Run the scoreboard application
-ExecStart=/usr/bin/python3 /home/pi/OsmDeviceAdapter/client-python/src/scoreboard.py
+# Run the scoreboard application using the virtual environment
+ExecStart=/home/pi/OsmDeviceAdapter/client-python/venv/bin/python3 /home/pi/OsmDeviceAdapter/client-python/src/scoreboard.py
 
 # Restart policy
 Restart=always
