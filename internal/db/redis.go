@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -155,6 +156,22 @@ func (r *RedisClient) ResetRateLimit(ctx context.Context, name, key string) erro
 // SetNX sets a key if it does not exist with the configured key prefix
 func (r *RedisClient) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd {
 	return r.client.SetNX(ctx, r.prefixKey(key), value, expiration)
+}
+
+// Publish publishes a message to a Redis pub/sub channel.
+// Note: channel names are NOT prefixed — pub/sub channels are global within the Redis instance.
+func (r *RedisClient) Publish(ctx context.Context, channel string, msg any) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+	return r.client.Publish(ctx, channel, data).Err()
+}
+
+// Subscribe subscribes to one or more Redis pub/sub channels.
+// Note: channel names are NOT prefixed — pub/sub channels are global within the Redis instance.
+func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
+	return r.client.Subscribe(ctx, channels...)
 }
 
 // Eval executes a Lua script with the configured key prefix applied to keys

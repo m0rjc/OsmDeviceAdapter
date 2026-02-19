@@ -15,6 +15,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/services/scoreupdateservice"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
+	wsinternal "github.com/m0rjc/OsmDeviceAdapter/internal/websocket"
 )
 
 // Response types for admin API endpoints
@@ -495,6 +496,10 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		"update_count", len(results),
 	)
 
+	if deps.WebSocketHub != nil {
+		deps.WebSocketHub.BroadcastToSection(strconv.Itoa(sectionID), wsinternal.RefreshScoresMessage())
+	}
+
 	writeJSON(w, AdminUpdateResponse{
 		Success: true,
 		Patrols: results,
@@ -638,6 +643,10 @@ func handleUpdateAdhocScores(w http.ResponseWriter, r *http.Request, deps *Depen
 		"user_id", session.OSMUserID,
 		"update_count", len(results),
 	)
+
+	if deps.WebSocketHub != nil {
+		deps.WebSocketHub.BroadcastToSection("0", wsinternal.RefreshScoresMessage())
+	}
 
 	writeJSON(w, AdminUpdateResponse{
 		Success: true,

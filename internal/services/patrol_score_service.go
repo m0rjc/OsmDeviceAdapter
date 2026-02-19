@@ -36,6 +36,11 @@ type CachedPatrolScores struct {
 	RateLimitState RateLimitState      `json:"rate_limit_state"`
 }
 
+// WebSocketInfo is included in every patrol score response to signal WebSocket availability.
+type WebSocketInfo struct {
+	Requested bool `json:"requested"`
+}
+
 // PatrolScoreResponse represents the API response for patrol scores
 type PatrolScoreResponse struct {
 	Patrols        []types.PatrolScore   `json:"patrols"`
@@ -44,6 +49,7 @@ type PatrolScoreResponse struct {
 	CacheExpiresAt time.Time             `json:"cache_expires_at"`
 	RateLimitState RateLimitState        `json:"rate_limit_state"`
 	Settings       *types.DeviceSettings `json:"settings,omitempty"`
+	WebSocket      WebSocketInfo         `json:"websocket"`
 }
 
 // PatrolScoreService orchestrates patrol score fetching with caching and rate limiting
@@ -95,6 +101,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 			CacheExpiresAt: cached.ValidUntil,
 			RateLimitState: cached.RateLimitState,
 			Settings:       settings,
+			WebSocket:      WebSocketInfo{Requested: true},
 		}, nil
 	}
 
@@ -135,6 +142,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 				CacheExpiresAt: cached.ValidUntil,
 				RateLimitState: rateLimitState,
 				Settings:       settings,
+				WebSocket:      WebSocketInfo{Requested: true},
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to fetch patrol scores: %w", err)
@@ -162,6 +170,7 @@ func (s *PatrolScoreService) GetPatrolScores(ctx context.Context, user types.Use
 		CacheExpiresAt: validUntil,
 		RateLimitState: rateLimitState,
 		Settings:       settings,
+		WebSocket:      WebSocketInfo{Requested: true},
 	}, nil
 }
 
@@ -214,6 +223,7 @@ func (s *PatrolScoreService) getAdhocPatrolScores(ctx context.Context, device *d
 				CachedAt:       cached.CachedAt,
 				CacheExpiresAt: cached.ValidUntil,
 				RateLimitState: RateLimitStateNone,
+				WebSocket:      WebSocketInfo{Requested: true},
 			}, nil
 		}
 	}
@@ -265,6 +275,7 @@ func (s *PatrolScoreService) getAdhocPatrolScores(ctx context.Context, device *d
 		CacheExpiresAt: validUntil,
 		RateLimitState: RateLimitStateNone,
 		Settings:       settings,
+		WebSocket:      WebSocketInfo{Requested: true},
 	}, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/osm/oauthclient"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/services/scoreupdateservice"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/webauth"
+	wsinternal "github.com/m0rjc/OsmDeviceAdapter/internal/websocket"
 )
 
 type Dependencies struct {
@@ -18,4 +19,5 @@ type Dependencies struct {
 	DeviceAuth         *deviceauth.Service
 	WebAuth            *webauth.Service
 	ScoreUpdateService *scoreupdateservice.ScoreUpdateService
+	WebSocketHub       *wsinternal.Hub
 }

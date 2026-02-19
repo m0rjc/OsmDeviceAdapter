@@ -22,6 +22,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/services/scoreupdateservice"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/tokenrefresh"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/webauth"
+	wsinternal "github.com/m0rjc/OsmDeviceAdapter/internal/websocket"
 )
 
 func main() {
@@ -86,6 +87,13 @@ func main() {
 	// Create score update service with distributed locking
 	scoreUpdateService := scoreupdateservice.New(osmClient, conns)
 
+	// Create WebSocket hub and start its pub/sub listener
+	wsHub := wsinternal.NewHub(redisClient)
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	go wsHub.Run(hubCtx)
+	slog.Info("websocket hub started")
+
 	// Create handler dependencies
 	deps := &handlers.Dependencies{
 		Config:             cfg,
@@ -95,6 +103,7 @@ func main() {
 		DeviceAuth:         deviceAuthService,
 		WebAuth:            webAuthService,
 		ScoreUpdateService: scoreUpdateService,
+		WebSocketHub:       wsHub,
 	}
 
 	// Create and configure HTTP server

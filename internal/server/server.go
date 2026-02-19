@@ -13,6 +13,7 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/handlers"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
+	wsinternal "github.com/m0rjc/OsmDeviceAdapter/internal/websocket"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -38,6 +39,15 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// API endpoints for scoreboard (requires authentication) (configurable path prefix)
 	deviceAuthMiddleware := middleware.DeviceAuthMiddleware(deps.DeviceAuth)
 	mux.Handle(fmt.Sprintf("%s/v1/patrols", cfg.Paths.APIPrefix), deviceAuthMiddleware(handlers.GetPatrolScoresHandler(deps)))
+
+	// Device WebSocket endpoint — token auth via query param
+	if deps.WebSocketHub != nil {
+		mux.HandleFunc("/ws/device", wsinternal.DeviceWebSocketHandler(
+			deps.WebSocketHub,
+			deps.DeviceAuth,
+			cfg.ExternalDomains.ExposedDomain,
+		))
+	}
 
 	// Admin OAuth flow endpoints (server-handled, not SPA)
 	mux.HandleFunc("/admin/login", handlers.AdminLoginHandler(deps))
