@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -159,19 +161,78 @@ func (r *RedisClient) SetNX(ctx context.Context, key string, value interface{}, 
 }
 
 // Publish publishes a message to a Redis pub/sub channel.
-// Note: channel names are NOT prefixed — pub/sub channels are global within the Redis instance.
+// Channel names are prefixed the same as keys so that Redis ACL rules apply consistently.
 func (r *RedisClient) Publish(ctx context.Context, channel string, msg any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
-	return r.client.Publish(ctx, channel, data).Err()
+	return r.client.Publish(ctx, r.prefixKey(channel), data).Err()
 }
 
-// Subscribe subscribes to one or more Redis pub/sub channels.
-// Note: channel names are NOT prefixed — pub/sub channels are global within the Redis instance.
-func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
-	return r.client.Subscribe(ctx, channels...)
+// Subscribe returns a PubSub handle for the given channels.
+// Channel names are prefixed the same as keys so that Redis ACL rules apply consistently.
+// The returned PubSub transparently strips the prefix from received message channel names.
+func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) *PubSub {
+	prefixed := make([]string, len(channels))
+	for i, ch := range channels {
+		prefixed[i] = r.prefixKey(ch)
+	}
+	return &PubSub{
+		inner:     r.client.Subscribe(ctx, prefixed...),
+		keyPrefix: r.keyPrefix,
+	}
+}
+
+// PubSub wraps *redis.PubSub applying key-prefix handling transparently.
+// Subscribe/Unsubscribe calls have the prefix applied; incoming message channel
+// names have the prefix stripped so callers work with unprefixed names.
+type PubSub struct {
+	inner     *redis.PubSub
+	keyPrefix string
+	once      sync.Once
+	ch        chan *redis.Message
+}
+
+// Subscribe adds channels to the subscription.
+func (p *PubSub) Subscribe(ctx context.Context, channels ...string) error {
+	prefixed := make([]string, len(channels))
+	for i, ch := range channels {
+		prefixed[i] = p.keyPrefix + ch
+	}
+	return p.inner.Subscribe(ctx, prefixed...)
+}
+
+// Unsubscribe removes channels from the subscription.
+func (p *PubSub) Unsubscribe(ctx context.Context, channels ...string) error {
+	prefixed := make([]string, len(channels))
+	for i, ch := range channels {
+		prefixed[i] = p.keyPrefix + ch
+	}
+	return p.inner.Unsubscribe(ctx, prefixed...)
+}
+
+// Channel returns a channel that receives messages with the key prefix stripped
+// from the Channel field.
+func (p *PubSub) Channel() <-chan *redis.Message {
+	p.once.Do(func() {
+		p.ch = make(chan *redis.Message, 100)
+		innerCh := p.inner.Channel()
+		go func() {
+			for msg := range innerCh {
+				stripped := *msg
+				stripped.Channel = strings.TrimPrefix(stripped.Channel, p.keyPrefix)
+				p.ch <- &stripped
+			}
+			close(p.ch)
+		}()
+	})
+	return p.ch
+}
+
+// Close closes the subscription.
+func (p *PubSub) Close() error {
+	return p.inner.Close()
 }
 
 // Eval executes a Lua script with the configured key prefix applied to keys
