@@ -5,8 +5,10 @@ Displays scout patrol scores on a 64x32 LED matrix using the Adafruit RGB Matrix
 Authenticates using OAuth device flow and polls for score updates.
 """
 
+import json
 import os
 import sys
+import threading
 import time
 import signal
 import logging
@@ -36,6 +38,93 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class WebSocketClient:
+    """Persistent WebSocket connection to the server for real-time score notifications.
+
+    Runs in a daemon thread and reconnects automatically with exponential backoff.
+    Calls on_refresh() whenever a 'refresh-scores' message arrives.
+    """
+
+    def __init__(self, ws_url: str, on_refresh):
+        self.url = ws_url
+        self._on_refresh = on_refresh
+        self._stop = threading.Event()
+        self._connected = False
+        self._app = None  # websocket.WebSocketApp instance
+        self._thread = threading.Thread(target=self._run_loop, daemon=True, name="ws-client")
+
+    def start(self):
+        """Start the background connection thread."""
+        self._thread.start()
+
+    def stop(self):
+        """Signal the connection thread to exit and close any open connection."""
+        self._stop.set()
+        if self._app is not None:
+            self._app.close()
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    def _run_loop(self):
+        backoff = 5  # seconds before first retry
+        while not self._stop.is_set():
+            try:
+                self._connect()
+            except Exception as e:
+                logger.debug(f"WebSocket run error: {e}")
+            if not self._stop.is_set():
+                logger.debug(f"WebSocket reconnecting in {backoff}s")
+                self._stop.wait(timeout=backoff)
+                backoff = min(backoff * 2, 60)
+
+    def _connect(self):
+        try:
+            import websocket as ws_lib
+        except ImportError:
+            logger.warning("websocket-client not installed; real-time updates unavailable")
+            self._stop.set()
+            return
+
+        def on_open(ws):
+            self._connected = True
+            logger.info("WebSocket connected — real-time score updates active")
+
+        def on_message(ws, message):
+            try:
+                data = json.loads(message)
+                msg_type = data.get("type")
+                if msg_type == "refresh-scores":
+                    logger.debug("WebSocket: received refresh-scores")
+                    self._on_refresh()
+                elif msg_type == "disconnect":
+                    logger.info(f"WebSocket: server requested disconnect ({data.get('reason', '')})")
+            except Exception as e:
+                logger.warning(f"WebSocket message error: {e}")
+
+        def on_close(ws, close_status_code, close_msg):
+            self._connected = False
+            logger.debug("WebSocket connection closed")
+
+        def on_error(ws, error):
+            self._connected = False
+            logger.debug(f"WebSocket error: {error}")
+
+        app = ws_lib.WebSocketApp(
+            self.url,
+            on_open=on_open,
+            on_message=on_message,
+            on_close=on_close,
+            on_error=on_error,
+        )
+        self._app = app
+        # run_forever blocks until the connection closes
+        app.run_forever(ping_interval=30, ping_timeout=10)
+        self._connected = False
+        self._app = None
+
+
 class ScoreboardApp:
     """Main scoreboard application."""
 
@@ -50,6 +139,10 @@ class ScoreboardApp:
         self.score_offset = 0          # Bar graph offset for broken-axis display
         self.offset_initialized = False  # False until first successful score fetch
 
+        # WebSocket state
+        self._ws_client: Optional[WebSocketClient] = None
+        self._refresh_event = threading.Event()  # Set by WebSocket thread to wake main loop
+
         # Set up signal handler for SIGTERM (SIGINT/CTRL-C handled by KeyboardInterrupt)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
@@ -57,6 +150,35 @@ class ScoreboardApp:
         """Handle SIGTERM signal by raising KeyboardInterrupt for clean shutdown."""
         logger.info(f"Received signal {signum}, shutting down...")
         raise KeyboardInterrupt()
+
+    def _start_websocket(self):
+        """Start (or restart) the WebSocket client using the current access token."""
+        self._stop_websocket()
+        token = self.client.access_token
+        if not token:
+            return
+        ws_url = (
+            API_BASE_URL
+            .replace("https://", "wss://")
+            .replace("http://", "ws://")
+            .rstrip("/")
+            + f"/ws/device?token={token}"
+        )
+        logger.info("Starting WebSocket client")
+        client = WebSocketClient(ws_url, on_refresh=self._refresh_event.set)
+        client.start()
+        self._ws_client = client
+
+    def _stop_websocket(self):
+        """Stop the WebSocket client if one is running."""
+        if self._ws_client is not None:
+            logger.info("Stopping WebSocket client")
+            self._ws_client.stop()
+            self._ws_client = None
+
+    @property
+    def _ws_connected(self) -> bool:
+        return self._ws_client is not None and self._ws_client.connected
 
     def load_token(self) -> bool:
         """Load saved access token from file.
@@ -177,18 +299,24 @@ class ScoreboardApp:
                 for p in response.patrols
             ]
 
+            # Start WebSocket if server supports it and we don't have one yet
+            if response.websocket_requested and self._ws_client is None:
+                self._start_websocket()
+
             # Update display with bar graphs and status indicator
             self.display.show_scores(
                 display_patrols,
                 response.rate_limit_state,
                 patrol_colors=response.patrol_colors,
                 score_offset=self.score_offset,
+                ws_connected=self._ws_connected,
             )
 
         except SectionNotFound as e:
             logger.error(f"Section not found: {e}")
             self.display.show_error("Section Lost")
             self.authenticated = False
+            self._stop_websocket()
             time.sleep(5)
 
         except NotInTerm as e:
@@ -222,6 +350,7 @@ class ScoreboardApp:
             # If authentication error, mark as not authenticated
             if "Authentication" in str(e) or "401" in str(e):
                 self.authenticated = False
+                self._stop_websocket()
                 logger.warning("Authentication appears invalid, will re-authenticate")
 
     def run(self):
@@ -255,15 +384,21 @@ class ScoreboardApp:
 
             # Main loop: intelligently poll based on cache expiry
             while self.running:
-                # Re-authenticate if needed
+                # Re-authenticate if needed (stop WebSocket first — token is stale)
                 if not self.authenticated:
+                    self._stop_websocket()
                     self.authenticate()
 
                 # Determine when to poll next
                 now = datetime.now(timezone.utc)
                 should_poll = False
 
-                if self.cache_expires_at is None:
+                if self._refresh_event.is_set():
+                    # WebSocket pushed a refresh-scores notification
+                    self._refresh_event.clear()
+                    should_poll = True
+                    logger.info("WebSocket triggered immediate score refresh")
+                elif self.cache_expires_at is None:
                     # First poll or no cache info - poll immediately
                     should_poll = True
                 else:
@@ -277,11 +412,10 @@ class ScoreboardApp:
                         logger.debug(f"Next poll in {time_until_poll:.0f}s (cache expires at {self.cache_expires_at})")
 
                 if should_poll:
-                    # Update scores
                     self.update_scores()
 
-                # Sleep briefly to avoid busy-waiting (check every second)
-                time.sleep(1)
+                # Sleep up to 1s; wake early if WebSocket signals a refresh
+                self._refresh_event.wait(timeout=1)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -291,6 +425,7 @@ class ScoreboardApp:
             time.sleep(5)
         finally:
             logger.info("Cleaning up...")
+            self._stop_websocket()
             self.display.cleanup()
             logger.info("Scoreboard application stopped")
 

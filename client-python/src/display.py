@@ -261,23 +261,29 @@ class MatrixDisplay:
         if self.simulate:
             print(f"[DISPLAY] Line from ({x1},{y1}) to ({x2},{y2})")
 
-    def draw_status_indicator(self, rate_limit_state: str):
+    def draw_status_indicator(self, rate_limit_state: str, ws_connected: bool = False):
         """Draw a status indicator pixel in the top-right corner.
 
         Args:
             rate_limit_state: One of "LOADING", "NONE", "DEGRADED",
                              "USER_TEMPORARY_BLOCK", or "SERVICE_BLOCKED"
+            ws_connected: True when the device has an active WebSocket connection
+                          to the server (shows blue instead of green when state is NONE)
         """
         # Status colors
         colors = {
-            "LOADING": (128, 128, 128),        # Grey
-            "NONE": (0, 255, 0),               # Green
-            "DEGRADED": (255, 191, 0),         # Amber
+            "LOADING": (128, 128, 128),           # Grey
+            "NONE": (0, 255, 0),                  # Green (polling only)
+            "DEGRADED": (255, 191, 0),            # Amber
             "USER_TEMPORARY_BLOCK": (255, 0, 0),  # Red
-            "SERVICE_BLOCKED": (255, 0, 0),    # Red (but will show message)
+            "SERVICE_BLOCKED": (255, 0, 0),       # Red (but will show message)
         }
 
         color = colors.get(rate_limit_state, (128, 128, 128))  # Default to grey
+
+        # Blue dot when WebSocket is open and all else is healthy
+        if ws_connected and rate_limit_state == "NONE":
+            color = (0, 0, 255)
 
         # Draw 1x1 pixel in top-right corner
         x = self.cols - 2  # 2 pixels from right edge
@@ -285,7 +291,8 @@ class MatrixDisplay:
         self.frame.putpixel((x, y), color)
 
         if self.simulate:
-            print(f"[DISPLAY] Status indicator: {rate_limit_state} at ({x},{y}) color={color}")
+            ws_label = " [WS]" if ws_connected else ""
+            print(f"[DISPLAY] Status indicator: {rate_limit_state}{ws_label} at ({x},{y}) color={color}")
 
     def generate_qr_image(self, url: str):
         """Generate a QR code image for the given URL.
@@ -534,7 +541,8 @@ class MatrixDisplay:
                 self.frame.putpixel((x, y + row), color)
 
     def show_scores(self, patrols: List[PatrolScore], rate_limit_state: str = "NONE",
-                    patrol_colors: Dict[str, str] = None, score_offset: int = 0):
+                    patrol_colors: Dict[str, str] = None, score_offset: int = 0,
+                    ws_connected: bool = False):
         """Display patrol names and scores with bar graphs and status indicator.
 
         Args:
@@ -542,6 +550,7 @@ class MatrixDisplay:
             rate_limit_state: Current rate limit state for status indicator
             patrol_colors: Dict mapping patrol ID to color name (e.g., {"123": "red"})
             score_offset: Score offset for broken-axis display (subtracted from scores)
+            ws_connected: True when an active WebSocket connection is open (shows blue dot)
         """
         if patrol_colors is None:
             patrol_colors = {}
@@ -554,7 +563,7 @@ class MatrixDisplay:
             self.draw_text(2, 20, "Blocked", color=(255, 0, 0))
             self.draw_text(2, 28, "Contact", color=(255, 100, 0))
             self.draw_text(2, 32, "Admin", color=(255, 100, 0))
-            self.draw_status_indicator(rate_limit_state)
+            self.draw_status_indicator(rate_limit_state, ws_connected=ws_connected)
             self.show()
 
             if self.simulate:
@@ -622,7 +631,7 @@ class MatrixDisplay:
             self.draw_composite_text(score_x, text_y, score_text, font_size="small")
 
         # Draw status indicator
-        self.draw_status_indicator(rate_limit_state)
+        self.draw_status_indicator(rate_limit_state, ws_connected=ws_connected)
 
         self.show()
 

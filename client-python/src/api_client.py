@@ -48,6 +48,7 @@ class PatrolScoresResponse:
     cache_expires_at: datetime
     rate_limit_state: str  # "NONE", "DEGRADED", "USER_TEMPORARY_BLOCK", "SERVICE_BLOCKED"
     patrol_colors: Dict[str, str] = None  # Maps patrol ID to color name (e.g., "red", "blue")
+    websocket_requested: bool = False  # True when server supports the /ws/device endpoint
 
     def __post_init__(self):
         if self.patrol_colors is None:
@@ -281,6 +282,10 @@ class OSMDeviceClient:
             # Extract patrol colors from settings if present
             patrol_colors = data.get("settings", {}).get("patrolColors", {}) if data.get("settings") else {}
 
+            # Check if server advertises WebSocket support
+            ws_info = data.get("websocket") or {}
+            websocket_requested = bool(ws_info.get("requested", False))
+
             return PatrolScoresResponse(
                 patrols=patrols,
                 from_cache=data.get("from_cache", False),
@@ -288,6 +293,7 @@ class OSMDeviceClient:
                 cache_expires_at=cache_expires_at,
                 rate_limit_state=data.get("rate_limit_state", "NONE"),
                 patrol_colors=patrol_colors,
+                websocket_requested=websocket_requested,
             )
 
         except requests.exceptions.RequestException as e:
