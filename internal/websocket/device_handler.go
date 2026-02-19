@@ -79,6 +79,24 @@ func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDom
 		}
 		sectionID := strconv.Itoa(*device.SectionID)
 
+		// Ad-hoc devices (sectionID == 0) are scoped per user to avoid cross-user
+		// notifications. Regular sections are globally unique in OSM so no user
+		// scoping is required there.
+		var channelKey string
+		if *device.SectionID == 0 {
+			if device.OsmUserID == nil {
+				slog.Error("websocket.handler.adhoc_no_user",
+					"component", "websocket",
+					"event", "handler.auth_error",
+				)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			channelKey = "adhoc:" + strconv.Itoa(*device.OsmUserID)
+		} else {
+			channelKey = "section:" + sectionID
+		}
+
 		// --- WebSocket upgrade ---
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -96,6 +114,7 @@ func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDom
 			"event", "handler.connected",
 			"device_code_prefix", device.DeviceCode[:min(8, len(device.DeviceCode))],
 			"section_id", sectionID,
+			"channel_key", channelKey,
 			"remote_addr", r.RemoteAddr,
 		)
 
@@ -104,10 +123,10 @@ func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDom
 			conn:       conn,
 			send:       make(chan Message, sendBufferSize),
 			deviceCode: device.DeviceCode,
-			sectionID:  sectionID,
+			channelKey: channelKey,
 		}
 
-		hub.RegisterDevice(device.DeviceCode, sectionID, dc)
+		hub.RegisterDevice(device.DeviceCode, channelKey, dc)
 
 		// writePump runs in a separate goroutine; readPump blocks until the
 		// connection closes (and then unregisters the device from the hub).

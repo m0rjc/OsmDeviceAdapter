@@ -645,7 +645,7 @@ func handleUpdateAdhocScores(w http.ResponseWriter, r *http.Request, deps *Depen
 	)
 
 	if deps.WebSocketHub != nil {
-		deps.WebSocketHub.BroadcastToSection("0", wsinternal.RefreshScoresMessage())
+		deps.WebSocketHub.BroadcastToAdhocUser(strconv.Itoa(session.OSMUserID), wsinternal.RefreshScoresMessage())
 	}
 
 	writeJSON(w, AdminUpdateResponse{
