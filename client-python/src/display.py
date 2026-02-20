@@ -84,6 +84,8 @@ SMALL_FONT_SIZE = 8
 SMALL_FONT = "5x8.bdf"
 NORMAL_FONT_SIZE = 9
 NORMAL_FONT = "7x13.bdf"
+LARGE_FONT_SIZE = 18
+LARGE_FONT = "9x18B.bdf"
 
 def _load_bdf_font(bdf_path: str) -> Optional[ImageFont.ImageFont]:
     """Convert a BDF font to PIL format and load it.
@@ -116,25 +118,27 @@ def _load_truetype_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-def _load_fonts() -> Tuple[ImageFont.ImageFont, ImageFont.ImageFont]:
+def _load_fonts() -> Tuple[ImageFont.ImageFont, ImageFont.ImageFont, ImageFont.ImageFont]:
     """Load fonts, preferring BDF bitmap fonts over TrueType.
 
     Returns:
-        (normal_font, small_font) tuple
+        (normal_font, small_font, large_font) tuple
     """
     # Try BDF fonts first (pixel-perfect for LED matrices)
     for base_path in BDF_FONT_DIRS:
-        normal_path = os.path.join(base_path, NORMAL_FONT )
-        small_path = os.path.join(base_path, SMALL_FONT )
-        if os.path.exists(normal_path) and os.path.exists(small_path):
+        normal_path = os.path.join(base_path, NORMAL_FONT)
+        small_path = os.path.join(base_path, SMALL_FONT)
+        large_path = os.path.join(base_path, LARGE_FONT)
+        if os.path.exists(normal_path) and os.path.exists(small_path) and os.path.exists(large_path):
             normal = _load_bdf_font(normal_path)
             small = _load_bdf_font(small_path)
-            if normal and small:
-                return normal, small
+            large = _load_bdf_font(large_path)
+            if normal and small and large:
+                return normal, small, large
 
     # Fall back to TrueType with 1-bit rendering
     print("[DISPLAY] BDF fonts not found, falling back to TrueType (1-bit mode)")
-    return _load_truetype_font(NORMAL_FONT_SIZE), _load_truetype_font(SMALL_FONT_SIZE)
+    return _load_truetype_font(NORMAL_FONT_SIZE), _load_truetype_font(SMALL_FONT_SIZE), _load_truetype_font(LARGE_FONT_SIZE)
 
 
 class PatrolScore:
@@ -173,7 +177,7 @@ class MatrixDisplay:
         self.draw.fontmode = "1"
 
         # Load fonts (BDF bitmap preferred, TrueType fallback)
-        self.font, self.small_font = _load_fonts()
+        self.font, self.small_font, self.large_font = _load_fonts()
 
         if not self.simulate:
             # Configure the matrix
@@ -217,9 +221,14 @@ class MatrixDisplay:
             y: Y coordinate (baseline of text, matching BDF convention)
             text: Text to display
             color: RGB tuple (0-255 each)
-            font_size: "normal" or "small"
+            font_size: "normal", "small", or "large"
         """
-        font = self.font if font_size == "normal" else self.small_font
+        if font_size == "large":
+            font = self.large_font
+        elif font_size == "normal":
+            font = self.font
+        else:
+            font = self.small_font
         # Convert baseline y to top-left y for PIL.
         # TrueType fonts have getmetrics(), BDF/PIL bitmap fonts do not.
         if hasattr(font, 'getmetrics'):
@@ -239,12 +248,17 @@ class MatrixDisplay:
 
         Args:
             text: Text to measure
-            font_size: "normal" or "small"
+            font_size: "normal", "small", or "large"
 
         Returns:
             Width in pixels
         """
-        font = self.font if font_size == "normal" else self.small_font
+        if font_size == "large":
+            font = self.large_font
+        elif font_size == "normal":
+            font = self.font
+        else:
+            font = self.small_font
         bbox = font.getbbox(text)
         return bbox[2] - bbox[0]
 
@@ -462,11 +476,16 @@ class MatrixDisplay:
             x: X coordinate (0 = left edge)
             y: Y coordinate (baseline of text)
             text: Text to display
-            font_size: "normal" or "small"
+            font_size: "normal", "small", or "large"
             color_on_lit: RGB color where text overlaps a lit pixel
             color_on_dark: RGB color where text overlaps a dark pixel
         """
-        font = self.font if font_size == "normal" else self.small_font
+        if font_size == "large":
+            font = self.large_font
+        elif font_size == "normal":
+            font = self.font
+        else:
+            font = self.small_font
 
         # Compute top_y (same logic as draw_text)
         if hasattr(font, 'getmetrics'):
@@ -663,12 +682,12 @@ class MatrixDisplay:
         time_str = f"{minutes:02d}:{seconds:02d}"
 
         # Center the time string horizontally
-        text_w = self.text_width(time_str, font_size="normal")
+        text_w = self.text_width(time_str, font_size="large")
         x = max(0, (self.cols - text_w) // 2)
         y = self.rows // 2
 
         color = (255, 255, 0) if not paused else (255, 128, 0)
-        self.draw_text(x, y, time_str, color=color, font_size="normal")
+        self.draw_text(x, y, time_str, color=color, font_size="large")
 
         if paused:
             label = "PAUSED"
