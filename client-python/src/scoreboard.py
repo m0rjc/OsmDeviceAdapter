@@ -138,6 +138,10 @@ class ScoreboardApp:
         self._ws_client: Optional[WebSocketClient] = None
         self._refresh_event = threading.Event()  # Set by WebSocket thread to wake main loop
 
+        # Last-fetched patrol data — kept for display during timer countdown
+        self._current_patrols: list = []
+        self._current_patrol_colors: dict = {}
+
         # Timer state
         self._timer_state: str = 'inactive'  # 'inactive' | 'running' | 'paused' | 'finished'
         self._timer_remaining: int = 0
@@ -240,7 +244,12 @@ class ScoreboardApp:
 
             # Update display
             paused = (self._timer_state == 'paused')
-            self.display.show_countdown(self._timer_remaining, paused=paused)
+            self.display.show_countdown(
+                self._timer_remaining,
+                paused=paused,
+                patrols=self._current_patrols,
+                patrol_colors=self._current_patrol_colors,
+            )
 
     def load_token(self) -> bool:
         """Load saved access token from file.
@@ -321,8 +330,14 @@ class ScoreboardApp:
             time.sleep(5)
             raise
 
-    def update_scores(self):
-        """Fetch and display current patrol scores."""
+    def update_scores(self, update_display: bool = True):
+        """Fetch and display current patrol scores.
+
+        Args:
+            update_display: If False, refresh internal score data only without
+                            calling show_scores(). Used when the timer thread
+                            owns the display and will redraw on its next tick.
+        """
         # Show loading indicator if we have existing scores
         if self.cache_expires_at is not None:
             # We already have scores displayed, just show loading in corner
@@ -361,18 +376,23 @@ class ScoreboardApp:
                 for p in response.patrols
             ]
 
+            # Cache patrol data so the timer thread can overlay scores on the stopwatch
+            self._current_patrols = display_patrols
+            self._current_patrol_colors = response.patrol_colors
+
             # Start WebSocket if server supports it and we don't have one yet
             if response.websocket_requested and self._ws_client is None:
                 self._start_websocket()
 
             # Update display with bar graphs and status indicator
-            self.display.show_scores(
-                display_patrols,
-                response.rate_limit_state,
-                patrol_colors=response.patrol_colors,
-                score_offset=self.score_offset,
-                ws_connected=self._ws_connected,
-            )
+            if update_display:
+                self.display.show_scores(
+                    display_patrols,
+                    response.rate_limit_state,
+                    patrol_colors=response.patrol_colors,
+                    score_offset=self.score_offset,
+                    ws_connected=self._ws_connected,
+                )
 
         except SectionNotFound as e:
             logger.error(f"Section not found: {e}")
@@ -451,10 +471,14 @@ class ScoreboardApp:
                     self._stop_websocket()
                     self.authenticate()
 
-                # While timer is active, skip score polling and let the timer thread drive the display
+                # While timer is active, let the timer thread drive the display.
+                # Still refresh score data if the server signals an update so the
+                # score strip on the stopwatch stays current.
                 if self._timer_state != 'inactive':
-                    self._refresh_event.wait(timeout=0.1)
+                    triggered = self._refresh_event.wait(timeout=0.1)
                     self._refresh_event.clear()
+                    if triggered:
+                        self.update_scores(update_display=False)
                     continue
 
                 # Determine when to poll next

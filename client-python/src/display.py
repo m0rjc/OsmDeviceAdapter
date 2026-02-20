@@ -667,39 +667,86 @@ class MatrixDisplay:
                 print(f"Broken axis: offset={score_offset}")
             print("="*40 + "\n")
 
-    def show_countdown(self, seconds_remaining: int, paused: bool = False):
-        """Display a countdown timer.
+    def show_countdown(self, seconds_remaining: int, paused: bool = False,
+                       patrols: List[PatrolScore] = None,
+                       patrol_colors: Dict[str, str] = None):
+        """Display a countdown timer, optionally with team scores in a strip at the bottom.
+
+        When patrols are provided the timer shifts into the top half and the bottom
+        16 rows show up to 4 teams in equal-width quadrants: abbreviated name in team
+        colour on the top line, score in yellow on the bottom line.
 
         Args:
             seconds_remaining: Number of seconds left on the timer
-            paused: If True, show a "PAUSED" label at the bottom
+            paused: If True, show timer in orange to indicate paused state
+            patrols: Optional list of PatrolScore objects (up to 4)
+            patrol_colors: Dict mapping patrol ID to color name
         """
         self.clear()
+
+        has_scores = bool(patrols)
 
         # Format as MM:SS
         minutes = max(0, seconds_remaining) // 60
         seconds = max(0, seconds_remaining) % 60
         time_str = f"{minutes:02d}:{seconds:02d}"
 
-        # Center the time string horizontally
+        # Center the time string horizontally; shift up when scores are shown
         text_w = self.text_width(time_str, font_size="large")
         x = max(0, (self.cols - text_w) // 2)
-        y = self.rows // 2
+        y = 15 if has_scores else self.rows // 2
 
         color = (255, 255, 0) if not paused else (255, 128, 0)
         self.draw_text(x, y, time_str, color=color, font_size="large")
 
-        if paused:
+        if paused and not has_scores:
+            # "PAUSED" label only when there is no score strip (score strip takes that space)
             label = "PAUSED"
             label_w = self.text_width(label, font_size="small")
             label_x = max(0, (self.cols - label_w) // 2)
             self.draw_text(label_x, self.rows, label, color=(200, 100, 0), font_size="small")
+
+        if has_scores:
+            patrol_colors = patrol_colors or {}
+
+            # Thin separator between timer and score strip
+            self.draw_line(0, 15, self.cols - 1, 15, (50, 50, 50))
+
+            # Score strip: 4 equal quadrants across the full width.
+            # Name row occupies rows 16-23 (baseline y=24), score row rows 24-31 (baseline y=32).
+            quad_w = self.cols // 4  # 16 px each
+            y_name = self.rows - 8   # baseline 24 → top_y 16
+            y_score = self.rows      # baseline 32 → top_y 24
+
+            for i, patrol in enumerate(patrols[:4]):
+                qx = i * quad_w
+
+                color_name = patrol_colors.get(patrol.id, DEFAULT_BAR_COLOR)
+                palette = THEME_PALETTES.get(color_name, THEME_PALETTES[DEFAULT_BAR_COLOR])
+                name_color = palette["text"]
+
+                # Abbreviated name (up to 3 chars), centred in quadrant, in team colour
+                abbrev = patrol.name[:3]
+                name_w = self.text_width(abbrev, font_size="small")
+                name_x = qx + max(0, (quad_w - name_w) // 2)
+                self.draw_text(name_x, y_name, abbrev, color=name_color, font_size="small")
+
+                # Score centred in quadrant, in yellow
+                score_text = str(patrol.score)
+                score_w = self.text_width(score_text, font_size="small")
+                score_x = qx + max(0, (quad_w - score_w) // 2)
+                self.draw_text(score_x, y_score, score_text, color=SCORE_COLOR, font_size="small")
 
         self.show()
 
         if self.simulate:
             state = "PAUSED" if paused else "running"
             print(f"[DISPLAY] Timer: {time_str} [{state}]")
+            if has_scores:
+                print("[DISPLAY] Score strip:")
+                for i, patrol in enumerate((patrols or [])[:4]):
+                    color_name = (patrol_colors or {}).get(patrol.id, DEFAULT_BAR_COLOR)
+                    print(f"  Q{i+1} ({color_name}): {patrol.name[:3]!r}  {patrol.score}")
 
     def show_message(self, message: str, color: Tuple[int, int, int] = (255, 255, 255)):
         """Display a centered message.
