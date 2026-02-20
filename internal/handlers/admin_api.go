@@ -10,6 +10,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/adhocpatrol"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/scoreaudit"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/sectionsettings"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
@@ -495,6 +496,21 @@ func handleUpdateScores(w http.ResponseWriter, r *http.Request, deps *Dependenci
 		"section_id", sectionID,
 		"update_count", len(results),
 	)
+
+	// Invalidate per-device score cache for all devices in this section so that
+	// the WebSocket refresh prompt causes devices to fetch the updated scores.
+	if devices, err := devicecode.ListBySectionID(deps.Conns, sectionID); err == nil {
+		for _, d := range devices {
+			deps.Conns.Redis.Del(ctx, "patrol_scores:"+d.DeviceCode)
+		}
+	} else {
+		slog.Warn("admin.api.scores.cache_invalidation_failed",
+			"component", "admin_api",
+			"event", "scores.cache_error",
+			"section_id", sectionID,
+			"error", err,
+		)
+	}
 
 	if deps.WebSocketHub != nil {
 		deps.WebSocketHub.BroadcastToSection(strconv.Itoa(sectionID), wsinternal.RefreshScoresMessage())

@@ -178,6 +178,14 @@ func UpdateSectionID(conns *db.Connections, deviceCodeStr string, sectionID int)
 		Updates(updates).Error
 }
 
+// ListBySectionID returns all authorized device codes for the given OSM section.
+func ListBySectionID(conns *db.Connections, sectionID int) ([]db.DeviceCode, error) {
+	var records []db.DeviceCode
+	err := conns.DB.Where("section_id = ? AND status = ?", sectionID, "authorized").
+		Find(&records).Error
+	return records, err
+}
+
 // DeleteUnused deletes device codes that haven't been used within the threshold duration
 // and are in authorized or revoked status (to avoid deleting pending authorization flows)
 func DeleteUnused(conns *db.Connections, unusedThreshold time.Duration) error {
