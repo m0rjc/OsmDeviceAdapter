@@ -400,6 +400,25 @@ export class OsmAdapterApiService {
   }
 
   /**
+   * Send a timer command to a specific scoreboard device
+   */
+  async sendTimerCommand(deviceCodePrefix: string, command: 'start' | 'pause' | 'resume' | 'reset', duration?: number): Promise<void> {
+    const body: Record<string, unknown> = { command };
+    if (duration !== undefined) {
+      body.duration = duration;
+    }
+    await this.fetchAndHandle<{ success: boolean }>(`/api/admin/scoreboards/${deviceCodePrefix}/timer`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': this.csrfToken || '',
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
    * Update a scoreboard's displayed section
    */
   async updateScoreboardSection(deviceCodePrefix: string, sectionId: number): Promise<void> {

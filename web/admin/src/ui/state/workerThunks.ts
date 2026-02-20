@@ -681,6 +681,18 @@ export const fetchScoreboards = createAsyncThunk<void, void, AppThunkConfig>(
     }
 );
 
+export const sendTimerCommand = createAsyncThunk<
+    void,
+    { deviceCodePrefix: string; command: 'start' | 'pause' | 'resume' | 'reset'; duration?: number },
+    AppThunkConfig
+>(
+    'timer/sendCommand',
+    async ({ deviceCodePrefix, command, duration }, { getState }) => {
+        const api = createApi(getState());
+        await api.sendTimerCommand(deviceCodePrefix, command, duration);
+    }
+);
+
 export const changeScoreboardSection = createAsyncThunk<
     void,
     { deviceCodePrefix: string; sectionId: number; sectionName: string },

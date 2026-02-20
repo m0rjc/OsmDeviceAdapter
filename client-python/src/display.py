@@ -648,6 +648,40 @@ class MatrixDisplay:
                 print(f"Broken axis: offset={score_offset}")
             print("="*40 + "\n")
 
+    def show_countdown(self, seconds_remaining: int, paused: bool = False):
+        """Display a countdown timer.
+
+        Args:
+            seconds_remaining: Number of seconds left on the timer
+            paused: If True, show a "PAUSED" label at the bottom
+        """
+        self.clear()
+
+        # Format as MM:SS
+        minutes = max(0, seconds_remaining) // 60
+        seconds = max(0, seconds_remaining) % 60
+        time_str = f"{minutes:02d}:{seconds:02d}"
+
+        # Center the time string horizontally
+        text_w = self.text_width(time_str, font_size="normal")
+        x = max(0, (self.cols - text_w) // 2)
+        y = self.rows // 2
+
+        color = (255, 255, 0) if not paused else (255, 128, 0)
+        self.draw_text(x, y, time_str, color=color, font_size="normal")
+
+        if paused:
+            label = "PAUSED"
+            label_w = self.text_width(label, font_size="small")
+            label_x = max(0, (self.cols - label_w) // 2)
+            self.draw_text(label_x, self.rows, label, color=(200, 100, 0), font_size="small")
+
+        self.show()
+
+        if self.simulate:
+            state = "PAUSED" if paused else "running"
+            print(f"[DISPLAY] Timer: {time_str} [{state}]")
+
     def show_message(self, message: str, color: Tuple[int, int, int] = (255, 255, 255)):
         """Display a centered message.
 

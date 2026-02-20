@@ -84,7 +84,14 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 
 	// Scoreboard management endpoints
 	mux.Handle("/api/admin/scoreboards", adminMiddleware(handlers.AdminScoreboardsHandler(deps)))
-	mux.Handle("/api/admin/scoreboards/", adminMiddleware(handlers.AdminScoreboardSectionHandler(deps)))
+	mux.Handle("/api/admin/scoreboards/", adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/timer") {
+			handlers.AdminScoreboardTimerHandler(deps).ServeHTTP(w, r)
+		} else {
+			handlers.AdminScoreboardSectionHandler(deps).ServeHTTP(w, r)
+		}
+	})))
 
 	// Admin SPA (serves static files for /admin/*)
 	// Note: More specific routes (/admin/login, /admin/callback, /admin/logout, /api/admin/*)

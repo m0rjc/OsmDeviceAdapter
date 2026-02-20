@@ -1,9 +1,9 @@
 import {useState} from 'react';
 import {useServiceWorkerUpdates, useWorkerBootstrap} from './hooks';
 import {selectGlobalError, selectIsAuthenticated, selectIsLoading, selectUserName, useAppSelector} from './state';
-import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, SettingsPage, SectionSelector, ScoreboardSettings, ToastProvider} from './components';
+import {ErrorDialog, LoadingBanner, LoginPage, MessageCard, ScoreEntryPage, SettingsPage, SectionSelector, ScoreboardSettings, TimerControlPage, ToastProvider} from './components';
 
-type Tab = 'scores' | 'settings';
+type Tab = 'scores' | 'settings' | 'timer';
 
 /**
  * Main application component using Redux and worker-based architecture.
@@ -103,6 +103,12 @@ function AuthenticatedApp({ userName }: { userName: string | null }) {
                     >
                         Settings
                     </button>
+                    <button
+                        className={`nav-tab ${activeTab === 'timer' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('timer')}
+                    >
+                        Timer
+                    </button>
                 </nav>
                 <main className="main">
                     <SectionSelector />
@@ -113,6 +119,7 @@ function AuthenticatedApp({ userName }: { userName: string | null }) {
                             <ScoreboardSettings />
                         </>
                     )}
+                    {activeTab === 'timer' && <TimerControlPage />}
                 </main>
                 <footer className="footer">
                     <div className="footer-build">

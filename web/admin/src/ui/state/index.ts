@@ -128,4 +128,5 @@ export {
 export {
     fetchScoreboards,
     changeScoreboardSection,
+    sendTimerCommand,
 } from './workerThunks';

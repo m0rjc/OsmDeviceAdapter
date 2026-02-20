@@ -2,9 +2,10 @@ package websocket
 
 // Message is a JSON message sent or received on the device WebSocket.
 type Message struct {
-	Type   string `json:"type"`
-	Reason string `json:"reason,omitempty"` // used in "disconnect" messages
-	Uptime int64  `json:"uptime,omitempty"` // used in "status" messages (device→server)
+	Type     string `json:"type"`
+	Reason   string `json:"reason,omitempty"`   // used in "disconnect" messages
+	Uptime   int64  `json:"uptime,omitempty"`   // used in "status" messages (device→server)
+	Duration int    `json:"duration,omitempty"` // used in "timer-start" messages (seconds)
 }
 
 // RefreshScoresMessage creates a server→device message asking the device to reload scores.
@@ -22,4 +23,24 @@ func DisconnectMessage(reason string) Message {
 // assignment changes so it resubscribes to the correct channel.
 func ReconnectMessage() Message {
 	return Message{Type: "reconnect"}
+}
+
+// TimerStartMessage creates a server→device message to start a countdown timer.
+func TimerStartMessage(duration int) Message {
+	return Message{Type: "timer-start", Duration: duration}
+}
+
+// TimerPauseMessage creates a server→device message to pause the countdown timer.
+func TimerPauseMessage() Message {
+	return Message{Type: "timer-pause"}
+}
+
+// TimerResumeMessage creates a server→device message to resume the countdown timer.
+func TimerResumeMessage() Message {
+	return Message{Type: "timer-resume"}
+}
+
+// TimerResetMessage creates a server→device message to reset the countdown timer.
+func TimerResetMessage() Message {
+	return Message{Type: "timer-reset"}
 }

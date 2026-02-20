@@ -42,12 +42,12 @@ class WebSocketClient:
     """Persistent WebSocket connection to the server for real-time score notifications.
 
     Runs in a daemon thread and reconnects automatically with exponential backoff.
-    Calls on_refresh() whenever a 'refresh-scores' message arrives.
+    Calls on_message(data) for every parsed JSON message received.
     """
 
-    def __init__(self, ws_url: str, on_refresh):
+    def __init__(self, ws_url: str, on_message):
         self.url = ws_url
-        self._on_refresh = on_refresh
+        self._on_message = on_message
         self._stop = threading.Event()
         self._connected = False
         self._app = None  # websocket.WebSocketApp instance
@@ -94,12 +94,7 @@ class WebSocketClient:
         def on_message(ws, message):
             try:
                 data = json.loads(message)
-                msg_type = data.get("type")
-                if msg_type == "refresh-scores":
-                    logger.debug("WebSocket: received refresh-scores")
-                    self._on_refresh()
-                elif msg_type == "disconnect":
-                    logger.info(f"WebSocket: server requested disconnect ({data.get('reason', '')})")
+                self._on_message(data)
             except Exception as e:
                 logger.warning(f"WebSocket message error: {e}")
 
@@ -143,6 +138,12 @@ class ScoreboardApp:
         self._ws_client: Optional[WebSocketClient] = None
         self._refresh_event = threading.Event()  # Set by WebSocket thread to wake main loop
 
+        # Timer state
+        self._timer_state: str = 'inactive'  # 'inactive' | 'running' | 'paused' | 'finished'
+        self._timer_remaining: int = 0
+        self._timer_tick = threading.Event()  # Signalled to interrupt timer sleeps
+        self._timer_thread: Optional[threading.Thread] = None
+
         # Set up signal handler for SIGTERM (SIGINT/CTRL-C handled by KeyboardInterrupt)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
@@ -165,7 +166,7 @@ class ScoreboardApp:
             + f"/ws/device?token={token}"
         )
         logger.info("Starting WebSocket client")
-        client = WebSocketClient(ws_url, on_refresh=self._refresh_event.set)
+        client = WebSocketClient(ws_url, on_message=self._on_ws_message)
         client.start()
         self._ws_client = client
 
@@ -179,6 +180,67 @@ class ScoreboardApp:
     @property
     def _ws_connected(self) -> bool:
         return self._ws_client is not None and self._ws_client.connected
+
+    def _on_ws_message(self, data: dict):
+        """Route incoming WebSocket messages to the appropriate handler."""
+        msg_type = data.get("type")
+        if msg_type == "refresh-scores":
+            logger.debug("WebSocket: received refresh-scores")
+            self._refresh_event.set()
+        elif msg_type == "disconnect":
+            logger.info(f"WebSocket: server requested disconnect ({data.get('reason', '')})")
+        elif msg_type == "timer-start":
+            duration = data.get("duration", 0)
+            logger.info(f"WebSocket: timer-start duration={duration}s")
+            self._start_timer(duration)
+        elif msg_type == "timer-pause":
+            logger.info("WebSocket: timer-pause")
+            self._timer_state = 'paused'
+            self._timer_tick.set()
+        elif msg_type == "timer-resume":
+            logger.info("WebSocket: timer-resume")
+            self._timer_state = 'running'
+            self._timer_tick.set()
+        elif msg_type == "timer-reset":
+            logger.info("WebSocket: timer-reset")
+            self._timer_state = 'inactive'
+            self._timer_tick.set()
+
+    def _start_timer(self, duration: int):
+        """Start a new countdown timer, stopping any existing one."""
+        # Stop existing timer thread
+        self._timer_state = 'inactive'
+        self._timer_tick.set()
+        if self._timer_thread is not None and self._timer_thread.is_alive():
+            self._timer_thread.join(timeout=2)
+
+        self._timer_remaining = duration
+        self._timer_tick.clear()
+        self._timer_state = 'running'
+        self._timer_thread = threading.Thread(target=self._timer_loop, daemon=True, name="timer")
+        self._timer_thread.start()
+
+    def _timer_loop(self):
+        """Daemon thread: decrement timer and update display each second."""
+        while self._timer_state != 'inactive':
+            if self._timer_state == 'running':
+                # Wait up to 1 second; shorter if signalled
+                signalled = self._timer_tick.wait(timeout=1.0)
+                self._timer_tick.clear()
+                if not signalled and self._timer_state == 'running':
+                    # One second elapsed, decrement
+                    self._timer_remaining -= 1
+                    if self._timer_remaining <= 0:
+                        self._timer_remaining = 0
+                        self._timer_state = 'finished'
+            else:
+                # Paused or finished — wait for a signal
+                self._timer_tick.wait(timeout=0.5)
+                self._timer_tick.clear()
+
+            # Update display
+            paused = (self._timer_state == 'paused')
+            self.display.show_countdown(self._timer_remaining, paused=paused)
 
     def load_token(self) -> bool:
         """Load saved access token from file.
@@ -388,6 +450,12 @@ class ScoreboardApp:
                 if not self.authenticated:
                     self._stop_websocket()
                     self.authenticate()
+
+                # While timer is active, skip score polling and let the timer thread drive the display
+                if self._timer_state != 'inactive':
+                    self._refresh_event.wait(timeout=0.1)
+                    self._refresh_event.clear()
+                    continue
 
                 # Determine when to poll next
                 now = datetime.now(timezone.utc)
