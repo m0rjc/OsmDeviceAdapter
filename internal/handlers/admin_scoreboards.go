@@ -9,6 +9,7 @@ import (
 
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db/devicecode"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/middleware"
+	wsinternal "github.com/m0rjc/OsmDeviceAdapter/internal/websocket"
 )
 
 // ScoreboardResponse represents a device scoreboard in API responses.
@@ -201,6 +202,10 @@ func AdminScoreboardSectionHandler(deps *Dependencies) http.HandlerFunc {
 			"device_code_prefix", deviceCodePrefix,
 			"new_section_id", req.SectionID,
 		)
+
+		if deps.WebSocketHub != nil {
+			deps.WebSocketHub.BroadcastToDevice(*targetDevice, wsinternal.ReconnectMessage())
+		}
 
 		writeJSON(w, map[string]bool{"success": true})
 	}

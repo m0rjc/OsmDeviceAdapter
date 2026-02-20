@@ -25,11 +25,11 @@ const (
 
 // deviceConn holds a single device's WebSocket connection state.
 type deviceConn struct {
-	hub        *Hub
-	conn       *ws.Conn
-	send       chan Message
-	deviceCode string
-	channelKey string // routing key, e.g. "section:42" or "adhoc:7"
+	hub         *Hub
+	conn        *ws.Conn
+	send        chan Message
+	deviceCode  string
+	channelKeys []string // routing keys, e.g. ["section:42", "device:abc123"]
 }
 
 // Hub is the in-memory registry of active device WebSocket connections.
@@ -59,57 +59,67 @@ func NewHub(redis *db.RedisClient) *Hub {
 	}
 }
 
-// RegisterDevice adds dc to the hub and requests a Redis subscription for the
-// device's channel if this is the first device on that channel.
-// channelKey is "section:{sectionID}" or "adhoc:{osmUserID}".
-func (h *Hub) RegisterDevice(deviceCode, channelKey string, dc *deviceConn) {
+// RegisterDevice adds dc to the hub and requests Redis subscriptions for the
+// device's channels if they have no existing subscribers.
+// channelKeys should include the section/adhoc routing key and the per-device key.
+func (h *Hub) RegisterDevice(deviceCode string, dc *deviceConn, channelKeys ...string) {
+	needsSub := make([]bool, len(channelKeys))
+
 	h.mu.Lock()
 	h.deviceConns[deviceCode] = dc
-	if h.channelDevices[channelKey] == nil {
-		h.channelDevices[channelKey] = make(map[string]struct{})
+	for i, channelKey := range channelKeys {
+		if h.channelDevices[channelKey] == nil {
+			h.channelDevices[channelKey] = make(map[string]struct{})
+		}
+		needsSub[i] = len(h.channelDevices[channelKey]) == 0
+		h.channelDevices[channelKey][deviceCode] = struct{}{}
 	}
-	wasEmpty := len(h.channelDevices[channelKey]) == 0
-	h.channelDevices[channelKey][deviceCode] = struct{}{}
 	h.mu.Unlock()
 
 	slog.Info("websocket.hub.device_registered",
 		"component", "websocket",
 		"event", "hub.register",
 		"device_code_prefix", deviceCode[:min(8, len(deviceCode))],
-		"channel_key", channelKey,
+		"channel_keys", channelKeys,
 	)
 
-	if wasEmpty {
-		select {
-		case h.subCh <- redisChanPrefix + channelKey:
-		default:
+	for i, channelKey := range channelKeys {
+		if needsSub[i] {
+			select {
+			case h.subCh <- redisChanPrefix + channelKey:
+			default:
+			}
 		}
 	}
 }
 
-// UnregisterDevice removes the device from the hub and requests a Redis
-// unsubscription if no other devices remain on that channel.
-// channelKey must match the value used in RegisterDevice.
-func (h *Hub) UnregisterDevice(deviceCode, channelKey string) {
+// UnregisterDevice removes the device from the hub and requests Redis
+// unsubscriptions for any channels that now have no remaining subscribers.
+// channelKeys must match the values used in RegisterDevice.
+func (h *Hub) UnregisterDevice(deviceCode string, channelKeys ...string) {
+	var toUnsub []string
+
 	h.mu.Lock()
 	delete(h.deviceConns, deviceCode)
-	if devs, ok := h.channelDevices[channelKey]; ok {
-		delete(devs, deviceCode)
-		if len(devs) == 0 {
-			delete(h.channelDevices, channelKey)
+	for _, channelKey := range channelKeys {
+		if devs, ok := h.channelDevices[channelKey]; ok {
+			delete(devs, deviceCode)
+			if len(devs) == 0 {
+				delete(h.channelDevices, channelKey)
+				toUnsub = append(toUnsub, channelKey)
+			}
 		}
 	}
-	nowEmpty := h.channelDevices[channelKey] == nil
 	h.mu.Unlock()
 
 	slog.Info("websocket.hub.device_unregistered",
 		"component", "websocket",
 		"event", "hub.unregister",
 		"device_code_prefix", deviceCode[:min(8, len(deviceCode))],
-		"channel_key", channelKey,
+		"channel_keys", channelKeys,
 	)
 
-	if nowEmpty {
+	for _, channelKey := range toUnsub {
 		select {
 		case h.unsubCh <- redisChanPrefix + channelKey:
 		default:
@@ -135,6 +145,11 @@ func (h *Hub) BroadcastToSection(sectionID string, msg Message) {
 // OSM user's ad-hoc section.
 func (h *Hub) BroadcastToAdhocUser(userID string, msg Message) {
 	h.publish("adhoc:"+userID, msg)
+}
+
+// BroadcastToDevice publishes msg to the specific device identified by deviceCode.
+func (h *Hub) BroadcastToDevice(deviceCode string, msg Message) {
+	h.publish("device:"+deviceCode, msg)
 }
 
 // publish sends msg to the Redis pub/sub channel for channelKey.
@@ -311,7 +326,7 @@ func (dc *deviceConn) writePump() {
 // device, logging "status" payloads. When it returns the device is unregistered.
 func (dc *deviceConn) readPump() {
 	defer func() {
-		dc.hub.UnregisterDevice(dc.deviceCode, dc.channelKey)
+		dc.hub.UnregisterDevice(dc.deviceCode, dc.channelKeys...)
 		dc.conn.Close()
 	}()
 
@@ -340,7 +355,7 @@ func (dc *deviceConn) readPump() {
 				"component", "websocket",
 				"event", "device.status",
 				"device_code_prefix", dc.deviceCode[:min(8, len(dc.deviceCode))],
-				"channel_key", dc.channelKey,
+				"channel_keys", dc.channelKeys,
 				"uptime", msg.Uptime,
 			)
 		}

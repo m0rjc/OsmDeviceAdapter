@@ -16,3 +16,10 @@ func RefreshScoresMessage() Message {
 func DisconnectMessage(reason string) Message {
 	return Message{Type: "disconnect", Reason: reason}
 }
+
+// ReconnectMessage creates a server→device message asking the device to drop
+// its current WebSocket connection and reconnect. Used when the device's section
+// assignment changes so it resubscribes to the correct channel.
+func ReconnectMessage() Message {
+	return Message{Type: "reconnect"}
+}
