@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	ws "github.com/gorilla/websocket"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
-// deviceAuthenticator authenticates a device access token.
 type deviceAuthenticator interface {
 	Authenticate(ctx context.Context, authHeader string) (types.User, error)
 }
@@ -24,9 +24,12 @@ type deviceCodeProvider interface {
 
 // DeviceWebSocketHandler returns an http.HandlerFunc for GET /ws/device.
 //
-// The device supplies its access token as the "token" query parameter.
-// The handler validates the token, upgrades the connection, registers the
-// device with the hub, and runs the read/write pumps.
+// Auth is accepted either via:
+//   - Authorization: Bearer <token>   (preferred)
+//   - ?token=<token>                 (fallback; useful for clients that can't set headers)
+//
+// Note: query-string tokens are more likely to leak via logs/proxies, so clients
+// should prefer the Authorization header when possible.
 func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDomain string) http.HandlerFunc {
 	upgrader := ws.Upgrader{
 		ReadBufferSize:  1024,
@@ -50,13 +53,18 @@ func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDom
 		}
 
 		// --- Authentication ---
-		token := r.URL.Query().Get("token")
-		if token == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		// Prefer Authorization header; fall back to query param for simpler clients.
+		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+		if authHeader == "" {
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			authHeader = "Bearer " + token
 		}
 
-		user, err := deviceAuth.Authenticate(r.Context(), "Bearer "+token)
+		user, err := deviceAuth.Authenticate(r.Context(), authHeader)
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -128,8 +136,15 @@ func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDom
 			channelKeys: channelKeys,
 		}
 
-		hub.RegisterDevice(device.DeviceCode, dc, channelKeys...)
+		subCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
 
+		if err := hub.RegisterDeviceAndSubscribe(subCtx, device.DeviceCode, dc, channelKeys...); err != nil {
+			// Can't "refuse" HTTP after upgrade; close the WS so the client retries.
+			_ = conn.WriteMessage(ws.CloseMessage, ws.FormatCloseMessage(ws.CloseTryAgainLater, "temporarily unavailable"))
+			_ = conn.Close()
+			return
+		}
 		// writePump runs in a separate goroutine; readPump blocks until the
 		// connection closes (and then unregisters the device from the hub).
 		go dc.writePump()

@@ -13,7 +13,7 @@ import time
 import signal
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable, List
 
 from api_client import (
     OSMDeviceClient, DeviceFlowError, AccessDenied, ExpiredToken,
@@ -45,9 +45,12 @@ class WebSocketClient:
     Calls on_message(data) for every parsed JSON message received.
     """
 
-    def __init__(self, ws_url: str, on_message):
+    def __init__(self, ws_url: str, on_message, headers: Optional[List[str]] = None,
+                 on_state_change: Optional[Callable[[bool], None]] = None):
         self.url = ws_url
+        self.headers = headers or []
         self._on_message = on_message
+        self._on_state_change = on_state_change
         self._stop = threading.Event()
         self._connected = False
         self._app = None  # websocket.WebSocketApp instance
@@ -66,6 +69,47 @@ class WebSocketClient:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    def _run_loop(self):
+        import random
+
+        base_backoff = 2  # seconds before first retry
+        backoff = base_backoff
+
+        while not self._stop.is_set():
+            try:
+                self._connect()
+            except Exception as e:
+                logger.debug(f"WebSocket run error: {e}")
+
+            if self._stop.is_set():
+                break
+
+            # If we were connected at any point during the last attempt,
+            # treat it as "success" and reset backoff so brief drops recover quickly.
+            if self._connected:
+                backoff = base_backoff
+            else:
+                backoff = min(backoff * 2, 60)
+
+            # Add jitter to avoid thundering herd reconnects
+            sleep_for = backoff + random.uniform(0, min(1.0, backoff * 0.1))
+            logger.debug(f"WebSocket reconnecting in {sleep_for:.1f}s")
+            self._stop.wait(timeout=sleep_for)
+
+    def _connect(self):
+        try:
+            import websocket as ws_lib
+        except ImportError:
+            logger.warning("websocket-client not installed; real-time updates unavailable")
+            self._stop.set()
+            return
+        self._connected = value
+        if self._on_state_change is not None:
+            try:
+                self._on_state_change(value)
+            except Exception as e:
+                logger.debug(f"WebSocket state-change callback error: {e}")
 
     def _run_loop(self):
         backoff = 5  # seconds before first retry
@@ -88,7 +132,7 @@ class WebSocketClient:
             return
 
         def on_open(ws):
-            self._connected = True
+            self._set_connected(True)
             logger.info("WebSocket connected — real-time score updates active")
 
         def on_message(ws, message):
@@ -100,7 +144,7 @@ class WebSocketClient:
 
         def on_close(ws, close_status_code, close_msg):
             self._connected = False
-            logger.debug("WebSocket connection closed")
+            logger.debug(f"WebSocket connection closed (code={close_status_code}, msg={close_msg})")
 
         def on_error(ws, error):
             self._connected = False
@@ -108,6 +152,31 @@ class WebSocketClient:
 
         app = ws_lib.WebSocketApp(
             self.url,
+            header=self.headers,
+            on_open=on_open,
+            on_message=on_message,
+            on_close=on_close,
+            on_error=on_error,
+            )
+
+        def on_message(ws, message):
+            try:
+                data = json.loads(message)
+                self._on_message(data)
+            except Exception as e:
+                logger.warning(f"WebSocket message error: {e}")
+
+        def on_close(ws, close_status_code, close_msg):
+            self._set_connected(False)
+            logger.debug(f"WebSocket connection closed (code={close_status_code}, msg={close_msg})")
+
+        def on_error(ws, error):
+            self._set_connected(False)
+            logger.debug(f"WebSocket error: {error}")
+
+        app = ws_lib.WebSocketApp(
+            self.url,
+            header=self.headers,
             on_open=on_open,
             on_message=on_message,
             on_close=on_close,
@@ -116,7 +185,7 @@ class WebSocketClient:
         self._app = app
         # run_forever blocks until the connection closes
         app.run_forever(ping_interval=30, ping_timeout=10)
-        self._connected = False
+        self._set_connected(False)
         self._app = None
 
 
@@ -156,21 +225,33 @@ class ScoreboardApp:
         logger.info(f"Received signal {signum}, shutting down...")
         raise KeyboardInterrupt()
 
+    def _on_ws_state_change(self, connected: bool):
+        """Called from WS thread when connection state changes."""
+        self._ws_state_event.set()
+
     def _start_websocket(self):
         """Start (or restart) the WebSocket client using the current access token."""
         self._stop_websocket()
         token = self.client.access_token
         if not token:
             return
+
         ws_url = (
             API_BASE_URL
             .replace("https://", "wss://")
             .replace("http://", "ws://")
             .rstrip("/")
-            + f"/ws/device?token={token}"
+            + "/ws/device"
         )
+        headers = [f"Authorization: Bearer {token}"]
+
         logger.info("Starting WebSocket client")
-        client = WebSocketClient(ws_url, on_message=self._on_ws_message)
+        client = WebSocketClient(
+            ws_url,
+            on_message=self._on_ws_message,
+            headers=headers,
+            on_state_change=self._on_ws_state_change,
+        )
         client.start()
         self._ws_client = client
 
@@ -180,10 +261,28 @@ class ScoreboardApp:
             logger.info("Stopping WebSocket client")
             self._ws_client.stop()
             self._ws_client = None
+            self._ws_state_event.set()  # ensure UI can update immediately
 
     @property
     def _ws_connected(self) -> bool:
         return self._ws_client is not None and self._ws_client.connected
+
+    def _redraw_display_status_only(self):
+        """Redraw using cached scores to update WS/rate-limit indicator without polling."""
+        if self._timer_state != 'inactive':
+            # Timer thread owns the display; let it redraw on next tick.
+            self._timer_tick.set()
+            return
+
+        # If we have cached patrols, show them; otherwise keep current screen.
+        if self._current_patrols:
+            self.display.show_scores(
+                self._current_patrols,
+                self.current_rate_limit_state,
+                patrol_colors=self._current_patrol_colors,
+                score_offset=self.score_offset,
+                ws_connected=self._ws_connected,
+            )
 
     def _on_ws_message(self, data: dict):
         """Route incoming WebSocket messages to the appropriate handler."""
@@ -472,8 +571,6 @@ class ScoreboardApp:
                     self.authenticate()
 
                 # While timer is active, let the timer thread drive the display.
-                # Still refresh score data if the server signals an update so the
-                # score strip on the stopwatch stays current.
                 if self._timer_state != 'inactive':
                     triggered = self._refresh_event.wait(timeout=0.1)
                     self._refresh_event.clear()

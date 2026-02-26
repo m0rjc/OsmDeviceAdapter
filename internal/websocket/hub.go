@@ -23,6 +23,11 @@ const (
 	redisChanPrefix = "ws:"
 )
 
+type subscribeReq struct {
+	channel string
+	respCh  chan error // buffered (size 1) so hub.Run never blocks
+}
+
 // deviceConn holds a single device's WebSocket connection state.
 type deviceConn struct {
 	hub         *Hub
@@ -42,7 +47,7 @@ type Hub struct {
 	redis *db.RedisClient
 
 	// subCh and unsubCh carry channel names to the Run goroutine.
-	subCh   chan string
+	subCh   chan subscribeReq
 	unsubCh chan string
 	closeCh chan struct{}
 }
@@ -53,19 +58,60 @@ func NewHub(redis *db.RedisClient) *Hub {
 		deviceConns:    make(map[string]*deviceConn),
 		channelDevices: make(map[string]map[string]struct{}),
 		redis:          redis,
-		subCh:          make(chan string, 8),
+		subCh:          make(chan subscribeReq, 8),
 		unsubCh:        make(chan string, 8),
 		closeCh:        make(chan struct{}),
 	}
 }
 
-// RegisterDevice adds dc to the hub and requests Redis subscriptions for the
-// device's channels if they have no existing subscribers.
-// channelKeys should include the section/adhoc routing key and the per-device key.
-func (h *Hub) RegisterDevice(deviceCode string, dc *deviceConn, channelKeys ...string) {
+func (h *Hub) subscribeSync(ctx context.Context, channel string) error {
+	respCh := make(chan error, 1)
+	req := subscribeReq{channel: channel, respCh: respCh}
+
+	// Subscription requests MUST NOT be dropped: if we accept a WebSocket connection
+	// but fail to subscribe to its Redis channels, the hub will silently miss messages.
+	// We therefore block here (bounded by ctx timeout) to keep semantics correct.
+	select {
+	case h.subCh <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case err := <-respCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// RegisterDeviceAndSubscribe registers dc and ensures required Redis subscriptions
+// are in place before returning. If subscription fails, the connection is
+// unregistered so the client can retry cleanly.
+func (h *Hub) RegisterDeviceAndSubscribe(ctx context.Context, deviceCode string, dc *deviceConn, channelKeys ...string) error {
 	needsSub := make([]bool, len(channelKeys))
+	var toUnsub []string
+	var replaced *deviceConn
 
 	h.mu.Lock()
+
+	// If this device is already connected, replace the old connection.
+	if old := h.deviceConns[deviceCode]; old != nil && old != dc {
+		replaced = old
+
+		// Remove stale channel tracking tied to the previous connection's channel keys.
+		for _, channelKey := range old.channelKeys {
+			if devs, ok := h.channelDevices[channelKey]; ok {
+				delete(devs, deviceCode)
+				if len(devs) == 0 {
+					delete(h.channelDevices, channelKey)
+					toUnsub = append(toUnsub, channelKey)
+				}
+			}
+		}
+	}
+
+	// Register the new connection.
 	h.deviceConns[deviceCode] = dc
 	for i, channelKey := range channelKeys {
 		if h.channelDevices[channelKey] == nil {
@@ -74,6 +120,7 @@ func (h *Hub) RegisterDevice(deviceCode string, dc *deviceConn, channelKeys ...s
 		needsSub[i] = len(h.channelDevices[channelKey]) == 0
 		h.channelDevices[channelKey][deviceCode] = struct{}{}
 	}
+
 	h.mu.Unlock()
 
 	slog.Info("websocket.hub.device_registered",
@@ -83,48 +130,46 @@ func (h *Hub) RegisterDevice(deviceCode string, dc *deviceConn, channelKeys ...s
 		"channel_keys", channelKeys,
 	)
 
-	for i, channelKey := range channelKeys {
-		if needsSub[i] {
-			select {
-			case h.subCh <- redisChanPrefix + channelKey:
-			default:
-			}
-		}
-	}
-}
-
-// UnregisterDevice removes the device from the hub and requests Redis
-// unsubscriptions for any channels that now have no remaining subscribers.
-// channelKeys must match the values used in RegisterDevice.
-func (h *Hub) UnregisterDevice(deviceCode string, channelKeys ...string) {
-	var toUnsub []string
-
-	h.mu.Lock()
-	delete(h.deviceConns, deviceCode)
-	for _, channelKey := range channelKeys {
-		if devs, ok := h.channelDevices[channelKey]; ok {
-			delete(devs, deviceCode)
-			if len(devs) == 0 {
-				delete(h.channelDevices, channelKey)
-				toUnsub = append(toUnsub, channelKey)
-			}
-		}
-	}
-	h.mu.Unlock()
-
-	slog.Info("websocket.hub.device_unregistered",
-		"component", "websocket",
-		"event", "hub.unregister",
-		"device_code_prefix", deviceCode[:min(8, len(deviceCode))],
-		"channel_keys", channelKeys,
-	)
-
+	// Unsubscribe requests are best-effort, but we still avoid silent drops:
+	// block unless ctx is done.
 	for _, channelKey := range toUnsub {
 		select {
 		case h.unsubCh <- redisChanPrefix + channelKey:
-		default:
+		case <-ctx.Done():
+			// If we're already timing out/failing the connect, don't hang here.
+			return ctx.Err()
 		}
 	}
+
+	// Ensure subscriptions are actually applied before we proceed.
+	for i, channelKey := range channelKeys {
+		if !needsSub[i] {
+			continue
+		}
+		if err := h.subscribeSync(ctx, redisChanPrefix+channelKey); err != nil {
+			slog.Error("websocket.hub.subscribe_failed_before_accept",
+				"component", "websocket",
+				"event", "hub.subscribe_sync_error",
+				"channel", redisChanPrefix+channelKey,
+				"device_code_prefix", deviceCode[:min(8, len(deviceCode))],
+				"error", err,
+			)
+			h.UnregisterDeviceConn(dc)
+			return err
+		}
+	}
+
+	// Ask the replaced connection to disconnect (outside the hub lock).
+	if replaced != nil {
+		select {
+		case replaced.send <- DisconnectMessage("replaced by new connection"):
+		default:
+		}
+		close(replaced.send)
+		replaced.conn.Close() //nolint:errcheck
+	}
+
+	return nil
 }
 
 // IsConnected reports whether a device with the given code is currently
@@ -134,6 +179,57 @@ func (h *Hub) IsConnected(deviceCode string) bool {
 	_, ok := h.deviceConns[deviceCode]
 	h.mu.RUnlock()
 	return ok
+}
+
+// UnregisterDeviceConn removes a specific connection from the hub and requests Redis
+// unsubscriptions for any channels that now have no remaining subscribers.
+//
+// IMPORTANT: This is connection-aware to avoid a stale connection unregistering
+// a newer replacement that reused the same device code.
+func (h *Hub) UnregisterDeviceConn(dc *deviceConn) {
+	if dc == nil {
+		return
+	}
+
+	var toUnsub []string
+
+	h.mu.Lock()
+
+	current := h.deviceConns[dc.deviceCode]
+	if current != dc {
+		h.mu.Unlock()
+		return
+	}
+
+	delete(h.deviceConns, dc.deviceCode)
+	for _, channelKey := range dc.channelKeys {
+		if devs, ok := h.channelDevices[channelKey]; ok {
+			delete(devs, dc.deviceCode)
+			if len(devs) == 0 {
+				delete(h.channelDevices, channelKey)
+				toUnsub = append(toUnsub, channelKey)
+			}
+		}
+	}
+
+	h.mu.Unlock()
+
+	slog.Info("websocket.hub.device_unregistered",
+		"component", "websocket",
+		"event", "hub.unregister",
+		"device_code_prefix", dc.deviceCode[:min(8, len(dc.deviceCode))],
+		"channel_keys", dc.channelKeys,
+	)
+
+	// Unsubscribe is best-effort; block unless the hub is shutting down.
+	for _, channelKey := range toUnsub {
+		// No ctx here; avoid deadlock by allowing shutdown to proceed.
+		select {
+		case h.unsubCh <- redisChanPrefix + channelKey:
+		case <-h.closeCh:
+			return
+		}
+	}
 }
 
 // BroadcastToSection publishes msg to all devices connected for the given OSM sectionID.
@@ -182,16 +278,13 @@ func (h *Hub) Run(ctx context.Context) {
 			h.closeAllConnections("hub closed")
 			return
 
-		case channel := <-h.subCh:
-			if err := pubSub.Subscribe(ctx, channel); err != nil {
-				slog.Error("websocket.hub.subscribe_failed",
-					"component", "websocket",
-					"event", "hub.subscribe_error",
-					"channel", channel,
-					"error", err,
-				)
+		case req := <-h.subCh:
+			err := pubSub.Subscribe(ctx, req.channel)
+			// Never block hub.Run on a slow/abandoned caller.
+			select {
+			case req.respCh <- err:
+			default:
 			}
-
 		case channel := <-h.unsubCh:
 			if err := pubSub.Unsubscribe(ctx, channel); err != nil {
 				slog.Error("websocket.hub.unsubscribe_failed",
@@ -239,6 +332,9 @@ func (h *Hub) deliverToChannel(channelKey string, msg Message) {
 	h.mu.RUnlock()
 
 	for _, dc := range conns {
+		// Per-connection send is deliberately non-blocking:
+		// a slow/unhealthy client must not stall delivery to all other clients.
+		// When the buffer is full we drop the message and rely on the next refresh/update.
 		select {
 		case dc.send <- msg:
 		default:
@@ -326,7 +422,7 @@ func (dc *deviceConn) writePump() {
 // device, logging "status" payloads. When it returns the device is unregistered.
 func (dc *deviceConn) readPump() {
 	defer func() {
-		dc.hub.UnregisterDevice(dc.deviceCode, dc.channelKeys...)
+		dc.hub.UnregisterDeviceConn(dc)
 		dc.conn.Close()
 	}()
 
