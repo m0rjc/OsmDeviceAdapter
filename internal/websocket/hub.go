@@ -47,9 +47,10 @@ type Hub struct {
 	redis *db.RedisClient
 
 	// subCh and unsubCh carry channel names to the Run goroutine.
-	subCh   chan subscribeReq
-	unsubCh chan string
-	closeCh chan struct{}
+	subCh     chan subscribeReq
+	unsubCh   chan string
+	closeCh   chan struct{}
+	closeOnce sync.Once
 }
 
 // NewHub creates a new Hub backed by the given RedisClient.
@@ -166,7 +167,9 @@ func (h *Hub) RegisterDeviceAndSubscribe(ctx context.Context, deviceCode string,
 		default:
 		}
 		close(replaced.send)
-		replaced.conn.Close() //nolint:errcheck
+		if replaced.conn != nil {
+			replaced.conn.Close() //nolint:errcheck
+		}
 	}
 
 	return nil
@@ -267,7 +270,15 @@ func (h *Hub) Run(ctx context.Context) {
 	pubSub := h.redis.Subscribe(ctx)
 	defer pubSub.Close()
 
-	msgCh := pubSub.Channel()
+	// Events() uses ChannelWithSubscriptions so we receive both subscription
+	// confirmations and actual messages. This allows subscribeSync to wait
+	// until Redis has truly registered the subscription before returning,
+	// eliminating the race between SUBSCRIBE and a subsequent PUBLISH.
+	eventCh := pubSub.Events()
+
+	// pendingSubs maps a fully-prefixed channel name to the response channel
+	// of the subscribeSync call awaiting Redis confirmation.
+	pendingSubs := make(map[string]chan<- error)
 
 	for {
 		select {
@@ -280,11 +291,17 @@ func (h *Hub) Run(ctx context.Context) {
 
 		case req := <-h.subCh:
 			err := pubSub.Subscribe(ctx, req.channel)
-			// Never block hub.Run on a slow/abandoned caller.
-			select {
-			case req.respCh <- err:
-			default:
+			if err != nil {
+				// Send error immediately; no confirmation will arrive.
+				select {
+				case req.respCh <- err:
+				default:
+				}
+			} else {
+				// Confirmation will arrive as a PubSubSubscribed event.
+				pendingSubs[req.channel] = req.respCh
 			}
+
 		case channel := <-h.unsubCh:
 			if err := pubSub.Unsubscribe(ctx, channel); err != nil {
 				slog.Error("websocket.hub.unsubscribe_failed",
@@ -295,26 +312,38 @@ func (h *Hub) Run(ctx context.Context) {
 				)
 			}
 
-		case redisMsg, ok := <-msgCh:
+		case event, ok := <-eventCh:
 			if !ok {
 				return
 			}
-			if len(redisMsg.Channel) <= len(redisChanPrefix) {
-				continue
-			}
-			channelKey := redisMsg.Channel[len(redisChanPrefix):]
+			switch event.Kind {
+			case db.PubSubSubscribed:
+				// Redis confirmed the subscription; unblock the waiting subscribeSync.
+				if respCh, ok := pendingSubs[event.Channel]; ok {
+					delete(pendingSubs, event.Channel)
+					select {
+					case respCh <- nil:
+					default:
+					}
+				}
 
-			var msg Message
-			if err := json.Unmarshal([]byte(redisMsg.Payload), &msg); err != nil {
-				slog.Warn("websocket.hub.bad_redis_payload",
-					"component", "websocket",
-					"event", "hub.decode_error",
-					"channel", redisMsg.Channel,
-					"error", err,
-				)
-				continue
+			case db.PubSubMessage:
+				if len(event.Channel) <= len(redisChanPrefix) {
+					continue
+				}
+				channelKey := event.Channel[len(redisChanPrefix):]
+				var msg Message
+				if err := json.Unmarshal([]byte(event.Payload), &msg); err != nil {
+					slog.Warn("websocket.hub.bad_redis_payload",
+						"component", "websocket",
+						"event", "hub.decode_error",
+						"channel", event.Channel,
+						"error", err,
+					)
+					continue
+				}
+				h.deliverToChannel(channelKey, msg)
 			}
-			h.deliverToChannel(channelKey, msg)
 		}
 	}
 }
@@ -368,9 +397,9 @@ func (h *Hub) closeAllConnections(reason string) {
 	}
 }
 
-// Close shuts down the hub, disconnecting all devices.
+// Close shuts down the hub, disconnecting all devices. Safe to call multiple times.
 func (h *Hub) Close() {
-	close(h.closeCh)
+	h.closeOnce.Do(func() { close(h.closeCh) })
 }
 
 // writePump runs in a goroutine per device. It writes outgoing messages,

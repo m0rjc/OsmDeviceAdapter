@@ -73,8 +73,8 @@ func (r *RedisClient) Del(ctx context.Context, keys ...string) *redis.IntCmd {
 
 // RateLimitResult contains the result of a rate limit check
 type RateLimitResult struct {
-	Allowed   bool          // Whether the request is allowed
-	Remaining int64         // Remaining requests in the current window
+	Allowed    bool          // Whether the request is allowed
+	Remaining  int64         // Remaining requests in the current window
 	RetryAfter time.Duration // Time until the rate limit resets (0 if allowed)
 }
 
@@ -89,7 +89,8 @@ type RateLimitResult struct {
 //   - window: Time window for the rate limit
 //
 // Example usage:
-//   result, err := redis.CheckRateLimit(ctx, "auth", "192.168.1.1:/device/authorize", 10, time.Minute)
+//
+//	result, err := redis.CheckRateLimit(ctx, "auth", "192.168.1.1:/device/authorize", 10, time.Minute)
 func (r *RedisClient) CheckRateLimit(ctx context.Context, name, key string, limit int64, window time.Duration) (*RateLimitResult, error) {
 	rateLimitKey := r.prefixKey(fmt.Sprintf("ratelimit:%s:%s", name, key))
 
@@ -184,6 +185,21 @@ func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) *PubSub
 	}
 }
 
+// PubSubEventKind identifies the kind of pub/sub event.
+type PubSubEventKind int
+
+const (
+	PubSubMessage    PubSubEventKind = iota // an actual published message
+	PubSubSubscribed                        // Redis confirmed a SUBSCRIBE
+)
+
+// PubSubEvent is delivered on the channel returned by PubSub.Events.
+type PubSubEvent struct {
+	Kind    PubSubEventKind
+	Channel string // channel name without key prefix
+	Payload string // message payload (only for PubSubMessage)
+}
+
 // PubSub wraps *redis.PubSub applying key-prefix handling transparently.
 // Subscribe/Unsubscribe calls have the prefix applied; incoming message channel
 // names have the prefix stripped so callers work with unprefixed names.
@@ -210,6 +226,39 @@ func (p *PubSub) Unsubscribe(ctx context.Context, channels ...string) error {
 		prefixed[i] = p.keyPrefix + ch
 	}
 	return p.inner.Unsubscribe(ctx, prefixed...)
+}
+
+// Events returns a channel that delivers both pub/sub messages and subscription
+// confirmations. Subscription confirmations (PubSubSubscribed) allow the caller
+// to know when Redis has actually processed a SUBSCRIBE command, eliminating
+// the race between subscribing and publishing on a separate connection.
+//
+// Events uses ChannelWithSubscriptions internally and must not be combined
+// with Channel() or Receive() on the same PubSub.
+func (p *PubSub) Events() <-chan *PubSubEvent {
+	out := make(chan *PubSubEvent, 100)
+	innerCh := p.inner.ChannelWithSubscriptions()
+	go func() {
+		defer close(out)
+		for item := range innerCh {
+			switch msg := item.(type) {
+			case *redis.Message:
+				out <- &PubSubEvent{
+					Kind:    PubSubMessage,
+					Channel: strings.TrimPrefix(msg.Channel, p.keyPrefix),
+					Payload: msg.Payload,
+				}
+			case *redis.Subscription:
+				if msg.Kind == "subscribe" {
+					out <- &PubSubEvent{
+						Kind:    PubSubSubscribed,
+						Channel: strings.TrimPrefix(msg.Channel, p.keyPrefix),
+					}
+				}
+			}
+		}
+	}()
+	return out
 }
 
 // Channel returns a channel that receives messages with the key prefix stripped

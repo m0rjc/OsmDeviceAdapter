@@ -17,15 +17,46 @@ func newTestRedis(t *testing.T) (*db.RedisClient, *miniredis.Miniredis) {
 	mr := miniredis.RunT(t)
 	rc, err := db.NewRedisClient("redis://"+mr.Addr(), "")
 	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = rc.Close()
+		mr.Close()
+	})
+
 	return rc, mr
+}
+
+func startHub(t *testing.T, hub *Hub) context.Context {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		hub.Run(ctx)
+	}()
+
+	t.Cleanup(func() {
+		// Close() makes hub.Run return even if ctx isn't cancelled yet.
+		// Cancel() makes sure any Redis ops using ctx unwind too.
+		hub.Close()
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for hub.Run to stop")
+		}
+	})
+
+	return ctx
 }
 
 func TestRegisterUnregister(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	hub := NewHub(rc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	ctx := startHub(t, hub)
 
 	dc := &deviceConn{
 		hub:         hub,
@@ -48,9 +79,7 @@ func TestRegisterUnregister(t *testing.T) {
 func TestRegisterUnregisterSectionTracking(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	hub := NewHub(rc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	ctx := startHub(t, hub)
 
 	dc1 := &deviceConn{hub: hub, send: make(chan Message, 1), deviceCode: "dev-1", channelKeys: []string{"section:7", "device:dev-1"}}
 	dc2 := &deviceConn{hub: hub, send: make(chan Message, 1), deviceCode: "dev-2", channelKeys: []string{"section:7", "device:dev-2"}}
@@ -85,9 +114,7 @@ func TestRegisterUnregisterSectionTracking(t *testing.T) {
 func TestRegisterReplaceKeepsMostRecentConnection(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	hub := NewHub(rc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	ctx := startHub(t, hub)
 
 	dcOld := &deviceConn{hub: hub, send: make(chan Message, 1), deviceCode: "dev-r", channelKeys: []string{"section:1", "device:dev-r"}}
 	dcNew := &deviceConn{hub: hub, send: make(chan Message, 1), deviceCode: "dev-r", channelKeys: []string{"section:1", "device:dev-r"}}
@@ -110,9 +137,7 @@ func TestRegisterReplaceKeepsMostRecentConnection(t *testing.T) {
 func TestBroadcastToSectionDelivery(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	hub := NewHub(rc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	ctx := startHub(t, hub)
 
 	send := make(chan Message, 4)
 	dc := &deviceConn{hub: hub, send: send, deviceCode: "device-xyz", channelKeys: []string{"section:99", "device:device-xyz"}}
@@ -134,9 +159,7 @@ func TestBroadcastToSectionDelivery(t *testing.T) {
 func TestBroadcastToDeviceDelivery(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	hub := NewHub(rc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	ctx := startHub(t, hub)
 
 	send := make(chan Message, 4)
 	dc := &deviceConn{hub: hub, send: send, deviceCode: "device-per", channelKeys: []string{"section:55", "device:device-per"}}
@@ -158,9 +181,8 @@ func TestBroadcastToDeviceDelivery(t *testing.T) {
 func TestBroadcastToUnknownSectionIsNoop(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	hub := NewHub(rc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	_ = startHub(t, hub)
+
 	// No device registered for section 55 — BroadcastToSection must not panic.
 	hub.BroadcastToSection("55", RefreshScoresMessage())
 }
@@ -168,9 +190,7 @@ func TestBroadcastToUnknownSectionIsNoop(t *testing.T) {
 func TestCloseDisconnectsDevices(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	hub := NewHub(rc)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	ctx := startHub(t, hub)
 
 	send := make(chan Message, 4)
 	dc := &deviceConn{hub: hub, send: send, deviceCode: "dev-close", channelKeys: []string{"section:1", "device:dev-close"}}
