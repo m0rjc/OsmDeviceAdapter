@@ -221,6 +221,39 @@ func DeviceTokenHandler(deps *Dependencies) http.HandlerFunc {
 			return
 		}
 
+		// Per-IP rate limit to prevent token endpoint flooding with random device codes
+		remoteMetadata := middleware.RemoteFromContext(r.Context())
+		clientIP := remoteMetadata.IP
+		rateLimitKey := fmt.Sprintf("%s:/device/token", clientIP)
+		rateLimitResult, err := deps.Conns.GetRateLimiter().CheckRateLimit(
+			r.Context(),
+			"device_token",
+			rateLimitKey,
+			int64(deps.Config.RateLimit.DeviceTokenRateLimit),
+			time.Minute,
+		)
+		if err != nil {
+			slog.Error("device.token.rate_limit_error",
+				"component", "device_oauth",
+				"event", "token.rate_limit_error",
+				"client_ip", clientIP,
+				"error", err,
+			)
+			// Continue on rate limit check error - don't block legitimate requests
+		} else if !rateLimitResult.Allowed {
+			slog.Warn("device.token.rate_limited",
+				"component", "device_oauth",
+				"event", "token.rate_limited",
+				"client_ip", clientIP,
+				"retry_after", rateLimitResult.RetryAfter.Seconds(),
+			)
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(rateLimitResult.RetryAfter.Seconds())))
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", deps.Config.RateLimit.DeviceTokenRateLimit))
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
+			return
+		}
+
 		var req DeviceTokenRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			sendTokenError(w, "invalid_request", "Invalid request body")

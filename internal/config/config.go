@@ -47,8 +47,9 @@ type DeviceOAuthConfig struct {
 
 // RateLimitConfig holds rate limiting configuration
 type RateLimitConfig struct {
-	DeviceAuthorizeRateLimit int `key:"DEVICE_AUTHORIZE_RATE_LIMIT" default:"6" min:"1"` // max requests per minute per IP
-	DeviceEntryRateLimit     int `key:"DEVICE_ENTRY_RATE_LIMIT" default:"5" min:"1"`     // seconds between entries
+	DeviceAuthorizeRateLimit int `key:"DEVICE_AUTHORIZE_RATE_LIMIT" default:"6" min:"1"`  // max requests per minute per IP
+	DeviceTokenRateLimit     int `key:"DEVICE_TOKEN_RATE_LIMIT" default:"60" min:"1"`     // max requests per minute per IP
+	DeviceEntryRateLimit     int `key:"DEVICE_ENTRY_RATE_LIMIT" default:"5" min:"1"`      // seconds between entries
 }
 
 // CacheConfig holds cache configuration for patrol scores and other data
