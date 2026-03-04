@@ -102,7 +102,7 @@ func NewServer(cfg *config.Config, deps *handlers.Dependencies) *http.Server {
 	// 1. Remote metadata (Cloudflare headers, HTTPS redirect, HSTS) - applied to all routes
 	// 2. Logging middleware - applied to all routes
 	handler := loggingMiddleware(
-		middleware.RemoteMetadataMiddleware(cfg.ExternalDomains.ExposedDomain)(mux),
+		middleware.RemoteMetadataMiddleware(cfg.ExternalDomains.ExposedDomain)(routeCapturingMux(mux)),
 	)
 
 	return &http.Server{
@@ -133,8 +133,13 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Wrap ResponseWriter to capture status code
-		sw := &statusWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		// Wrap ResponseWriter to capture status code and auth outcome
+		sw := &statusWriter{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+			authKind:       "none",
+			authResult:     "none",
+		}
 
 		// Serve the request
 		next.ServeHTTP(sw, r)
@@ -142,7 +147,14 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		// Calculate duration
 		duration := time.Since(start)
 
-		// Record metrics
+		// Use the matched route pattern captured by routeCapturingMux.
+		// Fallback to URL path only if no pattern was captured (e.g. metrics server).
+		route := sw.route
+		if route == "" {
+			route = r.URL.Path
+		}
+
+		// Record legacy metrics
 		metrics.HTTPRequestDuration.WithLabelValues(
 			r.Method,
 			r.URL.Path,
@@ -155,11 +167,31 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			strconv.Itoa(sw.statusCode),
 		).Inc()
 
+		// Record classified metrics
+		metrics.HTTPRequestDurationClassified.WithLabelValues(
+			r.Method,
+			route,
+			strconv.Itoa(sw.statusCode),
+			sw.authKind,
+			sw.authResult,
+		).Observe(duration.Seconds())
+
+		metrics.HTTPRequestsClassifiedTotal.WithLabelValues(
+			r.Method,
+			route,
+			strconv.Itoa(sw.statusCode),
+			sw.authKind,
+			sw.authResult,
+		).Inc()
+
 		// Log the request
 		slog.Info("http.request",
 			"method", r.Method,
 			"path", r.URL.Path,
+			"route", route,
 			"status", sw.statusCode,
+			"auth_kind", sw.authKind,
+			"auth_result", sw.authResult,
 			"duration_ms", duration.Milliseconds(),
 			"remote_addr", r.RemoteAddr,
 			"user_agent", r.UserAgent(),
@@ -167,15 +199,49 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// statusWriter wraps http.ResponseWriter to capture the status code
+// routeCapturingMux wraps ServeMux so the matched pattern is surfaced to the
+// logging middleware via the routeWriter interface on the ResponseWriter.
+func routeCapturingMux(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h, pattern := mux.Handler(r)
+		if rw, ok := w.(routeWriter); ok {
+			rw.SetRoute(pattern)
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// routeWriter is an interface for setting the matched route on a ResponseWriter.
+type routeWriter interface {
+	SetRoute(route string)
+}
+
+// authOutcomeWriter is an interface for setting auth outcomes on a ResponseWriter
+type authOutcomeWriter interface {
+	SetAuthOutcome(kind, result string)
+}
+
+// statusWriter wraps http.ResponseWriter to capture the status code, auth outcome, and matched route
 type statusWriter struct {
 	http.ResponseWriter
 	statusCode int
+	authKind   string
+	authResult string
+	route      string
 }
 
 func (sw *statusWriter) WriteHeader(code int) {
 	sw.statusCode = code
 	sw.ResponseWriter.WriteHeader(code)
+}
+
+func (sw *statusWriter) SetAuthOutcome(kind, result string) {
+	sw.authKind = kind
+	sw.authResult = result
+}
+
+func (sw *statusWriter) SetRoute(route string) {
+	sw.route = route
 }
 
 // Hijack implements http.Hijacker so that WebSocket upgrades work through this wrapper.

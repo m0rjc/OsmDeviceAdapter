@@ -10,6 +10,7 @@ import (
 
 	ws "github.com/gorilla/websocket"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
@@ -110,6 +111,7 @@ func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDom
 		// --- WebSocket upgrade ---
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
+			metrics.WebSocketConnectionsTotal.WithLabelValues("failure").Inc()
 			// Upgrader writes the error response itself.
 			slog.Error("websocket.handler.upgrade_failed",
 				"component", "websocket",
@@ -118,6 +120,7 @@ func DeviceWebSocketHandler(hub *Hub, deviceAuth deviceAuthenticator, exposedDom
 			)
 			return
 		}
+		metrics.WebSocketConnectionsTotal.WithLabelValues("success").Inc()
 
 		slog.Info("websocket.handler.connected",
 			"component", "websocket",

@@ -11,6 +11,11 @@ import (
 	"github.com/m0rjc/OsmDeviceAdapter/internal/types"
 )
 
+// authOutcomeWriter is an interface for setting auth outcomes on a ResponseWriter
+type authOutcomeWriter interface {
+	SetAuthOutcome(kind, result string)
+}
+
 // Context keys for session data
 const (
 	webSessionContextKey contextKey = "web_session"
@@ -39,9 +44,18 @@ func contextWithWebSession(ctx context.Context, session *db.WebSession) context.
 func SessionMiddleware(conns *db.Connections, cookieName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Get authOutcomeWriter if available
+			var ow authOutcomeWriter
+			if w2, ok := w.(authOutcomeWriter); ok {
+				ow = w2
+			}
+
 			// Extract session ID from cookie
 			cookie, err := r.Cookie(cookieName)
 			if err != nil || cookie.Value == "" {
+				if ow != nil {
+					ow.SetAuthOutcome("admin_session", "missing_cookie")
+				}
 				slog.Debug("session.middleware.no_cookie",
 					"component", "session_middleware",
 					"event", "session.missing",
@@ -56,6 +70,9 @@ func SessionMiddleware(conns *db.Connections, cookieName string) func(http.Handl
 			// Load session from database
 			session, err := websession.FindByID(conns, sessionID)
 			if err != nil {
+				if ow != nil {
+					ow.SetAuthOutcome("admin_session", "db_error")
+				}
 				slog.Error("session.middleware.db_error",
 					"component", "session_middleware",
 					"event", "session.error",
@@ -66,6 +83,9 @@ func SessionMiddleware(conns *db.Connections, cookieName string) func(http.Handl
 			}
 
 			if session == nil {
+				if ow != nil {
+					ow.SetAuthOutcome("admin_session", "invalid_session")
+				}
 				slog.Debug("session.middleware.invalid_session",
 					"component", "session_middleware",
 					"event", "session.invalid",
@@ -75,6 +95,10 @@ func SessionMiddleware(conns *db.Connections, cookieName string) func(http.Handl
 				clearCookie(w, cookieName)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
+			}
+
+			if ow != nil {
+				ow.SetAuthOutcome("admin_session", "ok")
 			}
 
 			// Update last_activity for sliding expiration (async, don't block request)

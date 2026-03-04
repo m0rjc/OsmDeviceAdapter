@@ -68,6 +68,34 @@ var (
 		Name: "http_requests_total",
 		Help: "Total HTTP requests by method, path, and status",
 	}, []string{"method", "path", "status"})
+
+	// Classified HTTP metrics (reduced cardinality)
+	HTTPRequestDurationClassified = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "http_request_duration_classified_seconds",
+		Help:    "HTTP request latency by method, route, status, auth_kind, and auth_result",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"method", "route", "status", "auth_kind", "auth_result"})
+
+	HTTPRequestsClassifiedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "http_requests_classified_total",
+		Help: "Total HTTP requests by method, route, status, auth_kind, and auth_result",
+	}, []string{"method", "route", "status", "auth_kind", "auth_result"})
+
+	// WebSocket metrics
+	WebSocketConnectionsActive = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "websocket_connections_active",
+		Help: "Current number of active WebSocket connections",
+	})
+
+	WebSocketConnectionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "websocket_connections_total",
+		Help: "Total number of WebSocket connections initiated, labeled by status (success, failure)",
+	}, []string{"status"})
+
+	WebSocketDisconnectionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "websocket_disconnections_total",
+		Help: "Total number of WebSocket disconnections, labeled by reason (e.g., normal, error, read_error, write_error)",
+	}, []string{"reason"})
 )
 
 func init() {
@@ -82,4 +110,9 @@ func init() {
 	Registry.MustRegister(CacheOperations)
 	Registry.MustRegister(HTTPRequestDuration)
 	Registry.MustRegister(HTTPRequestsTotal)
+	Registry.MustRegister(HTTPRequestDurationClassified)
+	Registry.MustRegister(HTTPRequestsClassifiedTotal)
+	Registry.MustRegister(WebSocketConnectionsActive)
+	Registry.MustRegister(WebSocketConnectionsTotal)
+	Registry.MustRegister(WebSocketDisconnectionsTotal)
 }

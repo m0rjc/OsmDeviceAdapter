@@ -66,12 +66,12 @@ func (p *PrometheusLatencyRecorder) RecordRateLimit(userId *int, remaining int, 
 		userIdString = "unknown"
 	}
 
-	metrics.OSMRateLimitRemaining.WithLabelValues(userIdString).Add(float64(remaining))
+	metrics.OSMRateLimitRemaining.WithLabelValues(userIdString).Set(float64(remaining))
 	if limitTotal > 0 {
-		metrics.OSMRateLimitTotal.WithLabelValues(userIdString).Add(float64(limitTotal))
+		metrics.OSMRateLimitTotal.WithLabelValues(userIdString).Set(float64(limitTotal))
 	}
 	if limitResetSeconds > 0 {
-		metrics.OSMRateLimitResetSeconds.WithLabelValues(userIdString).Add(float64(limitResetSeconds))
+		metrics.OSMRateLimitResetSeconds.WithLabelValues(userIdString).Set(float64(limitResetSeconds))
 	}
 
 	// Log rate limit status

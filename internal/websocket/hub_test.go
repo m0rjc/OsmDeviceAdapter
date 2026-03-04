@@ -7,6 +7,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,6 +111,39 @@ func TestRegisterUnregisterSectionTracking(t *testing.T) {
 	_, channelExists := hub.channelDevices["section:7"]
 	hub.mu.RUnlock()
 	assert.False(t, channelExists, "channel map entry should be removed when empty")
+}
+
+func TestWebSocketMetrics(t *testing.T) {
+	rc, _ := newTestRedis(t)
+	hub := NewHub(rc)
+	ctx := startHub(t, hub)
+
+	dc := &deviceConn{
+		hub:         hub,
+		send:        make(chan Message, 1),
+		deviceCode:  "test-metrics",
+		channelKeys: []string{"section:1"},
+	}
+
+	// Helper to get gauge value
+	getGaugeValue := func(g interface {
+		Write(*dto.Metric) error
+	}) float64 {
+		var m dto.Metric
+		_ = g.Write(&m)
+		return m.GetGauge().GetValue()
+	}
+
+	initialActive := getGaugeValue(metrics.WebSocketConnectionsActive)
+
+	regCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	require.NoError(t, hub.RegisterDeviceAndSubscribe(regCtx, "test-metrics", dc, "section:1"))
+
+	assert.Equal(t, initialActive+1, getGaugeValue(metrics.WebSocketConnectionsActive))
+
+	hub.UnregisterDeviceConn(dc)
+	assert.Equal(t, initialActive, getGaugeValue(metrics.WebSocketConnectionsActive))
 }
 
 func TestRegisterReplaceKeepsMostRecentConnection(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 
 	ws "github.com/gorilla/websocket"
 	"github.com/m0rjc/OsmDeviceAdapter/internal/db"
+	"github.com/m0rjc/OsmDeviceAdapter/internal/metrics"
 )
 
 const (
@@ -124,6 +125,8 @@ func (h *Hub) RegisterDeviceAndSubscribe(ctx context.Context, deviceCode string,
 
 	h.mu.Unlock()
 
+	metrics.WebSocketConnectionsActive.Inc()
+
 	slog.Info("websocket.hub.device_registered",
 		"component", "websocket",
 		"event", "hub.register",
@@ -216,6 +219,8 @@ func (h *Hub) UnregisterDeviceConn(dc *deviceConn) {
 	}
 
 	h.mu.Unlock()
+
+	metrics.WebSocketConnectionsActive.Dec()
 
 	slog.Info("websocket.hub.device_unregistered",
 		"component", "websocket",
@@ -418,10 +423,12 @@ func (dc *deviceConn) writePump() {
 		case msg, ok := <-dc.send:
 			dc.conn.SetWriteDeadline(time.Now().Add(writeTimeout)) //nolint:errcheck
 			if !ok {
+				metrics.WebSocketDisconnectionsTotal.WithLabelValues("normal").Inc()
 				dc.conn.WriteMessage(ws.CloseMessage, ws.FormatCloseMessage(ws.CloseNormalClosure, "")) //nolint:errcheck
 				return
 			}
 			if err := dc.conn.WriteJSON(msg); err != nil {
+				metrics.WebSocketDisconnectionsTotal.WithLabelValues("write_error").Inc()
 				return
 			}
 			// Reset idle timer after each outbound message.
@@ -465,12 +472,15 @@ func (dc *deviceConn) readPump() {
 		var msg Message
 		if err := dc.conn.ReadJSON(&msg); err != nil {
 			if ws.IsUnexpectedCloseError(err, ws.CloseGoingAway, ws.CloseAbnormalClosure, ws.CloseNormalClosure) {
+				metrics.WebSocketDisconnectionsTotal.WithLabelValues("read_error").Inc()
 				slog.Warn("websocket.device.unexpected_close",
 					"component", "websocket",
 					"event", "device.read_error",
 					"device_code_prefix", dc.deviceCode[:min(8, len(dc.deviceCode))],
 					"error", err,
 				)
+			} else {
+				metrics.WebSocketDisconnectionsTotal.WithLabelValues("normal").Inc()
 			}
 			break
 		}

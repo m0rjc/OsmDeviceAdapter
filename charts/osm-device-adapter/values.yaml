@@ -193,6 +193,7 @@ observability:
   serviceMonitor:
     enabled: true
     interval: 30s
+    additionalLabels: {}
 
 # Database cleanup configuration
 cleanup:

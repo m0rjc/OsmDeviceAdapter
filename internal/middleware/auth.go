@@ -23,17 +23,29 @@ type Authenticator interface {
 func DeviceAuthMiddleware(deviceAuthService Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Get authOutcomeWriter if available
+			var ow authOutcomeWriter
+			if w2, ok := w.(authOutcomeWriter); ok {
+				ow = w2
+			}
+
 			// Authenticate the request (handles token refresh internally)
 			user, err := deviceAuthService.Authenticate(r.Context(), r.Header.Get("Authorization"))
 			if err != nil {
 				// Handle authentication errors
 				if errors.Is(err, deviceauth.ErrInvalidToken) {
+					if ow != nil {
+						ow.SetAuthOutcome("device", "invalid_token")
+					}
 					w.Header().Set("WWW-Authenticate", `Bearer realm="API"`)
 					http.Error(w, "Unauthorized", http.StatusUnauthorized)
 					return
 				}
 
 				if errors.Is(err, deviceauth.ErrTokenRevoked) {
+					if ow != nil {
+						ow.SetAuthOutcome("device", "revoked")
+					}
 					w.Header().Set("WWW-Authenticate", `Bearer realm="API"`)
 					http.Error(w, "Access revoked - please re-authorize this device", http.StatusUnauthorized)
 					return
@@ -43,10 +55,21 @@ func DeviceAuthMiddleware(deviceAuthService Authenticator) func(http.Handler) ht
 				// Use fallback path for any server (or upstream) error
 				if !errors.Is(err, deviceauth.ErrTokenRefreshFailed) {
 					slog.Error("unexpected error while refreshing token", "err", err)
+					if ow != nil {
+						ow.SetAuthOutcome("device", "error")
+					}
+				} else {
+					if ow != nil {
+						ow.SetAuthOutcome("device", "refresh_failed")
+					}
 				}
 				w.Header().Set("Retry-After", "60")
 				http.Error(w, "Server Error", http.StatusServiceUnavailable)
 				return
+			}
+
+			if ow != nil {
+				ow.SetAuthOutcome("device", "ok")
 			}
 
 			// Add user to context

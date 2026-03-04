@@ -5,6 +5,9 @@ metadata:
   name: {{ include "osm-device-adapter.fullname" . }}
   labels:
     {{- include "osm-device-adapter.labels" . | nindent 4 }}
+    {{- with .Values.observability.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:
