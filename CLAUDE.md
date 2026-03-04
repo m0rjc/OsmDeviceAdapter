@@ -269,11 +269,18 @@ All configuration via environment variables (see `internal/config/config.go`):
 - Log events follow pattern: `component.event` (e.g., `osm.api.request`, `http.request`)
 
 **Prometheus Metrics** (`internal/metrics/metrics.go`):
-- `http_request_duration_seconds`: HTTP request latency histogram
-- `http_requests_total`: HTTP request counter by method/path/status
-- `osm_api_latency_seconds`: OSM API call latency
-- `osm_rate_limit_remaining`: Per-user rate limit tracking
+- Uses a **custom registry** (excludes Go runtime metrics) to reduce Grafana Cloud data volume
+- `http_request_duration_seconds` / `http_requests_total`: HTTP latency/count by method, path, status (high cardinality)
+- `http_request_duration_classified_seconds` / `http_requests_classified_total`: HTTP latency/count by route pattern, status, auth_kind, auth_result (preferred for dashboards)
+- `osm_api_request_duration_seconds`: OSM API latency by endpoint and status code
+- `osm_rate_limit_remaining` / `osm_rate_limit_total` / `osm_rate_limit_reset_seconds`: Per-user OSM rate limit gauges
+- `osm_service_blocked`: 0/1 gauge for service-wide X-Blocked state
+- `osm_block_events_total`: Counter for per-user block events
+- `device_auth_requests_total`: Device OAuth flow events by client_id and status
+- `websocket_connections_active` / `websocket_connections_total` / `websocket_disconnections_total`: WebSocket lifecycle
+- `cache_operations_total`: Redis cache operations (reserved for future use)
 - Exposed on metrics server at `:9090/metrics`
+- See `docs/PROMETHEUS_METRICS.md` for full metric reference
 
 **Health Checks**:
 - `GET /health`: Basic liveness check (always returns 200)
@@ -376,8 +383,12 @@ DELETE FROM allowed_client_ids WHERE client_id = 'my-client-id';
 
 ### Prometheus Metrics
 - Import `_ "github.com/m0rjc/OsmDeviceAdapter/internal/metrics"` to initialize
-- Define new metrics in `internal/metrics/metrics.go`
+- Define new metrics in `internal/metrics/metrics.go` and register them in `init()`
+- Use the **classified HTTP metrics** (`http_request_duration_classified_seconds`) for dashboards — lower cardinality than the raw path-based metrics
+- Rate-limit state is recorded by `internal/osm/prometheus.go` via decorator pattern (`PrometheusRateLimitDecorator`, `PrometheusLatencyRecorder`)
 - Metrics automatically exposed via `/metrics` endpoint on port 9090
+- Remote-written to Grafana Cloud; only metrics matching `^(osm_|device_auth_|cache_operations_|http_request|websocket_).*` are forwarded
+- See `docs/PROMETHEUS_METRICS.md` for full metric reference
 
 ## Helm Charts Structure
 
@@ -426,6 +437,7 @@ See `charts/osm-secrets/README.md` for complete documentation.
 - `docs/HELM.md`: Helm chart usage and configuration
 - `docs/CLOUDFLARE_SETUP.md`: Cloudflare Tunnel integration
 - `docs/OBSERVABILITY_IMPLEMENTATION.md`: Monitoring setup details
+- `docs/PROMETHEUS_METRICS.md`: Prometheus metrics reference (all metrics, labels, infrastructure)
 - `docs/research/OSM-OAuth-Doc.md`: OSM API documentation research
 - `docs/stories/002-score-entry-ui/`: Score entry UI specification and implementation plan
 - `charts/osm-secrets/README.md`: Secrets chart documentation
